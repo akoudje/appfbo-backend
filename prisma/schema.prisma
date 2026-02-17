@@ -1,0 +1,168 @@
+// prisma/schema.prisma
+// MVP Précommande FOREVER — React + Express + Postgres + Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+//
+// ENUMS
+//
+enum Grade {
+  ANIMATEUR_ADJOINT
+  ANIMATEUR
+  MANAGER_ADJOINT
+  MANAGER
+  CLIENT_PRIVILEGIE
+}
+
+enum DeliveryMode {
+  RETRAIT_SITE_FLP
+  LIVRAISON
+}
+
+enum PaymentMode {
+  WAVE
+  ORANGE_MONEY
+  ESPECES
+  OTHER
+}
+
+enum PreorderStatus {
+  DRAFT
+  SUBMITTED
+  INVOICED
+  PAID
+  CANCELLED
+}
+
+//
+// MODELS
+//
+
+model Fbo {
+  id         String   @id @default(cuid())
+  numeroFbo  String   @unique
+  nomComplet String
+  grade      Grade
+  pointDeVente String
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  preorders  Preorder[]
+
+  @@index([pointDeVente])
+  @@index([grade])
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  sku           String   @unique
+  nom           String
+  imageUrl      String?
+
+  // Prix base (avant remise) en FCFA
+  prixBaseFcfa  Int
+
+  // Credits (CC) et poids
+  // Ex: 0.482 CC / 3.3 Kg
+  cc            Decimal  @db.Decimal(10, 3)
+  poidsKg       Decimal  @db.Decimal(10, 3)
+
+  actif         Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  preorderItems PreorderItem[]
+
+  @@index([actif])
+  @@index([nom])
+}
+
+model GradeDiscount {
+  id              String   @id @default(cuid())
+  grade           Grade    @unique
+
+  // Remise en % (5 à 48). Exemple: 12.5
+  discountPercent Decimal  @db.Decimal(5, 2)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Preorder {
+  id                String         @id @default(cuid())
+  status            PreorderStatus @default(DRAFT)
+
+  // Liens & infos FBO au moment de la précommande
+  fboId             String
+  fbo               Fbo            @relation(fields: [fboId], references: [id], onDelete: Restrict)
+
+  // On fige certaines infos dans la précommande (même si FBO change après)
+  fboNumero         String
+  fboNomComplet     String
+  fboGrade          Grade
+  pointDeVente      String
+
+  paymentMode       PaymentMode
+  deliveryMode      DeliveryMode
+
+  // Totaux figés (calculés lors du submit)
+  totalCc           Decimal        @db.Decimal(12, 3) @default(0.000)
+  totalPoidsKg      Decimal        @db.Decimal(12, 3) @default(0.000)
+  totalProduitsFcfa Int            @default(0)
+  fraisLivraisonFcfa Int           @default(0)
+  totalFcfa         Int            @default(0)
+
+  // Message WhatsApp généré à l’étape 3
+  whatsappMessage   String?
+
+  // Pour tracer la facturation
+  factureReference  String?
+  factureWhatsappTo String? // ex: "+221...." si tu veux garder le numéro choisi
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  submittedAt       DateTime?
+  paidAt            DateTime?
+
+  items             PreorderItem[]
+
+  @@index([status, createdAt])
+  @@index([fboId])
+  @@index([pointDeVente])
+}
+
+model PreorderItem {
+  id            String   @id @default(cuid())
+
+  preorderId    String
+  preorder      Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  qty           Int      @default(1)
+
+  // On fige les valeurs unitaires au moment du submit (important pour la facturation)
+  prixUnitaireFcfa Int
+  ccUnitaire       Decimal  @db.Decimal(10, 3)
+  poidsUnitaireKg  Decimal  @db.Decimal(10, 3)
+
+  lineTotalFcfa  Int
+  lineTotalCc    Decimal   @db.Decimal(12, 3)
+  lineTotalPoids Decimal   @db.Decimal(12, 3)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([preorderId, productId])
+  @@index([productId])
+}
