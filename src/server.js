@@ -13,7 +13,28 @@ const path = require("path");
 
 const app = express();
 
-app.use(cors());
+const cors = require("cors");
+
+const allowlist = [
+  "https://appfbo-frontend.vercel.app",
+  "https://appfbo-admin.vercel.app",
+];
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // Autorise les appels sans Origin (curl, health checks, server-to-server)
+      if (!origin) return cb(null, true);
+      if (allowlist.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: true,
+  })
+);
+
+
+
+
 app.use(express.json({ limit: "1mb" }));
 
 // Health check
