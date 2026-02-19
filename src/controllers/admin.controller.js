@@ -1,12 +1,29 @@
 // src/controllers/admin.controller.js (CommonJS)
+c// src/controllers/admin.controller.js (CommonJS)
 const { PrismaClient } = require("@prisma/client");
-const path = require("path");
-const fs = require("fs");
+const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
 
 const prisma = new PrismaClient({
   log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
 });
+
+/* ----------------------------- cloudinary ----------------------------- */
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+function uploadBufferToCloudinary(buffer, options = {}) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(options, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
+}
 
 /* ----------------------------- helpers ----------------------------- */
 function parseIntSafe(v, fallback) {
@@ -35,44 +52,15 @@ function isDecimalLike(v) {
   return /^-?\d+(\.\d+)?$/.test(s);
 }
 
-/* --------------------------- upload setup -------------------------- */
-const productsDir = path.join(__dirname, "..", "..", "uploads", "products");
-fs.mkdirSync(productsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, productsDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase();
-    const safeExt = [".png", ".jpg", ".jpeg", ".webp"].includes(ext) ? ext : ".jpg";
-    const stamp = Date.now();
-    cb(null, `product_${req.params.id}_${stamp}${safeExt}`);
-  },
-});
-
+/* --------------------------- upload setup (memory) -------------------------- */
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
     const ok = ["image/png", "image/jpeg", "image/webp"].includes(file.mimetype);
     cb(ok ? null : new Error("Format image non supporté (png/jpg/webp)"), ok);
   },
 });
-
-function tryDeleteLocalUpload(imageUrl) {
-  try {
-    if (!imageUrl) return;
-    const prefix = "/uploads/products/";
-    if (!String(imageUrl).startsWith(prefix)) return;
-
-    const filename = String(imageUrl).slice(prefix.length);
-    if (!filename) return;
-
-    const filePath = path.join(productsDir, filename);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch (_) {
-    // noop
-  }
-}
 
 /* ===================================================================
    ORDERS
@@ -554,13 +542,22 @@ async function deleteProduct(req, res) {
 
     const p = await prisma.product.findUnique({
       where: { id },
-      select: { id: true, imageUrl: true },
+      select: { id: true, imageUrl: true, sku: true },
     });
     if (!p) return res.status(404).json({ message: "Produit introuvable" });
 
-    await prisma.product.delete({ where: { id } });
-    tryDeleteLocalUpload(p.imageUrl);
+    // Option overwrite par SKU => on peut aussi supprimer l'asset cloudinary correspondant
+    // folder: appfbo/products, public_id: `appfbo/products/<sku>`
+    if (p.sku) {
+      const publicId = `appfbo/products/${p.sku}`;
+      try {
+        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+      } catch (_) {
+        // noop
+      }
+    }
 
+    await prisma.product.delete({ where: { id } });
     return res.json({ ok: true });
   } catch (e) {
     console.error("deleteProduct error:", e);
@@ -668,6 +665,11 @@ async function uploadProductImage(req, res) {
     handler(req, res, async (err) => {
       if (err) return res.status(400).json({ message: err.message || "Upload échoué" });
 
+      // vérif config cloudinary
+      if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+        return res.status(500).json({ message: "Cloudinary non configuré (env manquantes)" });
+      }
+
       const { id } = req.params;
 
       const exists = await prisma.product.findUnique({
@@ -679,16 +681,31 @@ async function uploadProductImage(req, res) {
       const file = req.files?.file?.[0] || req.files?.image?.[0];
       if (!file) return res.status(400).json({ message: "Fichier manquant (file/image)" });
 
-      const publicUrl = `/uploads/products/${file.filename}`;
-      tryDeleteLocalUpload(exists.imageUrl);
+      // Upload cloudinary (overwrite par SKU => 1 image stable par produit)
+      const skuSafe = (exists.sku || `product_${exists.id}`).replace(/[^\w.-]/g, "_");
+      const publicId = `appfbo/products/${skuSafe}`;
+
+      let result;
+      try {
+        result = await uploadBufferToCloudinary(file.buffer, {
+          folder: "appfbo/products",
+          public_id: skuSafe, // cloudinary combine folder + public_id
+          overwrite: true,
+          resource_type: "image",
+        });
+      } catch (upErr) {
+        console.error("Cloudinary upload error:", upErr);
+        return res.status(400).json({ message: "Upload Cloudinary échoué" });
+      }
 
       const updated = await prisma.product.update({
         where: { id },
-        data: { imageUrl: publicUrl },
+        data: { imageUrl: result.secure_url },
         select: { id: true, sku: true, nom: true, imageUrl: true, updatedAt: true },
       });
 
-      return res.json(updated);
+      // expose aussi le publicId calculé si tu veux le logger/debug
+      return res.json({ ...updated, cloudinaryPublicId: publicId });
     });
   } catch (e) {
     console.error("uploadProductImage error:", e);

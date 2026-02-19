@@ -13,7 +13,6 @@ const path = require("path");
 
 const app = express();
 
-const cors = require("cors");
 
 const allowlist = [
   "https://appfbo-frontend.vercel.app",
@@ -31,8 +30,6 @@ app.use(
     credentials: true,
   })
 );
-
-
 
 
 app.use(express.json({ limit: "1mb" }));
