@@ -1,5 +1,5 @@
 // src/controllers/admin.controller.js (CommonJS)
-c// src/controllers/admin.controller.js (CommonJS)
+
 const { PrismaClient } = require("@prisma/client");
 const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
