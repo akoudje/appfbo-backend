@@ -6,7 +6,6 @@ const { buildWhatsAppMessage, buildWhatsAppLink } = require("../services/whatsap
 // Numéros facturation (tu pourras mettre ça en DB/config plus tard)
 const BILLING_WHATSAPPS = [
   process.env.BILLING_WA_1 || "+2250506025071",
-  process.env.BILLING_WA_2 || "+2250140649930",
 ];
 
 // ETAPE 1: créer draft

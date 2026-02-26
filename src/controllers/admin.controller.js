@@ -1,11 +1,14 @@
 // src/controllers/admin.controller.js (CommonJS)
 
-const { PrismaClient } = require("@prisma/client");
+const { PrismaClient, ProductCategory } = require("@prisma/client");
 const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
 
 const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+  log:
+    process.env.NODE_ENV === "development"
+      ? ["query", "error", "warn"]
+      : ["error"],
 });
 
 /* ----------------------------- cloudinary ----------------------------- */
@@ -52,12 +55,45 @@ function isDecimalLike(v) {
   return /^-?\d+(\.\d+)?$/.test(s);
 }
 
+function parseStockQty(v, fallback = 0) {
+  if (v === null || v === undefined || v === "") return fallback;
+  const n = Number.parseInt(v, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, n);
+}
+
+// Permissif: accepte "SOINS_DE_LA_PEAU" ou "Soins de la peau" ou "soins de la peau"
+function parseEnumSafe(input, enumObj, fallback) {
+  if (input === null || input === undefined || String(input).trim() === "") {
+    return fallback;
+  }
+
+  const raw = String(input).trim();
+
+  // si déjà exact
+  const values = new Set(Object.values(enumObj));
+  if (values.has(raw)) return raw;
+
+  const normalized = raw
+    .toUpperCase()
+    .replace(/\s+/g, "_")
+    .replace(/[’']/g, "_")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (values.has(normalized)) return normalized;
+
+  return fallback;
+}
+
 /* --------------------------- upload setup (memory) -------------------------- */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
-    const ok = ["image/png", "image/jpeg", "image/webp"].includes(file.mimetype);
+    const ok = ["image/png", "image/jpeg", "image/webp"].includes(
+      file.mimetype
+    );
     cb(ok ? null : new Error("Format image non supporté (png/jpg/webp)"), ok);
   },
 });
@@ -71,10 +107,14 @@ const upload = multer({
  */
 async function listOrders(req, res) {
   try {
-    const { status, q, dateFrom, dateTo, sort = "createdAt", dir = "desc" } = req.query;
+    const { status, q, dateFrom, dateTo, sort = "createdAt", dir = "desc" } =
+      req.query;
 
     const page = Math.max(1, parseIntSafe(req.query.page, 1));
-    const pageSize = Math.min(100, Math.max(10, parseIntSafe(req.query.pageSize, 20)));
+    const pageSize = Math.min(
+      100,
+      Math.max(10, parseIntSafe(req.query.pageSize, 20))
+    );
     const skip = (page - 1) * pageSize;
 
     const where = {};
@@ -99,7 +139,8 @@ async function listOrders(req, res) {
     }
 
     const orderBy = {};
-    orderBy[sort === "total" ? "totalFcfa" : "createdAt"] = dir === "asc" ? "asc" : "desc";
+    orderBy[sort === "total" ? "totalFcfa" : "createdAt"] =
+      dir === "asc" ? "asc" : "desc";
 
     const [totalCount, orders] = await Promise.all([
       prisma.preorder.count({ where }),
@@ -205,7 +246,10 @@ async function invoiceOrder(req, res) {
     const order = await prisma.preorder.findUnique({ where: { id } });
     if (!order) return res.status(404).json({ message: "Commande introuvable" });
 
-    const ref = `INV-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(order.fboNumero || "")
+    const ref = `INV-${new Date()
+      .toISOString()
+      .slice(0, 10)
+      .replaceAll("-", "")}-${String(order.fboNumero || "")
       .replaceAll("-", "")
       .trim()}`;
 
@@ -352,16 +396,40 @@ async function getStats(req, res) {
 
 async function createProduct(req, res) {
   try {
-    const { sku, nom, prixBaseFcfa, cc, poidsKg, actif = true, imageUrl } = req.body || {};
+    const {
+      sku,
+      nom,
+      prixBaseFcfa,
+      cc,
+      poidsKg,
+      actif = true,
+      imageUrl,
+      category,
+      details,
+      stockQty,
+    } = req.body || {};
 
-    if (!sku || !String(sku).trim()) return res.status(400).json({ message: "sku requis" });
-    if (!nom || !String(nom).trim()) return res.status(400).json({ message: "nom requis" });
+    if (!sku || !String(sku).trim())
+      return res.status(400).json({ message: "sku requis" });
+    if (!nom || !String(nom).trim())
+      return res.status(400).json({ message: "nom requis" });
 
     const price = Number(prixBaseFcfa);
-    if (!Number.isFinite(price) || price < 0) return res.status(400).json({ message: "prixBaseFcfa invalide" });
+    if (!Number.isFinite(price) || price < 0)
+      return res.status(400).json({ message: "prixBaseFcfa invalide" });
 
     if (!isDecimalLike(cc)) return res.status(400).json({ message: "cc requis" });
-    if (!isDecimalLike(poidsKg)) return res.status(400).json({ message: "poidsKg requis" });
+    if (!isDecimalLike(poidsKg))
+      return res.status(400).json({ message: "poidsKg requis" });
+
+    const cat = parseEnumSafe(
+      category,
+      ProductCategory,
+      ProductCategory.NON_CLASSE || "NON_CLASSE"
+    );
+    const stock = parseStockQty(stockQty, 0);
+    const det =
+      details !== undefined && details !== null ? String(details).trim() : null;
 
     const created = await prisma.product.create({
       data: {
@@ -372,6 +440,11 @@ async function createProduct(req, res) {
         poidsKg: String(poidsKg),
         actif: Boolean(actif),
         imageUrl: imageUrl ? String(imageUrl).trim() : null,
+
+        // ✅ nouveaux champs
+        category: cat,
+        details: det || null,
+        stockQty: stock,
       },
       select: {
         id: true,
@@ -382,6 +455,11 @@ async function createProduct(req, res) {
         poidsKg: true,
         actif: true,
         imageUrl: true,
+
+        category: true,
+        details: true,
+        stockQty: true,
+
         createdAt: true,
         updatedAt: true,
       },
@@ -394,14 +472,15 @@ async function createProduct(req, res) {
     });
   } catch (e) {
     console.error("createProduct error:", e);
-    if (String(e?.code) === "P2002") return res.status(409).json({ message: "SKU déjà utilisé" });
+    if (String(e?.code) === "P2002")
+      return res.status(409).json({ message: "SKU déjà utilisé" });
     return res.status(500).json({ message: "Erreur serveur (createProduct)" });
   }
 }
 
 async function listProducts(req, res) {
   try {
-    const { q, actif, take } = req.query;
+    const { q, actif, take, category, inStock } = req.query;
     const where = {};
 
     if (q && String(q).trim()) {
@@ -416,6 +495,15 @@ async function listProducts(req, res) {
       if (String(actif) === "true") where.actif = true;
       else if (String(actif) === "false") where.actif = false;
     }
+
+    if (category && String(category).trim()) {
+      const parsed = parseEnumSafe(category, ProductCategory, null);
+      if (!parsed) return res.status(400).json({ message: "category invalide" });
+      where.category = parsed;
+    }
+
+    if (String(inStock) === "true") where.stockQty = { gt: 0 };
+    if (String(inStock) === "false") where.stockQty = { lte: 0 };
 
     const limit = Math.min(500, Math.max(10, Number(take) || 200));
 
@@ -432,6 +520,11 @@ async function listProducts(req, res) {
         poidsKg: true,
         actif: true,
         imageUrl: true,
+
+        category: true,
+        details: true,
+        stockQty: true,
+
         createdAt: true,
         updatedAt: true,
       },
@@ -466,6 +559,11 @@ async function getProductById(req, res) {
         poidsKg: true,
         actif: true,
         imageUrl: true,
+
+        category: true,
+        details: true,
+        stockQty: true,
+
         createdAt: true,
         updatedAt: true,
       },
@@ -487,7 +585,18 @@ async function getProductById(req, res) {
 async function updateProduct(req, res) {
   try {
     const { id } = req.params;
-    const { sku, nom, prixBaseFcfa, actif, imageUrl, cc, poidsKg } = req.body || {};
+    const {
+      sku,
+      nom,
+      prixBaseFcfa,
+      actif,
+      imageUrl,
+      cc,
+      poidsKg,
+      category,
+      details,
+      stockQty,
+    } = req.body || {};
 
     const data = {
       ...(sku !== undefined ? { sku: String(sku).trim() } : {}),
@@ -497,6 +606,12 @@ async function updateProduct(req, res) {
       ...(imageUrl !== undefined ? { imageUrl: imageUrl ? String(imageUrl).trim() : null } : {}),
       ...(cc !== undefined ? { cc: String(cc) } : {}),
       ...(poidsKg !== undefined ? { poidsKg: String(poidsKg) } : {}),
+
+      ...(category !== undefined
+        ? { category: parseEnumSafe(category, ProductCategory, ProductCategory.NON_CLASSE || "NON_CLASSE") }
+        : {}),
+      ...(details !== undefined ? { details: details ? String(details).trim() : null } : {}),
+      ...(stockQty !== undefined ? { stockQty: parseStockQty(stockQty, 0) } : {}),
     };
 
     if ("prixBaseFcfa" in data && (!Number.isFinite(data.prixBaseFcfa) || data.prixBaseFcfa < 0)) {
@@ -520,6 +635,11 @@ async function updateProduct(req, res) {
         poidsKg: true,
         actif: true,
         imageUrl: true,
+
+        category: true,
+        details: true,
+        stockQty: true,
+
         updatedAt: true,
       },
     });
@@ -586,10 +706,19 @@ async function importProductsCsv(req, res) {
       const actif = r.actif === undefined ? true : Boolean(r.actif);
       const imageUrl = r.imageUrl ? String(r.imageUrl).trim() : null;
 
+      const category = parseEnumSafe(
+        r.category ?? r.categorie,
+        ProductCategory,
+        ProductCategory.NON_CLASSE || "NON_CLASSE"
+      );
+      const details = r.details ? String(r.details).trim() : null;
+      const stockQty = parseStockQty(r.stockQty ?? r.stock ?? r.quantite, 0);
+
       const rowErr = [];
       if (!sku) rowErr.push("sku manquant");
       if (!nom) rowErr.push("nom manquant");
-      if (!Number.isFinite(prixBaseFcfa) || prixBaseFcfa < 0) rowErr.push("prixBaseFcfa invalide");
+      if (!Number.isFinite(prixBaseFcfa) || prixBaseFcfa < 0)
+        rowErr.push("prixBaseFcfa invalide");
       if (!isDecimalLike(cc)) rowErr.push("cc invalide");
       if (!isDecimalLike(poidsKg)) rowErr.push("poidsKg invalide");
 
@@ -598,7 +727,18 @@ async function importProductsCsv(req, res) {
         continue;
       }
 
-      clean.push({ sku, nom, prixBaseFcfa, cc, poidsKg, actif, imageUrl });
+      clean.push({
+        sku,
+        nom,
+        prixBaseFcfa,
+        cc,
+        poidsKg,
+        actif,
+        imageUrl,
+        category,
+        details,
+        stockQty,
+      });
     }
 
     if (clean.length === 0) {
@@ -610,7 +750,10 @@ async function importProductsCsv(req, res) {
 
     await prisma.$transaction(async (tx) => {
       for (const p of clean) {
-        const exists = await tx.product.findUnique({ where: { sku: p.sku }, select: { id: true } });
+        const exists = await tx.product.findUnique({
+          where: { sku: p.sku },
+          select: { id: true },
+        });
 
         if (exists) {
           await tx.product.update({
@@ -622,6 +765,10 @@ async function importProductsCsv(req, res) {
               poidsKg: String(p.poidsKg),
               actif: p.actif,
               imageUrl: p.imageUrl,
+
+              category: p.category,
+              details: p.details,
+              stockQty: p.stockQty,
             },
           });
           updated++;
@@ -635,6 +782,10 @@ async function importProductsCsv(req, res) {
               poidsKg: String(p.poidsKg),
               actif: p.actif,
               imageUrl: p.imageUrl,
+
+              category: p.category,
+              details: p.details,
+              stockQty: p.stockQty,
             },
           });
           created++;
@@ -666,7 +817,11 @@ async function uploadProductImage(req, res) {
       if (err) return res.status(400).json({ message: err.message || "Upload échoué" });
 
       // vérif config cloudinary
-      if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      if (
+        !process.env.CLOUDINARY_CLOUD_NAME ||
+        !process.env.CLOUDINARY_API_KEY ||
+        !process.env.CLOUDINARY_API_SECRET
+      ) {
         return res.status(500).json({ message: "Cloudinary non configuré (env manquantes)" });
       }
 
