@@ -1,2 +1,2 @@
--- AlterEnum
-ALTER TYPE "ProductCategory" ADD VALUE 'PRODUIT_DE_LA_ROCHE';
+-- Fix: add missing enum value
+ALTER TYPE "ProductCategory" ADD VALUE IF NOT EXISTS 'PRODUIT_DE_LA_RUCHE';
