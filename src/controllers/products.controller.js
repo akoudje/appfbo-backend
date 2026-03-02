@@ -9,7 +9,7 @@ async function listProducts(req, res) {
     const search = (req.query.search || "").trim();
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const pageSize = Math.min(
-      Math.max(parseInt(req.query.pageSize || "24", 10), 1),
+      Math.max(parseInt(req.query.pageSize || "100", 10), 1),
       100
     );
 

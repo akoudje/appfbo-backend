@@ -37,7 +37,10 @@ enum PreorderStatus {
   DRAFT
   SUBMITTED
   INVOICED
+  PAYMENT_PROOF_RECEIVED
   PAID
+  READY
+  FULFILLED
   CANCELLED
 }
 
@@ -140,12 +143,46 @@ model Preorder {
   factureReference  String?
   factureWhatsappTo String? // ex: "+221...." si tu veux garder le numéro choisi
 
+  // ---- Traitement admin (facturier / préparateur) ----
+
+  // Lien de paiement envoyé au FBO (Wave/OM/autre)
+  paymentLink String?
+
+  // Preuve de paiement (URL, ou texte si tu ne gères pas upload maintenant)
+  paymentProofUrl  String?
+  paymentRef       String?
+  paymentProofNote String? @db.Text
+
+  // Notes internes (support / préparation)
+  internalNote String? @db.Text
+
+  // Timestamps traitement
+  invoicedAt      DateTime?
+  proofReceivedAt DateTime?
+  preparedAt      DateTime?
+  fulfilledAt     DateTime?
+  cancelledAt     DateTime?
+
+  // Traces "par qui" (si pas encore de table User admin, on stocke un label)
+  invoicedBy        String?
+  proofReceivedBy   String?
+  paymentVerifiedBy String?
+  preparedBy        String?
+  fulfilledBy       String?
+  cancelledBy       String?
+
+  // Livraison / retrait (optionnel)
+  deliveryTracking String?
+  packingNote      String? @db.Text
+  cancelReason     String? @db.Text
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   submittedAt DateTime?
   paidAt      DateTime?
 
   items PreorderItem[]
+  logs  PreorderLog[]
 
   @@index([status, createdAt])
   @@index([fboId])
@@ -177,4 +214,18 @@ model PreorderItem {
 
   @@unique([preorderId, productId])
   @@index([productId])
+}
+
+model PreorderLog {
+  id         String   @id @default(cuid())
+  preorderId String
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  action String
+  note   String? @db.Text
+  meta   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([preorderId, createdAt])
 }
