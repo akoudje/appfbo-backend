@@ -2,6 +2,7 @@
 const prisma = require("../prisma");
 const { computePreorderTotals } = require("../services/pricing.service");
 const { buildWhatsAppMessage, buildWhatsAppLink } = require("../services/whatsapp.service");
+const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 
 // Numéros facturation (tu pourras mettre ça en DB/config plus tard)
 const BILLING_WHATSAPPS = [
@@ -22,8 +23,6 @@ async function createDraft(req, res) {
   if (!numeroFbo || !nomComplet || !grade || !pointDeVente || !paymentMode || !deliveryMode) {
     return res.status(400).json({ error: "Missing required fields" });
   }
-  const countryId = req.countryId;
-
   // upsert FBO
   const fbo = await prisma.fbo.upsert({
     where: { numeroFbo: String(numeroFbo) },
@@ -41,8 +40,7 @@ async function createDraft(req, res) {
   });
 
   const preorder = await prisma.preorder.create({
-    data: {
-      countryId,
+    data: scopeCreate(req, {
       fboId: fbo.id,
       fboNumero: fbo.numeroFbo,
       fboNomComplet: fbo.nomComplet,
@@ -51,7 +49,7 @@ async function createDraft(req, res) {
       paymentMode,
       deliveryMode,
       status: "DRAFT",
-    },
+    }),
   });
 
   res.json({ preorderId: preorder.id });
@@ -61,12 +59,12 @@ async function createDraft(req, res) {
 async function setItems(req, res) {
   const preorderId = req.params.id;
   const { items } = req.body;
-  const countryId = req.countryId;
+  const countryId = req.country.id;
 
   if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" });
 
   const preorder = await prisma.preorder.findFirst({
-    where: { id: preorderId, countryId },
+    where: scopeWhere(req, { id: preorderId }),
   });
   if (!preorder) return res.status(404).json({ error: "Preorder not found" });
   if (preorder.status !== "DRAFT") return res.status(400).json({ error: "Preorder not editable" });
@@ -82,7 +80,7 @@ async function setItems(req, res) {
   if (normalized.length) {
     const productIds = [...new Set(normalized.map((it) => it.productId))];
     const products = await prisma.product.findMany({
-      where: { id: { in: productIds }, countryId, actif: true },
+      where: scopeWhere(req, { id: { in: productIds }, actif: true }),
       select: { id: true },
     });
     if (products.length !== productIds.length) {
@@ -126,7 +124,7 @@ async function setItems(req, res) {
 // ETAPE 3: summary (récap avant validation)
 async function getSummary(req, res) {
   const preorderId = req.params.id;
-  const countryId = req.countryId;
+  const countryId = req.country.id;
 
   try {
     const summary = await computePreorderTotals(preorderId, countryId);
@@ -152,10 +150,10 @@ async function getSummary(req, res) {
 async function submit(req, res) {
   const preorderId = req.params.id;
   const { whatsappTo } = req.body || {};
-  const countryId = req.countryId;
+  const countryId = req.country.id;
 
   const preorder = await prisma.preorder.findFirst({
-    where: { id: preorderId, countryId },
+    where: scopeWhere(req, { id: preorderId }),
     include: { items: { include: { product: true } } },
   });
   if (!preorder) return res.status(404).json({ error: "Preorder not found" });

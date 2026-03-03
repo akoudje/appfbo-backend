@@ -1,5 +1,12 @@
 // src/routes/admin.routes.js
 const express = require("express");
+const { Permission } = require("../auth/permissions");
+const { resolveCountry } = require("../middlewares/resolveCountry");
+const {
+  requireAuth,
+  requirePermission,
+  requireCountryScope,
+} = require("../middlewares/rbac");
 
 const {
   // orders
@@ -27,48 +34,98 @@ const {
   deleteProduct,
   importProductsCsv,
   uploadProductImage,
+
+  // country settings
+  getCountrySettings,
+  updateCountrySettings,
 } = require("../controllers/admin.controller.js");
 
 const router = express.Router();
+router.use(resolveCountry, requireAuth, requireCountryScope);
 
 /**
  * ORDERS
  */
-router.get("/orders", listOrders);
-router.get("/orders/:id", getOrderById);
+router.get("/orders", requirePermission(Permission.PREORDER_READ), listOrders);
+router.get("/orders/:id", requirePermission(Permission.PREORDER_READ), getOrderById);
+router.get("/preorders", requirePermission(Permission.PREORDER_READ), listOrders);
+router.get("/preorders/:id", requirePermission(Permission.PREORDER_READ), getOrderById);
 
 // optionnel (si tu veux un endpoint générique)
-router.patch("/orders/:id/status", updateOrderStatus);
+router.patch(
+  "/orders/:id/status",
+  requirePermission(Permission.PREORDER_UPDATE_STATUS),
+  updateOrderStatus
+);
+router.patch(
+  "/preorders/:id/status",
+  requirePermission(Permission.PREORDER_UPDATE_STATUS),
+  updateOrderStatus
+);
 
 // facturier
-router.post("/orders/:id/invoice", invoiceOrder);
-router.post("/orders/:id/proof", markPaymentProof);
-router.post("/orders/:id/verify-payment", verifyPayment);
+router.post("/orders/:id/invoice", requirePermission(Permission.INVOICE_CREATE), invoiceOrder);
+router.post(
+  "/orders/:id/proof",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  markPaymentProof
+);
+router.post(
+  "/orders/:id/verify-payment",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  verifyPayment
+);
 
 // cash
-router.post("/orders/:id/pay", payOrder);
+router.post("/orders/:id/pay", requirePermission(Permission.PAYMENT_VALIDATE), payOrder);
 
 // préparateur / clôture
-router.post("/orders/:id/prepare", prepareOrder);
-router.post("/orders/:id/fulfill", fulfillOrder);
+router.post("/orders/:id/prepare", requirePermission(Permission.PREPARATION_UPDATE), prepareOrder);
+router.post("/orders/:id/fulfill", requirePermission(Permission.PREPARATION_UPDATE), fulfillOrder);
 
 // annulation
-router.post("/orders/:id/cancel", cancelOrder);
+router.post(
+  "/orders/:id/cancel",
+  requirePermission(Permission.PREORDER_UPDATE_STATUS),
+  cancelOrder
+);
 
 /**
  * STATS
  */
-router.get("/stats", getStats);
+router.get("/stats", requirePermission(Permission.EXPORT_READ), getStats);
 
 /**
  * PRODUCTS
  */
-router.get("/products", listProducts);
-router.get("/products/:id", getProductById);
-router.post("/products", createProduct);
-router.put("/products/:id", updateProduct);
-router.delete("/products/:id", deleteProduct);
-router.post("/products/import", importProductsCsv);
-router.post("/products/:id/image", uploadProductImage);
+router.get("/products", requirePermission(Permission.PRODUCT_READ), listProducts);
+router.get("/products/:id", requirePermission(Permission.PRODUCT_READ), getProductById);
+router.post("/products", requirePermission(Permission.PRODUCT_WRITE), createProduct);
+router.put("/products/:id", requirePermission(Permission.PRODUCT_WRITE), updateProduct);
+router.delete("/products/:id", requirePermission(Permission.PRODUCT_WRITE), deleteProduct);
+router.post(
+  "/products/import",
+  requirePermission(Permission.PRODUCT_WRITE),
+  importProductsCsv
+);
+router.post(
+  "/products/:id/image",
+  requirePermission(Permission.PRODUCT_WRITE),
+  uploadProductImage
+);
+
+/**
+ * COUNTRY SETTINGS
+ */
+router.get(
+  "/country-settings",
+  requirePermission(Permission.COUNTRY_READ),
+  getCountrySettings
+);
+router.patch(
+  "/country-settings",
+  requirePermission(Permission.COUNTRY_WRITE),
+  updateCountrySettings
+);
 
 module.exports = router;

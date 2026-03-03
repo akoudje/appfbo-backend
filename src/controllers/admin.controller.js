@@ -1,15 +1,15 @@
 // src/controllers/admin.controller.js (CommonJS)
 
-const { PrismaClient, ProductCategory } = require("@prisma/client");
+const { ProductCategory } = require("@prisma/client");
 const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
-
-const prisma = new PrismaClient({
-  log:
-    process.env.NODE_ENV === "development"
-      ? ["query", "error", "warn"]
-      : ["error"],
-});
+const prisma = require("../prisma");
+const {
+  scopeWhere,
+  scopeCreate,
+  safeFindUniqueScoped,
+  pickCountryId,
+} = require("../helpers/countryScope");
 
 /* ----------------------------- cloudinary ----------------------------- */
 cloudinary.config({
@@ -135,7 +135,6 @@ async function addLog(preorderId, action, note, meta) {
  */
 async function listOrders(req, res) {
   try {
-    const countryId = req.countryId;
     const {
       status,
       q,
@@ -152,7 +151,7 @@ async function listOrders(req, res) {
     );
     const skip = (page - 1) * pageSize;
 
-    const where = { countryId };
+    const where = scopeWhere(req);
 
     if (status) where.status = status;
 
@@ -219,10 +218,7 @@ async function listOrders(req, res) {
 async function getOrderById(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
-
-    const order = await prisma.preorder.findFirst({
-      where: { id, countryId },
+    const order = await safeFindUniqueScoped(prisma.preorder, req, id, {}, {
       include: {
         items: {
           include: { product: true },
@@ -268,7 +264,7 @@ async function updateOrderStatus(req, res) {
     if (next === "CANCELLED") patch.cancelledAt = new Date();
 
     const updated = await prisma.preorder.update({
-      where: { id },
+     where: { id: order.id }, // order trouvé avec countryId
       data: patch,
       select: {
         id: true,
@@ -327,7 +323,8 @@ async function invoiceOrder(req, res) {
           : order.factureWhatsappTo,
         paymentLink: paymentLink ? String(paymentLink).trim() : null,
         invoicedAt: new Date(),
-        // invoicedBy: req.user?.id || null,
+        invoicedBy: req.user?.id || req.user?.email || req.user?.role || null,
+        invoicedById: req.user?.id || null,
       },
     });
 
@@ -375,7 +372,8 @@ async function markPaymentProof(req, res) {
         paymentRef: paymentRef ? String(paymentRef).trim() : null,
         paymentProofNote: note ? String(note).trim() : null,
         proofReceivedAt: new Date(),
-        // proofReceivedBy: req.user?.id || null,
+        proofReceivedBy: req.user?.id || req.user?.email || req.user?.role || null,
+        proofReceivedById: req.user?.id || null,
       },
     });
 
@@ -421,7 +419,8 @@ async function verifyPayment(req, res) {
         status: "PAID",
         paidAt: new Date(),
         paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
-        // paymentVerifiedBy: req.user?.id || null,
+        paymentVerifiedBy: req.user?.id || req.user?.email || req.user?.role || null,
+        paymentVerifiedById: req.user?.id || null,
       },
     });
 
@@ -503,7 +502,8 @@ async function prepareOrder(req, res) {
         status: "READY",
         preparedAt: new Date(),
         packingNote: packingNote ? String(packingNote).trim() : null,
-        // preparedBy: req.user?.id || null,
+        preparedBy: req.user?.id || req.user?.email || req.user?.role || null,
+        preparedById: req.user?.id || null,
       },
     });
 
@@ -540,7 +540,8 @@ async function fulfillOrder(req, res) {
         fulfilledAt: new Date(),
         deliveryTracking: deliveryTracking ? String(deliveryTracking).trim() : null,
         internalNote: note ? String(note).trim() : order.internalNote,
-        // fulfilledBy: req.user?.id || null,
+        fulfilledBy: req.user?.id || req.user?.email || req.user?.role || null,
+        fulfilledById: req.user?.id || null,
       },
     });
 
@@ -578,7 +579,8 @@ async function cancelOrder(req, res) {
         status: "CANCELLED",
         cancelledAt: new Date(),
         cancelReason: reason ? String(reason).trim() : "Annulée",
-        // cancelledBy: req.user?.id || null,
+        cancelledBy: req.user?.id || req.user?.email || req.user?.role || null,
+        cancelledById: req.user?.id || null,
       },
     });
 
@@ -680,13 +682,66 @@ async function getStats(req, res) {
   }
 }
 
+async function getCountrySettings(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const settings = await prisma.countrySettings.findUnique({
+      where: { countryId },
+      select: {
+        id: true,
+        countryId: true,
+        minCartFcfa: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!settings) {
+      return res.status(404).json({ message: "Country settings introuvables" });
+    }
+    return res.json(settings);
+  } catch (e) {
+    console.error("getCountrySettings error:", e);
+    return res.status(500).json({ message: "Erreur serveur (getCountrySettings)" });
+  }
+}
+
+async function updateCountrySettings(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const { minCartFcfa } = req.body || {};
+    const parsed = Number.parseInt(minCartFcfa, 10);
+
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return res.status(400).json({ message: "minCartFcfa invalide" });
+    }
+
+    const updated = await prisma.countrySettings.upsert({
+      where: { countryId },
+      update: { minCartFcfa: parsed },
+      create: { countryId, minCartFcfa: parsed },
+      select: {
+        id: true,
+        countryId: true,
+        minCartFcfa: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("updateCountrySettings error:", e);
+    return res.status(500).json({ message: "Erreur serveur (updateCountrySettings)" });
+  }
+}
+
 /* ===================================================================
    PRODUCTS
    =================================================================== */
 
 async function createProduct(req, res) {
   try {
-    const countryId = req.countryId;
     const {
       sku,
       nom,
@@ -723,10 +778,9 @@ async function createProduct(req, res) {
       details !== undefined && details !== null ? String(details).trim() : null;
 
     const created = await prisma.product.create({
-      data: {
+      data: scopeCreate(req, {
         sku: String(sku).trim(),
         nom: String(nom).trim(),
-        countryId,
         prixBaseFcfa: price,
         cc: String(cc),
         poidsKg: String(poidsKg),
@@ -736,7 +790,7 @@ async function createProduct(req, res) {
         category: cat,
         details: det || null,
         stockQty: stock,
-      },
+      }),
       select: {
         id: true,
         sku: true,
@@ -771,31 +825,31 @@ async function createProduct(req, res) {
 
 async function listProducts(req, res) {
   try {
-    const countryId = req.countryId;
     const { q, actif, take, category, inStock } = req.query;
-    const where = { countryId };
+    const filters = {};
 
     if (q && String(q).trim()) {
       const qs = String(q).trim();
-      where.OR = [
+      filters.OR = [
         { nom: { contains: qs, mode: "insensitive" } },
         { sku: { contains: qs, mode: "insensitive" } },
       ];
     }
 
     if (actif !== undefined && actif !== "") {
-      if (String(actif) === "true") where.actif = true;
-      else if (String(actif) === "false") where.actif = false;
+      if (String(actif) === "true") filters.actif = true;
+      else if (String(actif) === "false") filters.actif = false;
     }
 
     if (category && String(category).trim()) {
       const parsed = parseEnumSafe(category, ProductCategory, null);
       if (!parsed) return res.status(400).json({ message: "category invalide" });
-      where.category = parsed;
+      filters.category = parsed;
     }
 
-    if (String(inStock) === "true") where.stockQty = { gt: 0 };
-    if (String(inStock) === "false") where.stockQty = { lte: 0 };
+    if (String(inStock) === "true") filters.stockQty = { gt: 0 };
+    if (String(inStock) === "false") filters.stockQty = { lte: 0 };
+    const where = scopeWhere(req, filters);
 
     const limit = Math.min(500, Math.max(10, Number(take) || 200));
 
@@ -838,10 +892,7 @@ async function listProducts(req, res) {
 async function getProductById(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
-
-    const p = await prisma.product.findFirst({
-      where: { id, countryId },
+    const p = await safeFindUniqueScoped(prisma.product, req, id, {}, {
       select: {
         id: true,
         sku: true,
@@ -1182,6 +1233,8 @@ module.exports = {
 
   // stats
   getStats,
+  getCountrySettings,
+  updateCountrySettings,
 
   // products
   createProduct,

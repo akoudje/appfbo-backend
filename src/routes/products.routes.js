@@ -3,6 +3,9 @@
 // src/routes/products.routes.js
 const router = require("express").Router();
 const { listProducts, getProductById } = require("../controllers/products.controller");
+const { resolveCountry } = require("../middlewares/resolveCountry");
+
+router.use(resolveCountry);
 
 // Liste catalogue
 router.get("/", listProducts);

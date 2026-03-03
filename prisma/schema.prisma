@@ -55,6 +55,19 @@ enum ProductCategory {
   SOINS_PERSONNELS
 }
 
+enum AdminRole {
+  SUPER_ADMIN
+  TECH_ADMIN
+  OPERATIONS_DIRECTOR
+  SALES_DIRECTOR
+  BILLING_MANAGER
+  MARKETING_ASSISTANT
+  STOCK_MANAGER
+  COUNTER_MANAGER
+  INVOICER
+  ORDER_PREPARER
+}
+
 //
 // MODELS
 //
@@ -70,6 +83,7 @@ model Fbo {
   updatedAt DateTime @updatedAt
 
   preorders Preorder[]
+  fboCountries FboCountry[]
 
   @@index([pointDeVente])
   @@index([grade])
@@ -88,6 +102,8 @@ model Country {
   products       Product[]
   preorders      Preorder[]
   gradeDiscounts GradeDiscount[]
+  adminUsers     AdminUser[]
+  fboCountries   FboCountry[]
 }
 
 model CountrySettings {
@@ -97,6 +113,48 @@ model CountrySettings {
   minCartFcfa Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model AdminUser {
+  id       String    @id @default(cuid())
+  email    String    @unique
+  password String
+  fullName String?
+  role     AdminRole
+  actif    Boolean   @default(true)
+
+  countryId String?
+  country   Country? @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  invoicedPreorders        Preorder[] @relation("PreorderInvoicedBy")
+  proofReceivedPreorders   Preorder[] @relation("PreorderProofReceivedBy")
+  paymentVerifiedPreorders Preorder[] @relation("PreorderPaymentVerifiedBy")
+  preparedPreorders        Preorder[] @relation("PreorderPreparedBy")
+  fulfilledPreorders       Preorder[] @relation("PreorderFulfilledBy")
+  cancelledPreorders       Preorder[] @relation("PreorderCancelledBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId])
+  @@index([role])
+}
+
+model FboCountry {
+  id String @id @default(cuid())
+
+  fboId   String
+  fbo     Fbo    @relation(fields: [fboId], references: [id], onDelete: Cascade)
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  pointDeVente String?
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@unique([fboId, countryId])
+  @@index([countryId])
 }
 
 model Product {
@@ -205,6 +263,20 @@ model Preorder {
   fulfilledBy       String?
   cancelledBy       String?
 
+  invoicedById        String?
+  proofReceivedById   String?
+  paymentVerifiedById String?
+  preparedById        String?
+  fulfilledById       String?
+  cancelledById       String?
+
+  invoicedByAdmin        AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
+  proofReceivedByAdmin   AdminUser? @relation("PreorderProofReceivedBy", fields: [proofReceivedById], references: [id], onDelete: SetNull)
+  paymentVerifiedByAdmin AdminUser? @relation("PreorderPaymentVerifiedBy", fields: [paymentVerifiedById], references: [id], onDelete: SetNull)
+  preparedByAdmin        AdminUser? @relation("PreorderPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
+  fulfilledByAdmin       AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
+  cancelledByAdmin       AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
   // Livraison / retrait (optionnel)
   deliveryTracking String?
   packingNote      String? @db.Text
@@ -222,6 +294,12 @@ model Preorder {
   @@index([countryId, status, createdAt])
   @@index([fboId])
   @@index([pointDeVente])
+  @@index([invoicedById])
+  @@index([proofReceivedById])
+  @@index([paymentVerifiedById])
+  @@index([preparedById])
+  @@index([fulfilledById])
+  @@index([cancelledById])
 }
 
 model PreorderItem {

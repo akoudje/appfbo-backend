@@ -1,3 +1,6 @@
+// backend/prisma/seed.js
+// This script seeds the database with initial country data and related settings.
+
 const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient();
@@ -9,36 +12,66 @@ function readIntEnv(name, fallback) {
 }
 
 async function main() {
-  const code = String(process.env.DEFAULT_COUNTRY_CODE || "CI").trim().toUpperCase();
-  const name = process.env.DEFAULT_COUNTRY_NAME || "Cote d'Ivoire";
-  const currencyCode = (process.env.DEFAULT_COUNTRY_CURRENCY_CODE || "XOF").trim() || null;
+  const defaultCode = String(process.env.DEFAULT_COUNTRY_CODE || "CI").trim().toUpperCase();
   const minCartFcfa = readIntEnv("DEFAULT_MIN_CART_FCFA", 10000);
+  const countriesToSeed = [
+    { code: "CI", name: "Cote d'Ivoire", currencyCode: "XOF" },
+    { code: "BF", name: "Burkina Faso", currencyCode: "XOF" },
+    { code: "TG", name: "Togo", currencyCode: "XOF" }, 
+    { code: "ML", name: "Mali", currencyCode: "XOF" },
+    { code: "NG", name: "Niger", currencyCode: "XOF" },
+  ];
 
-  const country = await prisma.country.upsert({
-    where: { code },
-    update: {
-      name,
-      currencyCode,
-      actif: true,
-    },
-    create: {
-      code,
-      name,
-      currencyCode,
-      actif: true,
-    },
-  });
+  if (!countriesToSeed.some((c) => c.code === defaultCode)) {
+    countriesToSeed.unshift({
+      code: defaultCode,
+      name: process.env.DEFAULT_COUNTRY_NAME || defaultCode,
+      currencyCode: (process.env.DEFAULT_COUNTRY_CURRENCY_CODE || "XOF").trim() || null,
+    });
+  }
 
-  await prisma.countrySettings.upsert({
-    where: { countryId: country.id },
-    update: { minCartFcfa },
-    create: {
-      countryId: country.id,
-      minCartFcfa,
-    },
-  });
+  for (const entry of countriesToSeed) {
+    const country = await prisma.country.upsert({
+      where: { code: entry.code },
+      update: {
+        name: entry.name,
+        currencyCode: entry.currencyCode,
+        actif: true,
+      },
+      create: {
+        code: entry.code,
+        name: entry.name,
+        currencyCode: entry.currencyCode,
+        actif: true,
+      },
+    });
 
-  console.log(`Seed complete for country ${code} (${country.id})`);
+    await prisma.countrySettings.upsert({
+      where: { countryId: country.id },
+      update: { minCartFcfa },
+      create: {
+        countryId: country.id,
+        minCartFcfa,
+      },
+    });
+
+    await prisma.gradeDiscount.upsert({
+      where: {
+        countryId_grade: {
+          countryId: country.id,
+          grade: "ANIMATEUR",
+        },
+      },
+      update: { discountPercent: "10.00" },
+      create: {
+        countryId: country.id,
+        grade: "ANIMATEUR",
+        discountPercent: "10.00",
+      },
+    });
+  }
+
+  console.log(`Seed complete for countries: ${countriesToSeed.map((c) => c.code).join(", ")}`);
 }
 
 main()

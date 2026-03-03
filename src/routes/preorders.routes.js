@@ -7,6 +7,9 @@ const {
   getSummary,
   submit,
 } = require("../controllers/preorders.controller");
+const { resolveCountry } = require("../middlewares/resolveCountry");
+
+router.use(resolveCountry);
 
 // ✅ Étape 1 : créer un draft (route officielle)
 router.post("/draft", createDraft);

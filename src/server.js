@@ -7,7 +7,9 @@ const cors = require("cors");
 const adminRoutes = require("./routes/admin.routes.js");
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
-const countryContext = require("./middlewares/countryContext.js");
+
+const adminAuthRoutes = require("./routes/adminAuth.routes");
+const adminRoutes = require("./routes/admin.routes");
 
 const path = require("path");
 
@@ -39,13 +41,18 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 // Routes
-app.use("/api", countryContext);
 app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
 app.use("/api/admin", adminRoutes);
 
 
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+
+// Auth admin (PAS de resolveCountry ici)
+app.use("/api/admin/auth", adminAuthRoutes);
+
+// Ensuite seulement les routes admin protégées (resolveCountry + requireAuth + requireCountryScope déjà dans admin.routes.js)
+app.use("/api/admin", adminRoutes);
 
 
 // 404 handler
