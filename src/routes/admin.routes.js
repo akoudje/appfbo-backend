@@ -9,6 +9,13 @@ const {
   invoiceOrder,
   payOrder,
 
+  // workflow
+  markPaymentProof,
+  verifyPayment,
+  prepareOrder,
+  fulfillOrder,
+  cancelOrder,
+
   // stats
   getStats,
 
@@ -29,9 +36,24 @@ const router = express.Router();
  */
 router.get("/orders", listOrders);
 router.get("/orders/:id", getOrderById);
+
+// optionnel (si tu veux un endpoint générique)
 router.patch("/orders/:id/status", updateOrderStatus);
+
+// facturier
 router.post("/orders/:id/invoice", invoiceOrder);
+router.post("/orders/:id/proof", markPaymentProof);
+router.post("/orders/:id/verify-payment", verifyPayment);
+
+// cash
 router.post("/orders/:id/pay", payOrder);
+
+// préparateur / clôture
+router.post("/orders/:id/prepare", prepareOrder);
+router.post("/orders/:id/fulfill", fulfillOrder);
+
+// annulation
+router.post("/orders/:id/cancel", cancelOrder);
 
 /**
  * STATS
@@ -42,7 +64,7 @@ router.get("/stats", getStats);
  * PRODUCTS
  */
 router.get("/products", listProducts);
-router.get("/products/:id", getProductById); // <= pour productsService.getById
+router.get("/products/:id", getProductById);
 router.post("/products", createProduct);
 router.put("/products/:id", updateProduct);
 router.delete("/products/:id", deleteProduct);

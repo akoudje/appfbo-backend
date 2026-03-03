@@ -17,10 +17,14 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "prisma db seed"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  }
 }

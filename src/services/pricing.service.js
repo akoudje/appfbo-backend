@@ -18,8 +18,15 @@ function computeDeliveryFeeFcfa({ deliveryMode, totalPoidsKg }) {
   return 5000;
 }
 
-async function getDiscountPercentByGrade(grade) {
-  const row = await prisma.gradeDiscount.findUnique({ where: { grade } });
+async function getDiscountPercentByGrade(grade, countryId) {
+  const row = await prisma.gradeDiscount.findUnique({
+    where: {
+      countryId_grade: {
+        countryId,
+        grade,
+      },
+    },
+  });
   return row ? Number(row.discountPercent) : 0;
 }
 
@@ -30,22 +37,32 @@ function applyDiscount(prixBaseFcfa, discountPercent) {
   return Math.max(discounted, 0);
 }
 
-async function computePreorderTotals(preorderId) {
-  const preorder = await prisma.preorder.findUnique({
-    where: { id: preorderId },
+async function computePreorderTotals(preorderId, countryId) {
+  const preorder = await prisma.preorder.findFirst({
+    where: {
+      id: preorderId,
+      ...(countryId ? { countryId } : {}),
+    },
     include: {
       items: { include: { product: true } },
     },
   });
   if (!preorder) throw new Error("PREORDER_NOT_FOUND");
 
-  const discountPercent = await getDiscountPercentByGrade(preorder.fboGrade);
+  const discountPercent = await getDiscountPercentByGrade(
+    preorder.fboGrade,
+    preorder.countryId
+  );
 
   let totalCc = 0;
   let totalPoids = 0;
   let totalProduitsFcfa = 0;
 
   const computedItems = preorder.items.map((it) => {
+    if (it.product.countryId !== preorder.countryId) {
+      throw new Error("PRODUCT_COUNTRY_MISMATCH");
+    }
+
     const qty = it.qty;
 
     const ccU = Number(it.product.cc);

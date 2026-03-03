@@ -91,9 +91,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
-    const ok = ["image/png", "image/jpeg", "image/webp"].includes(
-      file.mimetype
-    );
+    const ok = ["image/png", "image/jpeg", "image/webp"].includes(file.mimetype);
     cb(ok ? null : new Error("Format image non supporté (png/jpg/webp)"), ok);
   },
 });
@@ -102,13 +100,50 @@ const upload = multer({
    ORDERS
    =================================================================== */
 
+const ALLOWED = {
+  SUBMITTED: ["INVOICED", "CANCELLED"],
+  INVOICED: ["PAYMENT_PROOF_RECEIVED", "CANCELLED"],
+  PAYMENT_PROOF_RECEIVED: ["PAID", "CANCELLED"],
+  PAID: ["READY"],
+  READY: ["FULFILLED"],
+  FULFILLED: [],
+  CANCELLED: [],
+  DRAFT: ["CANCELLED"],
+};
+
+function assertTransition(from, to) {
+  const ok = (ALLOWED[from] || []).includes(to);
+  if (!ok) {
+    const err = new Error(`Transition invalide ${from} -> ${to}`);
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
+async function addLog(preorderId, action, note, meta) {
+  try {
+    await prisma.preorderLog.create({
+      data: { preorderId, action, note: note || null, meta: meta || undefined },
+    });
+  } catch (_) {
+    // noop
+  }
+}
+
 /**
  * GET /api/admin/orders?status=&q=&dateFrom=&dateTo=&page=&pageSize=&sort=createdAt|total&dir=asc|desc
  */
 async function listOrders(req, res) {
   try {
-    const { status, q, dateFrom, dateTo, sort = "createdAt", dir = "desc" } =
-      req.query;
+    const countryId = req.countryId;
+    const {
+      status,
+      q,
+      dateFrom,
+      dateTo,
+      sort = "createdAt",
+      dir = "desc",
+    } = req.query;
 
     const page = Math.max(1, parseIntSafe(req.query.page, 1));
     const pageSize = Math.min(
@@ -117,7 +152,7 @@ async function listOrders(req, res) {
     );
     const skip = (page - 1) * pageSize;
 
-    const where = {};
+    const where = { countryId };
 
     if (status) where.status = status;
 
@@ -157,6 +192,8 @@ async function listOrders(req, res) {
           fboNumero: true,
           fboNomComplet: true,
           pointDeVente: true,
+          paymentMode: true,
+          deliveryMode: true,
           createdAt: true,
           _count: { select: { items: true } },
         },
@@ -182,15 +219,17 @@ async function listOrders(req, res) {
 async function getOrderById(req, res) {
   try {
     const { id } = req.params;
+    const countryId = req.countryId;
 
-    const order = await prisma.preorder.findUnique({
-      where: { id },
+    const order = await prisma.preorder.findFirst({
+      where: { id, countryId },
       include: {
         items: {
           include: { product: true },
           orderBy: { createdAt: "asc" },
         },
         fbo: true,
+        logs: { orderBy: { createdAt: "desc" } },
       },
     });
 
@@ -204,17 +243,29 @@ async function getOrderById(req, res) {
 
 /**
  * PATCH /api/admin/orders/:id/status
+ * ⚠️ Endpoint générique (optionnel) : verrouille les transitions.
  */
 async function updateOrderStatus(req, res) {
   try {
     const { id } = req.params;
-    const { status } = req.body || {};
+    const countryId = req.countryId;
+    const { status: next } = req.body || {};
+    if (!next) return res.status(400).json({ message: "status requis" });
 
-    if (!status) return res.status(400).json({ message: "status requis" });
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
 
-    const patch = { status };
-    if (status === "SUBMITTED") patch.submittedAt = new Date();
-    if (status === "PAID") patch.paidAt = new Date();
+    assertTransition(order.status, next);
+
+    const patch = { status: next };
+
+    if (next === "SUBMITTED") patch.submittedAt = new Date();
+    if (next === "INVOICED") patch.invoicedAt = new Date();
+    if (next === "PAYMENT_PROOF_RECEIVED") patch.proofReceivedAt = new Date();
+    if (next === "PAID") patch.paidAt = new Date();
+    if (next === "READY") patch.preparedAt = new Date();
+    if (next === "FULFILLED") patch.fulfilledAt = new Date();
+    if (next === "CANCELLED") patch.cancelledAt = new Date();
 
     const updated = await prisma.preorder.update({
       where: { id },
@@ -229,61 +280,188 @@ async function updateOrderStatus(req, res) {
       },
     });
 
+    await addLog(id, "STATUS", `Status -> ${next}`, {
+      from: order.status,
+      to: next,
+    });
+
     return res.json(updated);
   } catch (e) {
     console.error("updateOrderStatus error:", e);
-    return res.status(500).json({ message: "Erreur serveur (updateOrderStatus)" });
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (updateOrderStatus)" });
   }
 }
 
 /**
  * POST /api/admin/orders/:id/invoice
+ * SUBMITTED -> INVOICED
  */
 async function invoiceOrder(req, res) {
   try {
     const { id } = req.params;
+    const countryId = req.countryId;
+    const { factureReference, paymentLink, whatsappTo, note } = req.body || {};
 
-    const order = await prisma.preorder.findUnique({ where: { id } });
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
     if (!order) return res.status(404).json({ message: "Commande introuvable" });
 
-    const ref = `INV-${new Date()
-      .toISOString()
-      .slice(0, 10)
-      .replaceAll("-", "")}-${String(order.fboNumero || "")
-      .replaceAll("-", "")
-      .trim()}`;
+    assertTransition(order.status, "INVOICED");
+
+    const ref =
+      (factureReference && String(factureReference).trim()) ||
+      `PF-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(
+        order.fboNumero || ""
+      )
+        .replaceAll("-", "")
+        .trim()}`;
 
     const updated = await prisma.preorder.update({
       where: { id },
       data: {
         status: "INVOICED",
         factureReference: ref,
+        factureWhatsappTo: whatsappTo
+          ? String(whatsappTo).trim()
+          : order.factureWhatsappTo,
+        paymentLink: paymentLink ? String(paymentLink).trim() : null,
+        invoicedAt: new Date(),
+        // invoicedBy: req.user?.id || null,
       },
-      select: {
-        id: true,
-        status: true,
-        factureReference: true,
-        totalFcfa: true,
-        updatedAt: true,
-      },
+    });
+
+    await addLog(id, "INVOICE", note || "Préfacture créée", {
+      paymentLink: updated.paymentLink,
     });
 
     return res.json(updated);
   } catch (e) {
     console.error("invoiceOrder error:", e);
-    return res.status(500).json({ message: "Erreur serveur (invoiceOrder)" });
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (invoiceOrder)" });
+  }
+}
+
+/**
+ * POST /api/admin/orders/:id/proof
+ * INVOICED -> PAYMENT_PROOF_RECEIVED
+ * ⚠️ interdit si ESPECES (pas de preuve)
+ */
+async function markPaymentProof(req, res) {
+  try {
+    const { id } = req.params;
+    const countryId = req.countryId;
+    const { paymentProofUrl, paymentRef, note } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    if (order.paymentMode === "ESPECES") {
+      return res.status(400).json({
+        message:
+          "Preuve de paiement non applicable au mode ESPECES. Utiliser Encaisser espèces (/pay).",
+      });
+    }
+
+    assertTransition(order.status, "PAYMENT_PROOF_RECEIVED");
+
+    const updated = await prisma.preorder.update({
+      where: { id },
+      data: {
+        status: "PAYMENT_PROOF_RECEIVED",
+        paymentProofUrl: paymentProofUrl ? String(paymentProofUrl).trim() : null,
+        paymentRef: paymentRef ? String(paymentRef).trim() : null,
+        paymentProofNote: note ? String(note).trim() : null,
+        proofReceivedAt: new Date(),
+        // proofReceivedBy: req.user?.id || null,
+      },
+    });
+
+    await addLog(id, "PAYMENT_PROOF_RECEIVED", note || "Preuve reçue", {
+      paymentRef: updated.paymentRef,
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("markPaymentProof error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (markPaymentProof)" });
+  }
+}
+
+/**
+ * POST /api/admin/orders/:id/verify-payment
+ * PAYMENT_PROOF_RECEIVED -> PAID
+ * ⚠️ interdit si ESPECES (cash = /pay)
+ */
+async function verifyPayment(req, res) {
+  try {
+    const { id } = req.params;
+    const countryId = req.countryId;
+    const { note } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    if (order.paymentMode === "ESPECES") {
+      return res.status(400).json({
+        message:
+          "Validation électronique non applicable au mode ESPECES. Utiliser Encaisser espèces (/pay).",
+      });
+    }
+
+    assertTransition(order.status, "PAID");
+
+    const updated = await prisma.preorder.update({
+      where: { id },
+      data: {
+        status: "PAID",
+        paidAt: new Date(),
+        paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
+        // paymentVerifiedBy: req.user?.id || null,
+      },
+    });
+
+    await addLog(id, "PAYMENT_VERIFIED", note || "Paiement vérifié", null);
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("verifyPayment error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (verifyPayment)" });
   }
 }
 
 /**
  * POST /api/admin/orders/:id/pay
+ * Encaissement ESPECES (SUBMITTED|INVOICED -> PAID)
  */
 async function payOrder(req, res) {
   try {
     const { id } = req.params;
+    const countryId = req.countryId;
 
-    const order = await prisma.preorder.findUnique({ where: { id } });
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
     if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    if (order.paymentMode !== "ESPECES") {
+      return res.status(400).json({
+        message:
+          "Paiement direct autorisé uniquement pour mode ESPECES. Utiliser verify-payment pour paiements électroniques.",
+      });
+    }
+
+    // Cash : on autorise depuis SUBMITTED ou INVOICED (le facturier peut encaisser direct)
+    const allowedFrom = ["SUBMITTED", "INVOICED"];
+    if (!allowedFrom.includes(order.status)) {
+      return res.status(400).json({
+        message: `Transition invalide ${order.status} -> PAID (espèces)`,
+      });
+    }
 
     const updated = await prisma.preorder.update({
       where: { id },
@@ -291,19 +469,127 @@ async function payOrder(req, res) {
         status: "PAID",
         paidAt: new Date(),
       },
-      select: {
-        id: true,
-        status: true,
-        paidAt: true,
-        totalFcfa: true,
-        updatedAt: true,
-      },
+    });
+
+    await addLog(id, "CASH_PAYMENT", "Paiement espèces encaissé au bureau", {
+      fromStatus: order.status,
     });
 
     return res.json(updated);
   } catch (e) {
     console.error("payOrder error:", e);
     return res.status(500).json({ message: "Erreur serveur (payOrder)" });
+  }
+}
+
+/**
+ * POST /api/admin/orders/:id/prepare
+ * PAID -> READY
+ */
+async function prepareOrder(req, res) {
+  try {
+    const { id } = req.params;
+    const countryId = req.countryId;
+    const { packingNote } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    assertTransition(order.status, "READY");
+
+    const updated = await prisma.preorder.update({
+      where: { id },
+      data: {
+        status: "READY",
+        preparedAt: new Date(),
+        packingNote: packingNote ? String(packingNote).trim() : null,
+        // preparedBy: req.user?.id || null,
+      },
+    });
+
+    await addLog(id, "PREPARED", packingNote || "Colis prêt", null);
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("prepareOrder error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (prepareOrder)" });
+  }
+}
+
+/**
+ * POST /api/admin/orders/:id/fulfill
+ * READY -> FULFILLED
+ */
+async function fulfillOrder(req, res) {
+  try {
+    const { id } = req.params;
+    const countryId = req.countryId;
+    const { deliveryTracking, note } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    assertTransition(order.status, "FULFILLED");
+
+    const updated = await prisma.preorder.update({
+      where: { id },
+      data: {
+        status: "FULFILLED",
+        fulfilledAt: new Date(),
+        deliveryTracking: deliveryTracking ? String(deliveryTracking).trim() : null,
+        internalNote: note ? String(note).trim() : order.internalNote,
+        // fulfilledBy: req.user?.id || null,
+      },
+    });
+
+    await addLog(id, "FULFILLED", note || "Commande clôturée", {
+      deliveryTracking: updated.deliveryTracking,
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("fulfillOrder error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (fulfillOrder)" });
+  }
+}
+
+/**
+ * POST /api/admin/orders/:id/cancel
+ * * -> CANCELLED (selon transitions)
+ */
+async function cancelOrder(req, res) {
+  try {
+    const { id } = req.params;
+    const countryId = req.countryId;
+    const { reason } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    assertTransition(order.status, "CANCELLED");
+
+    const updated = await prisma.preorder.update({
+      where: { id },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+        cancelReason: reason ? String(reason).trim() : "Annulée",
+        // cancelledBy: req.user?.id || null,
+      },
+    });
+
+    await addLog(id, "CANCELLED", updated.cancelReason, null);
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("cancelOrder error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (cancelOrder)" });
   }
 }
 
@@ -316,6 +602,7 @@ async function payOrder(req, res) {
  */
 async function getStats(req, res) {
   try {
+    const countryId = req.countryId;
     const { date, dateFrom, dateTo } = req.query;
 
     let from = null;
@@ -329,7 +616,7 @@ async function getStats(req, res) {
       to = dateTo ? normalizeDateEnd(String(dateTo)) : null;
     }
 
-    const where = {};
+    const where = { countryId };
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = from;
@@ -360,7 +647,7 @@ async function getStats(req, res) {
 
     const ids = topRaw.map((x) => x.productId);
     const products = await prisma.product.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: ids }, countryId },
       select: { id: true, nom: true, sku: true },
     });
     const map = new Map(products.map((p) => [p.id, p]));
@@ -374,7 +661,10 @@ async function getStats(req, res) {
     }));
 
     return res.json({
-      period: { from: from?.toISOString() ?? null, to: to?.toISOString() ?? null },
+      period: {
+        from: from?.toISOString() ?? null,
+        to: to?.toISOString() ?? null,
+      },
       totalOrders: agg._count._all,
       totalRevenueFcfa: agg._sum.totalFcfa || 0,
       byStatus: byStatus.map((s) => ({
@@ -396,6 +686,7 @@ async function getStats(req, res) {
 
 async function createProduct(req, res) {
   try {
+    const countryId = req.countryId;
     const {
       sku,
       nom,
@@ -435,13 +726,13 @@ async function createProduct(req, res) {
       data: {
         sku: String(sku).trim(),
         nom: String(nom).trim(),
+        countryId,
         prixBaseFcfa: price,
         cc: String(cc),
         poidsKg: String(poidsKg),
         actif: Boolean(actif),
         imageUrl: imageUrl ? String(imageUrl).trim() : null,
 
-        // ✅ nouveaux champs
         category: cat,
         details: det || null,
         stockQty: stock,
@@ -480,8 +771,9 @@ async function createProduct(req, res) {
 
 async function listProducts(req, res) {
   try {
+    const countryId = req.countryId;
     const { q, actif, take, category, inStock } = req.query;
-    const where = {};
+    const where = { countryId };
 
     if (q && String(q).trim()) {
       const qs = String(q).trim();
@@ -543,13 +835,13 @@ async function listProducts(req, res) {
   }
 }
 
-// Pour productsService.getById()
 async function getProductById(req, res) {
   try {
     const { id } = req.params;
+    const countryId = req.countryId;
 
-    const p = await prisma.product.findUnique({
-      where: { id },
+    const p = await prisma.product.findFirst({
+      where: { id, countryId },
       select: {
         id: true,
         sku: true,
@@ -585,6 +877,7 @@ async function getProductById(req, res) {
 async function updateProduct(req, res) {
   try {
     const { id } = req.params;
+    const countryId = req.countryId;
     const {
       sku,
       nom,
@@ -623,8 +916,14 @@ async function updateProduct(req, res) {
     if ("cc" in data && !isDecimalLike(data.cc)) return res.status(400).json({ message: "cc invalide" });
     if ("poidsKg" in data && !isDecimalLike(data.poidsKg)) return res.status(400).json({ message: "poidsKg invalide" });
 
+    const exists = await prisma.product.findFirst({
+      where: { id, countryId },
+      select: { id: true },
+    });
+    if (!exists) return res.status(404).json({ message: "Produit introuvable" });
+
     const updated = await prisma.product.update({
-      where: { id },
+      where: { id: exists.id },
       data,
       select: {
         id: true,
@@ -659,22 +958,19 @@ async function updateProduct(req, res) {
 async function deleteProduct(req, res) {
   try {
     const { id } = req.params;
+    const countryId = req.countryId;
 
-    const p = await prisma.product.findUnique({
-      where: { id },
+    const p = await prisma.product.findFirst({
+      where: { id, countryId },
       select: { id: true, imageUrl: true, sku: true },
     });
     if (!p) return res.status(404).json({ message: "Produit introuvable" });
 
-    // Option overwrite par SKU => on peut aussi supprimer l'asset cloudinary correspondant
-    // folder: appfbo/products, public_id: `appfbo/products/<sku>`
     if (p.sku) {
       const publicId = `appfbo/products/${p.sku}`;
       try {
         await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
-      } catch (_) {
-        // noop
-      }
+      } catch (_) {}
     }
 
     await prisma.product.delete({ where: { id } });
@@ -687,6 +983,7 @@ async function deleteProduct(req, res) {
 
 async function importProductsCsv(req, res) {
   try {
+    const countryId = req.countryId;
     const { rows } = req.body || {};
     if (!Array.isArray(rows) || rows.length === 0) {
       return res.status(400).json({ message: "rows requis (array)" });
@@ -717,8 +1014,7 @@ async function importProductsCsv(req, res) {
       const rowErr = [];
       if (!sku) rowErr.push("sku manquant");
       if (!nom) rowErr.push("nom manquant");
-      if (!Number.isFinite(prixBaseFcfa) || prixBaseFcfa < 0)
-        rowErr.push("prixBaseFcfa invalide");
+      if (!Number.isFinite(prixBaseFcfa) || prixBaseFcfa < 0) rowErr.push("prixBaseFcfa invalide");
       if (!isDecimalLike(cc)) rowErr.push("cc invalide");
       if (!isDecimalLike(poidsKg)) rowErr.push("poidsKg invalide");
 
@@ -752,10 +1048,17 @@ async function importProductsCsv(req, res) {
       for (const p of clean) {
         const exists = await tx.product.findUnique({
           where: { sku: p.sku },
-          select: { id: true },
+          select: { id: true, countryId: true },
         });
 
         if (exists) {
+          if (exists.countryId !== countryId) {
+            errors.push({
+              sku: p.sku,
+              errors: ["SKU déjà utilisé dans un autre pays"],
+            });
+            continue;
+          }
           await tx.product.update({
             where: { sku: p.sku },
             data: {
@@ -777,6 +1080,7 @@ async function importProductsCsv(req, res) {
             data: {
               sku: p.sku,
               nom: p.nom,
+              countryId,
               prixBaseFcfa: p.prixBaseFcfa,
               cc: String(p.cc),
               poidsKg: String(p.poidsKg),
@@ -808,6 +1112,7 @@ async function importProductsCsv(req, res) {
 
 async function uploadProductImage(req, res) {
   try {
+    const countryId = req.countryId;
     const handler = upload.fields([
       { name: "file", maxCount: 1 },
       { name: "image", maxCount: 1 },
@@ -816,19 +1121,14 @@ async function uploadProductImage(req, res) {
     handler(req, res, async (err) => {
       if (err) return res.status(400).json({ message: err.message || "Upload échoué" });
 
-      // vérif config cloudinary
-      if (
-        !process.env.CLOUDINARY_CLOUD_NAME ||
-        !process.env.CLOUDINARY_API_KEY ||
-        !process.env.CLOUDINARY_API_SECRET
-      ) {
+      if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
         return res.status(500).json({ message: "Cloudinary non configuré (env manquantes)" });
       }
 
       const { id } = req.params;
 
-      const exists = await prisma.product.findUnique({
-        where: { id },
+      const exists = await prisma.product.findFirst({
+        where: { id, countryId },
         select: { id: true, imageUrl: true, sku: true, nom: true },
       });
       if (!exists) return res.status(404).json({ message: "Produit introuvable" });
@@ -836,7 +1136,6 @@ async function uploadProductImage(req, res) {
       const file = req.files?.file?.[0] || req.files?.image?.[0];
       if (!file) return res.status(400).json({ message: "Fichier manquant (file/image)" });
 
-      // Upload cloudinary (overwrite par SKU => 1 image stable par produit)
       const skuSafe = (exists.sku || `product_${exists.id}`).replace(/[^\w.-]/g, "_");
       const publicId = `appfbo/products/${skuSafe}`;
 
@@ -844,7 +1143,7 @@ async function uploadProductImage(req, res) {
       try {
         result = await uploadBufferToCloudinary(file.buffer, {
           folder: "appfbo/products",
-          public_id: skuSafe, // cloudinary combine folder + public_id
+          public_id: skuSafe,
           overwrite: true,
           resource_type: "image",
         });
@@ -859,7 +1158,6 @@ async function uploadProductImage(req, res) {
         select: { id: true, sku: true, nom: true, imageUrl: true, updatedAt: true },
       });
 
-      // expose aussi le publicId calculé si tu veux le logger/debug
       return res.json({ ...updated, cloudinaryPublicId: publicId });
     });
   } catch (e) {
@@ -875,7 +1173,12 @@ module.exports = {
   getOrderById,
   updateOrderStatus,
   invoiceOrder,
+  markPaymentProof,
+  verifyPayment,
   payOrder,
+  prepareOrder,
+  fulfillOrder,
+  cancelOrder,
 
   // stats
   getStats,

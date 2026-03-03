@@ -7,6 +7,7 @@ const cors = require("cors");
 const adminRoutes = require("./routes/admin.routes.js");
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
+const countryContext = require("./middlewares/countryContext.js");
 
 const path = require("path");
 
@@ -38,6 +39,7 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 // Routes
+app.use("/api", countryContext);
 app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
 app.use("/api/admin", adminRoutes);

@@ -7,7 +7,6 @@ function buildWhatsAppMessage({ preorder, items, totals }) {
   lines.push(`Précommande N° : ${preorder.id}`);
   lines.push(`FBO: ${preorder.fboNumero}`);
   lines.push(`Nom: ${preorder.fboNomComplet}`);
-  lines.push(`Grade: ${preorder.fboGrade}`);
   lines.push(`Mode de livraison: ${preorder.deliveryMode}`);
   lines.push(`Mode de Paiement: ${preorder.paymentMode}`);
   lines.push(``);

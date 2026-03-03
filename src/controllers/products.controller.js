@@ -6,6 +6,7 @@ const prisma = require("../prisma");
 // GET /api/products?search=&page=&pageSize=&category=&inStock=
 async function listProducts(req, res) {
   try {
+    const countryId = req.countryId;
     const search = (req.query.search || "").trim();
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const pageSize = Math.min(
@@ -17,6 +18,7 @@ async function listProducts(req, res) {
     const inStock = String(req.query.inStock || "").trim(); // "true" | "false" | ""
 
     const where = {
+      countryId,
       actif: true,
       ...(search
         ? {
@@ -75,9 +77,10 @@ async function listProducts(req, res) {
 async function getProductById(req, res) {
   try {
     const { id } = req.params;
+    const countryId = req.countryId;
 
-    const p = await prisma.product.findUnique({
-      where: { id },
+    const p = await prisma.product.findFirst({
+      where: { id, countryId },
       select: {
         id: true,
         sku: true,

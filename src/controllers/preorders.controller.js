@@ -22,6 +22,7 @@ async function createDraft(req, res) {
   if (!numeroFbo || !nomComplet || !grade || !pointDeVente || !paymentMode || !deliveryMode) {
     return res.status(400).json({ error: "Missing required fields" });
   }
+  const countryId = req.countryId;
 
   // upsert FBO
   const fbo = await prisma.fbo.upsert({
@@ -41,6 +42,7 @@ async function createDraft(req, res) {
 
   const preorder = await prisma.preorder.create({
     data: {
+      countryId,
       fboId: fbo.id,
       fboNumero: fbo.numeroFbo,
       fboNomComplet: fbo.nomComplet,
@@ -59,10 +61,13 @@ async function createDraft(req, res) {
 async function setItems(req, res) {
   const preorderId = req.params.id;
   const { items } = req.body;
+  const countryId = req.countryId;
 
   if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" });
 
-  const preorder = await prisma.preorder.findUnique({ where: { id: preorderId } });
+  const preorder = await prisma.preorder.findFirst({
+    where: { id: preorderId, countryId },
+  });
   if (!preorder) return res.status(404).json({ error: "Preorder not found" });
   if (preorder.status !== "DRAFT") return res.status(400).json({ error: "Preorder not editable" });
 
@@ -73,6 +78,19 @@ async function setItems(req, res) {
       qty: Math.max(parseInt(it.qty || 0, 10), 0),
     }))
     .filter((it) => it.productId && it.qty > 0);
+
+  if (normalized.length) {
+    const productIds = [...new Set(normalized.map((it) => it.productId))];
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds }, countryId, actif: true },
+      select: { id: true },
+    });
+    if (products.length !== productIds.length) {
+      return res.status(400).json({
+        error: "Certains produits sont invalides pour le pays courant",
+      });
+    }
+  }
 
   await prisma.$transaction(async (tx) => {
     // Supprime tout, puis recrée (simple MVP)
@@ -97,7 +115,7 @@ async function setItems(req, res) {
     }
   });
 
-  const summary = await computePreorderTotals(preorderId);
+  const summary = await computePreorderTotals(preorderId, countryId);
   res.json({
     preorderId,
     items: summary.items,
@@ -108,9 +126,10 @@ async function setItems(req, res) {
 // ETAPE 3: summary (récap avant validation)
 async function getSummary(req, res) {
   const preorderId = req.params.id;
+  const countryId = req.countryId;
 
   try {
-    const summary = await computePreorderTotals(preorderId);
+    const summary = await computePreorderTotals(preorderId, countryId);
     res.json({
       preorderId,
       discountPercent: summary.discountPercent,
@@ -119,7 +138,12 @@ async function getSummary(req, res) {
       billingWhatsapps: BILLING_WHATSAPPS,
     });
   } catch (e) {
-    if (String(e.message) === "PREORDER_NOT_FOUND") return res.status(404).json({ error: "Preorder not found" });
+    if (
+      String(e.message) === "PREORDER_NOT_FOUND" ||
+      String(e.message) === "PRODUCT_COUNTRY_MISMATCH"
+    ) {
+      return res.status(404).json({ error: "Preorder not found" });
+    }
     throw e;
   }
 }
@@ -128,15 +152,16 @@ async function getSummary(req, res) {
 async function submit(req, res) {
   const preorderId = req.params.id;
   const { whatsappTo } = req.body || {};
+  const countryId = req.countryId;
 
-  const preorder = await prisma.preorder.findUnique({
-    where: { id: preorderId },
+  const preorder = await prisma.preorder.findFirst({
+    where: { id: preorderId, countryId },
     include: { items: { include: { product: true } } },
   });
   if (!preorder) return res.status(404).json({ error: "Preorder not found" });
   if (preorder.status !== "DRAFT") return res.status(400).json({ error: "Preorder not editable" });
 
-  const summary = await computePreorderTotals(preorderId);
+  const summary = await computePreorderTotals(preorderId, countryId);
 
   const message = buildWhatsAppMessage({
     preorder: summary.preorder,

@@ -75,11 +75,37 @@ model Fbo {
   @@index([grade])
 }
 
+model Country {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  currencyCode String?
+  actif        Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  settings       CountrySettings?
+  products       Product[]
+  preorders      Preorder[]
+  gradeDiscounts GradeDiscount[]
+}
+
+model CountrySettings {
+  id          String   @id @default(cuid())
+  countryId   String   @unique
+  country     Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  minCartFcfa Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 model Product {
   id       String  @id @default(cuid())
   sku      String  @unique
   nom      String
   imageUrl String?
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   category ProductCategory @default(NON_CLASSE)
   details  String?         @db.Text
@@ -99,22 +125,30 @@ model Product {
   @@index([actif])
   @@index([nom])
   @@index([category])
+  @@index([countryId])
 }
 
 model GradeDiscount {
-  id    String @id @default(cuid())
-  grade Grade  @unique
+  id        String  @id @default(cuid())
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  grade     Grade
 
   // Remise en % (5 à 48). Exemple: 12.5
   discountPercent Decimal @db.Decimal(5, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([countryId, grade])
+  @@index([countryId])
 }
 
 model Preorder {
   id     String         @id @default(cuid())
   status PreorderStatus @default(DRAFT)
+  countryId String
+  country   Country      @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   // Liens & infos FBO au moment de la précommande
   fboId String
@@ -185,6 +219,7 @@ model Preorder {
   logs  PreorderLog[]
 
   @@index([status, createdAt])
+  @@index([countryId, status, createdAt])
   @@index([fboId])
   @@index([pointDeVente])
 }
