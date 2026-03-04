@@ -1,13 +1,17 @@
 // src/routes/adminAuth.routes.js (CommonJS)
 
 const express = require("express");
-const { adminLogin, seedSuperAdmin } = require("../controllers/adminAuth.controller");
+const { adminLogin, adminMe, seedSuperAdmin } = require("../controllers/adminAuth.controller");
+const { requireAuth } = require("../middlewares/rbac");
 
 const router = express.Router();
 
 router.post("/login", adminLogin);
 
-// OPTIONNEL: à activer uniquement si tu veux un endpoint de bootstrap
+// GET /me (protégé)
+router.get("/me", requireAuth, adminMe);
+
+// OPTIONNEL: bootstrap, à désactiver après usage
 router.post("/seed-super-admin", seedSuperAdmin);
 
 module.exports = router;

@@ -18,8 +18,8 @@ async function main() {
     { code: "CI", name: "Cote d'Ivoire", currencyCode: "XOF" },
     { code: "BF", name: "Burkina Faso", currencyCode: "XOF" },
     { code: "TG", name: "Togo", currencyCode: "XOF" }, 
-    { code: "ML", name: "Mali", currencyCode: "XOF" },
-    { code: "NG", name: "Niger", currencyCode: "XOF" },
+    { code: "BJ", name: "Benin", currencyCode: "XOF" },
+    { code: "NE", name: "Niger", currencyCode: "XOF" },
   ];
 
   if (!countriesToSeed.some((c) => c.code === defaultCode)) {

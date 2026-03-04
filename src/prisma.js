@@ -1,6 +1,7 @@
-
-
 // prisma.js
+// This file is responsible for creating and exporting a single instance of PrismaClient.
+// This pattern ensures that we don't create multiple instances of PrismaClient during development
+// due to hot reloading. In production, it simply creates one instance.
 
 const { PrismaClient } = require("@prisma/client");
 

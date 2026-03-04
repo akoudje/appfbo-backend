@@ -4,69 +4,65 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
 
+function signAdminToken(admin) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error("JWT_SECRET missing");
+
+  // 7 jours (tu peux changer)
+  const expiresIn = process.env.JWT_EXPIRES_IN || "7d";
+
+  return jwt.sign(
+    {
+      sub: admin.id,
+      email: admin.email,
+      role: admin.role,
+      countryId: admin.countryId || null,
+    },
+    secret,
+    { expiresIn }
+  );
+}
+
+function sanitizeAdmin(admin) {
+  return {
+    id: admin.id,
+    email: admin.email,
+    fullName: admin.fullName || null,
+    role: admin.role,
+    actif: admin.actif,
+    countryId: admin.countryId || null,
+    createdAt: admin.createdAt,
+    updatedAt: admin.updatedAt,
+  };
+}
+
 /**
  * POST /api/admin/auth/login
  * body: { email, password }
+ * return: { token, user }
  */
 async function adminLogin(req, res) {
   try {
     const { email, password } = req.body || {};
-    const em = (email || "").toString().trim().toLowerCase();
-    const pw = (password || "").toString();
-
-    if (!em || !pw) {
+    if (!email || !password) {
       return res.status(400).json({ message: "email et password requis" });
     }
 
-    const user = await prisma.adminUser.findUnique({
-      where: { email: em },
-      select: {
-        id: true,
-        email: true,
-        password: true,
-        fullName: true,
-        role: true,
-        actif: true,
-        countryId: true,
-      },
+    const admin = await prisma.adminUser.findUnique({
+      where: { email: String(email).trim().toLowerCase() },
     });
 
-    if (!user || !user.actif) {
+    if (!admin || !admin.actif) {
       return res.status(401).json({ message: "Identifiants invalides" });
     }
 
-    const ok = await bcrypt.compare(pw, user.password);
-    if (!ok) return res.status(401).json({ message: "Identifiants invalides" });
-
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      console.error("JWT_SECRET missing");
-      return res.status(500).json({ message: "Server misconfiguration (JWT)" });
+    const ok = await bcrypt.compare(String(password), admin.password);
+    if (!ok) {
+      return res.status(401).json({ message: "Identifiants invalides" });
     }
 
-    const expiresIn = process.env.JWT_EXPIRES_IN || "8h";
-
-    // IMPORTANT: sub = adminUser.id (source de vérité)
-    const token = jwt.sign(
-      {
-        sub: user.id,
-        role: user.role,
-        countryId: user.countryId || null,
-      },
-      secret,
-      { expiresIn }
-    );
-
-    return res.json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role,
-        countryId: user.countryId || null,
-      },
-    });
+    const token = signAdminToken(admin);
+    return res.json({ token, user: sanitizeAdmin(admin) });
   } catch (e) {
     console.error("adminLogin error:", e);
     return res.status(500).json({ message: "Erreur serveur (adminLogin)" });
@@ -74,52 +70,66 @@ async function adminLogin(req, res) {
 }
 
 /**
+ * GET /api/admin/auth/me
+ * header: Authorization: Bearer <token>
+ */
+async function adminMe(req, res) {
+  try {
+    if (!req.user?.id) return res.status(401).json({ message: "Unauthorized" });
+
+    const admin = await prisma.adminUser.findUnique({
+      where: { id: req.user.id },
+    });
+
+    if (!admin || !admin.actif) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    return res.json({ user: sanitizeAdmin(admin) });
+  } catch (e) {
+    console.error("adminMe error:", e);
+    return res.status(500).json({ message: "Erreur serveur (adminMe)" });
+  }
+}
+
+/**
  * POST /api/admin/auth/seed-super-admin
- * ⚠️ OPTIONNEL (à utiliser 1 fois) : crée un SUPER_ADMIN s'il n'en existe aucun.
- * body: { email, password, fullName? }
- * Recommandation: protéger via une variable env SEED_ADMIN_TOKEN
+ * ⚠️ à utiliser UNIQUEMENT 1 fois puis désactiver la route
+ * body: { email, password, fullName }
+ * - crée SUPER_ADMIN si aucun admin n’existe encore
  */
 async function seedSuperAdmin(req, res) {
   try {
-    const guard = process.env.SEED_ADMIN_TOKEN;
-    if (guard) {
-      const provided = String(req.header("X-Seed-Token") || "").trim();
-      if (!provided || provided !== guard) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-    }
-
-    const existing = await prisma.adminUser.findFirst({
-      where: { role: "SUPER_ADMIN" },
-      select: { id: true },
-    });
-    if (existing) {
-      return res.status(409).json({ message: "SUPER_ADMIN déjà existant" });
+    const count = await prisma.adminUser.count();
+    if (count > 0) {
+      return res.status(403).json({ message: "Seed interdit: un admin existe déjà" });
     }
 
     const { email, password, fullName } = req.body || {};
-    const em = (email || "").toString().trim().toLowerCase();
-    const pw = (password || "").toString();
-
-    if (!em || !pw) {
+    if (!email || !password) {
       return res.status(400).json({ message: "email et password requis" });
     }
 
-    const hash = await bcrypt.hash(pw, 12);
+    const hash = await bcrypt.hash(String(password), 10);
 
-    const created = await prisma.adminUser.create({
+    const admin = await prisma.adminUser.create({
       data: {
-        email: em,
+        email: String(email).trim().toLowerCase(),
         password: hash,
-        fullName: fullName ? String(fullName).trim() : null,
+        fullName: fullName ? String(fullName).trim() : "Super Admin",
         role: "SUPER_ADMIN",
-        countryId: null,
         actif: true,
+        countryId: null,
       },
-      select: { id: true, email: true, fullName: true, role: true, countryId: true },
     });
 
-    return res.status(201).json({ ok: true, user: created });
+    const token = signAdminToken(admin);
+
+    return res.status(201).json({
+      message: "SUPER_ADMIN créé",
+      token,
+      user: sanitizeAdmin(admin),
+    });
   } catch (e) {
     console.error("seedSuperAdmin error:", e);
     if (String(e?.code) === "P2002") {
@@ -129,7 +139,4 @@ async function seedSuperAdmin(req, res) {
   }
 }
 
-module.exports = {
-  adminLogin,
-  seedSuperAdmin,
-};
+module.exports = { adminLogin, adminMe, seedSuperAdmin };
