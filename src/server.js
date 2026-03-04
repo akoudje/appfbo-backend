@@ -3,6 +3,7 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 
 const adminRoutes = require("./routes/admin.routes.js");
 const adminAuthRoutes = require("./routes/adminAuth.routes");
@@ -10,12 +11,7 @@ const adminAuthRoutes = require("./routes/adminAuth.routes");
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
 
-
-const path = require("path");
-
-
 const app = express();
-
 
 const allowlist = [
   "https://appfbo-frontend.vercel.app",
@@ -25,7 +21,6 @@ const allowlist = [
 app.use(
   cors({
     origin: (origin, cb) => {
-      // Autorise les appels sans Origin (curl, health checks, server-to-server)
       if (!origin) return cb(null, true);
       if (allowlist.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
@@ -34,26 +29,23 @@ app.use(
   })
 );
 
-
 app.use(express.json({ limit: "1mb" }));
 
 // Health check
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Routes
+// Public routes
 app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
-app.use("/api/admin", adminRoutes);
 
-
-app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
-
-// Auth admin (PAS de resolveCountry ici)
+// Admin auth (public) — PAS de resolveCountry ici
 app.use("/api/admin/auth", adminAuthRoutes);
 
-// Ensuite seulement les routes admin protégées (resolveCountry + requireAuth + requireCountryScope déjà dans admin.routes.js)
+// Admin protected routes (resolveCountry + requireAuth + requireCountryScope dans admin.routes.js)
 app.use("/api/admin", adminRoutes);
 
+// Static
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 // 404 handler
 app.use((req, res) => res.status(404).json({ error: "Not Found" }));
