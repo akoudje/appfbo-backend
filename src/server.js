@@ -1,5 +1,4 @@
-// server.js : point d'entrée de l'API, configure Express, les routes, les middlewares et démarre le serveur
-
+// src/server.js
 require("dotenv").config();
 
 const express = require("express");
@@ -13,145 +12,93 @@ const preordersRoutes = require("./routes/preorders.routes.js");
 
 const app = express();
 
-/*
-|--------------------------------------------------------------------------
-| CORS configuration
-|--------------------------------------------------------------------------
-| Autorise :
-| - production frontend
-| - production admin
-| - previews Vercel (branches)
-| - localhost en dev
-*/
+/* =========================================================
+   CORS
+   ========================================================= */
 
 const allowlist = new Set([
   "https://appfbo-frontend.vercel.app",
   "https://appfbo-admin.vercel.app",
 ]);
 
+// Preview Vercel (branches)
 const vercelPreviewRegex =
   /^https:\/\/appfbo-admin-git-.*-junior-akoudjes-projects\.vercel\.app$/;
 
+// Local dev
 const localhostRegex = /^http:\/\/localhost:\d+$/;
 
 const corsOptions = {
   origin: (origin, cb) => {
+    // Autorise curl/healthcheck/server-to-server
     if (!origin) return cb(null, true);
 
     if (allowlist.has(origin)) return cb(null, true);
     if (vercelPreviewRegex.test(origin)) return cb(null, true);
     if (localhostRegex.test(origin)) return cb(null, true);
 
-    console.warn("Blocked by CORS:", origin);
+    console.warn("CORS blocked:", origin);
     return cb(new Error(`CORS blocked for origin: ${origin}`));
   },
-
   credentials: true,
-
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Country",
-  ],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Country"],
 };
 
 app.use(cors(corsOptions));
 
-/*
-|--------------------------------------------------------------------------
-| Important : gestion du preflight OPTIONS
-| ⚠️ ne PAS utiliser "*" sinon crash avec path-to-regexp
-|--------------------------------------------------------------------------
-*/
+/**
+ * IMPORTANT:
+ * - Ne pas utiliser app.options("*", ...) ni app.options("/*", ...)
+ * - Utiliser une RegExp pour éviter path-to-regexp crash
+ */
+app.options(/.*/, cors(corsOptions));
 
-app.options("/*", cors(corsOptions));
-
-/*
-|--------------------------------------------------------------------------
-| Body parser
-|--------------------------------------------------------------------------
-*/
-
+/* =========================================================
+   Middlewares
+   ========================================================= */
 app.use(express.json({ limit: "1mb" }));
 
-/*
-|--------------------------------------------------------------------------
-| Health check (Render)
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   Health check
+   ========================================================= */
+app.get("/health", (req, res) => res.json({ ok: true }));
 
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
-});
-
-/*
-|--------------------------------------------------------------------------
-| Public API routes
-|--------------------------------------------------------------------------
-*/
-
+/* =========================================================
+   Routes publiques
+   ========================================================= */
 app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
 
-/*
-|--------------------------------------------------------------------------
-| Admin authentication routes (PUBLIC)
-|--------------------------------------------------------------------------
-*/
-
+/* =========================================================
+   Admin AUTH (publique)
+   ========================================================= */
 app.use("/api/admin/auth", adminAuthRoutes);
 
-/*
-|--------------------------------------------------------------------------
-| Admin protected routes
-| resolveCountry + requireAuth + requireCountryScope dedans
-|--------------------------------------------------------------------------
-*/
-
+/* =========================================================
+   Admin protégée
+   ========================================================= */
 app.use("/api/admin", adminRoutes);
 
-/*
-|--------------------------------------------------------------------------
-| Static uploads
-|--------------------------------------------------------------------------
-*/
-
+/* =========================================================
+   Static
+   ========================================================= */
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
-/*
-|--------------------------------------------------------------------------
-| 404 handler
-|--------------------------------------------------------------------------
-*/
-
-app.use((req, res) => {
-  res.status(404).json({ error: "Not Found" });
-});
-
-/*
-|--------------------------------------------------------------------------
-| Global error handler
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   404 + error handler
+   ========================================================= */
+app.use((req, res) => res.status(404).json({ error: "Not Found" }));
 
 app.use((err, req, res, next) => {
   console.error("Server error:", err);
-
-  res.status(500).json({
-    error: err.message || "Server Error",
-  });
+  res.status(500).json({ error: err.message || "Server Error" });
 });
 
-/*
-|--------------------------------------------------------------------------
-| Start server
-|--------------------------------------------------------------------------
-*/
-
+/* =========================================================
+   Start
+   ========================================================= */
 const PORT = process.env.PORT || 4000;
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on port ${PORT}`);
 });
