@@ -30,15 +30,40 @@ const localhostRegex = /^http:\/\/localhost:\d+$/;
 
 const corsOptions = {
   origin: (origin, cb) => {
-    // Autorise curl/healthcheck/server-to-server
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true); // curl, healthchecks
 
-    if (allowlist.has(origin)) return cb(null, true);
-    if (vercelPreviewRegex.test(origin)) return cb(null, true);
-    if (localhostRegex.test(origin)) return cb(null, true);
+    try {
+      const { hostname, protocol } = new URL(origin);
+      if (protocol !== "https:" && protocol !== "http:") return cb(new Error("Bad origin"));
 
-    console.warn("CORS blocked:", origin);
-    return cb(new Error(`CORS blocked for origin: ${origin}`));
+      // PROD allowlist
+      if (
+        origin === "https://appfbo-frontend.vercel.app" ||
+        origin === "https://appfbo-admin.vercel.app"
+      ) {
+        return cb(null, true);
+      }
+
+      // Localhost
+      if (hostname === "localhost" || hostname === "127.0.0.1") {
+        return cb(null, true);
+      }
+
+      // ✅ Vercel previews (tous les sous-domaines de ton projet)
+      // ex: appfbo-admin-git-xxxx-junior-akoudjes-projects.vercel.app
+      if (
+        hostname.endsWith(".vercel.app") &&
+        (hostname.startsWith("appfbo-admin") || hostname.startsWith("appfbo-frontend"))
+      ) {
+        return cb(null, true);
+      }
+
+      console.warn("CORS blocked:", origin);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    } catch (e) {
+      console.warn("CORS origin parse failed:", origin);
+      return cb(new Error("CORS origin invalid"));
+    }
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
