@@ -5,11 +5,11 @@ const express = require("express");
 const cors = require("cors");
 
 const adminRoutes = require("./routes/admin.routes.js");
+const adminAuthRoutes = require("./routes/adminAuth.routes");
+
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
 
-const adminAuthRoutes = require("./routes/adminAuth.routes");
-const adminRoutes = require("./routes/admin.routes");
 
 const path = require("path");
 
