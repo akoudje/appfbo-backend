@@ -91,7 +91,9 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
-    const ok = ["image/png", "image/jpeg", "image/webp"].includes(file.mimetype);
+    const ok = ["image/png", "image/jpeg", "image/webp"].includes(
+      file.mimetype,
+    );
     cb(ok ? null : new Error("Format image non supporté (png/jpg/webp)"), ok);
   },
 });
@@ -147,11 +149,18 @@ async function listOrders(req, res) {
     const page = Math.max(1, parseIntSafe(req.query.page, 1));
     const pageSize = Math.min(
       100,
-      Math.max(10, parseIntSafe(req.query.pageSize, 20))
+      Math.max(10, parseIntSafe(req.query.pageSize, 20)),
     );
     const skip = (page - 1) * pageSize;
 
     const where = scopeWhere(req);
+
+    // ✅ Par défaut, on n'affiche pas les brouillons
+    const includeDrafts = String(req.query.includeDrafts) === "true";
+
+    if (!status && !includeDrafts) {
+      where.status = { not: "DRAFT" };
+    }
 
     if (status) where.status = status;
 
@@ -218,18 +227,25 @@ async function listOrders(req, res) {
 async function getOrderById(req, res) {
   try {
     const { id } = req.params;
-    const order = await safeFindUniqueScoped(prisma.preorder, req, id, {}, {
-      include: {
-        items: {
-          include: { product: true },
-          orderBy: { createdAt: "asc" },
+    const order = await safeFindUniqueScoped(
+      prisma.preorder,
+      req,
+      id,
+      {},
+      {
+        include: {
+          items: {
+            include: { product: true },
+            orderBy: { createdAt: "asc" },
+          },
+          fbo: true,
+          logs: { orderBy: { createdAt: "desc" } },
         },
-        fbo: true,
-        logs: { orderBy: { createdAt: "desc" } },
       },
-    });
+    );
 
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
     return res.json(order);
   } catch (e) {
     console.error("getOrderById error:", e);
@@ -249,7 +265,8 @@ async function updateOrderStatus(req, res) {
     if (!next) return res.status(400).json({ message: "status requis" });
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     assertTransition(order.status, next);
 
@@ -264,7 +281,7 @@ async function updateOrderStatus(req, res) {
     if (next === "CANCELLED") patch.cancelledAt = new Date();
 
     const updated = await prisma.preorder.update({
-     where: { id: order.id }, // order trouvé avec countryId
+      where: { id: order.id }, // order trouvé avec countryId
       data: patch,
       select: {
         id: true,
@@ -301,14 +318,15 @@ async function invoiceOrder(req, res) {
     const { factureReference, paymentLink, whatsappTo, note } = req.body || {};
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     assertTransition(order.status, "INVOICED");
 
     const ref =
       (factureReference && String(factureReference).trim()) ||
       `PF-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(
-        order.fboNumero || ""
+        order.fboNumero || "",
       )
         .replaceAll("-", "")
         .trim()}`;
@@ -353,7 +371,8 @@ async function markPaymentProof(req, res) {
     const { paymentProofUrl, paymentRef, note } = req.body || {};
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     if (order.paymentMode === "ESPECES") {
       return res.status(400).json({
@@ -368,11 +387,14 @@ async function markPaymentProof(req, res) {
       where: { id },
       data: {
         status: "PAYMENT_PROOF_RECEIVED",
-        paymentProofUrl: paymentProofUrl ? String(paymentProofUrl).trim() : null,
+        paymentProofUrl: paymentProofUrl
+          ? String(paymentProofUrl).trim()
+          : null,
         paymentRef: paymentRef ? String(paymentRef).trim() : null,
         paymentProofNote: note ? String(note).trim() : null,
         proofReceivedAt: new Date(),
-        proofReceivedBy: req.user?.id || req.user?.email || req.user?.role || null,
+        proofReceivedBy:
+          req.user?.id || req.user?.email || req.user?.role || null,
         proofReceivedById: req.user?.id || null,
       },
     });
@@ -402,7 +424,8 @@ async function verifyPayment(req, res) {
     const { note } = req.body || {};
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     if (order.paymentMode === "ESPECES") {
       return res.status(400).json({
@@ -419,7 +442,8 @@ async function verifyPayment(req, res) {
         status: "PAID",
         paidAt: new Date(),
         paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
-        paymentVerifiedBy: req.user?.id || req.user?.email || req.user?.role || null,
+        paymentVerifiedBy:
+          req.user?.id || req.user?.email || req.user?.role || null,
         paymentVerifiedById: req.user?.id || null,
       },
     });
@@ -445,7 +469,8 @@ async function payOrder(req, res) {
     const countryId = req.countryId;
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     if (order.paymentMode !== "ESPECES") {
       return res.status(400).json({
@@ -492,7 +517,8 @@ async function prepareOrder(req, res) {
     const { packingNote } = req.body || {};
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     assertTransition(order.status, "READY");
 
@@ -529,7 +555,8 @@ async function fulfillOrder(req, res) {
     const { deliveryTracking, note } = req.body || {};
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     assertTransition(order.status, "FULFILLED");
 
@@ -538,7 +565,9 @@ async function fulfillOrder(req, res) {
       data: {
         status: "FULFILLED",
         fulfilledAt: new Date(),
-        deliveryTracking: deliveryTracking ? String(deliveryTracking).trim() : null,
+        deliveryTracking: deliveryTracking
+          ? String(deliveryTracking).trim()
+          : null,
         internalNote: note ? String(note).trim() : order.internalNote,
         fulfilledBy: req.user?.id || req.user?.email || req.user?.role || null,
         fulfilledById: req.user?.id || null,
@@ -569,7 +598,8 @@ async function cancelOrder(req, res) {
     const { reason } = req.body || {};
 
     const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande introuvable" });
 
     assertTransition(order.status, "CANCELLED");
 
@@ -618,7 +648,7 @@ async function getStats(req, res) {
       to = dateTo ? normalizeDateEnd(String(dateTo)) : null;
     }
 
-    const where = { countryId };
+    const where = { countryId, status: { not: "DRAFT" } };
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = from;
@@ -702,7 +732,9 @@ async function getCountrySettings(req, res) {
     return res.json(settings);
   } catch (e) {
     console.error("getCountrySettings error:", e);
-    return res.status(500).json({ message: "Erreur serveur (getCountrySettings)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (getCountrySettings)" });
   }
 }
 
@@ -732,7 +764,9 @@ async function updateCountrySettings(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("updateCountrySettings error:", e);
-    return res.status(500).json({ message: "Erreur serveur (updateCountrySettings)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (updateCountrySettings)" });
   }
 }
 
@@ -764,14 +798,15 @@ async function createProduct(req, res) {
     if (!Number.isFinite(price) || price < 0)
       return res.status(400).json({ message: "prixBaseFcfa invalide" });
 
-    if (!isDecimalLike(cc)) return res.status(400).json({ message: "cc requis" });
+    if (!isDecimalLike(cc))
+      return res.status(400).json({ message: "cc requis" });
     if (!isDecimalLike(poidsKg))
       return res.status(400).json({ message: "poidsKg requis" });
 
     const cat = parseEnumSafe(
       category,
       ProductCategory,
-      ProductCategory.NON_CLASSE || "NON_CLASSE"
+      ProductCategory.NON_CLASSE || "NON_CLASSE",
     );
     const stock = parseStockQty(stockQty, 0);
     const det =
@@ -813,7 +848,8 @@ async function createProduct(req, res) {
     return res.status(201).json({
       ...created,
       cc: created.cc?.toString?.() ?? String(created.cc ?? "0.000"),
-      poidsKg: created.poidsKg?.toString?.() ?? String(created.poidsKg ?? "0.000"),
+      poidsKg:
+        created.poidsKg?.toString?.() ?? String(created.poidsKg ?? "0.000"),
     });
   } catch (e) {
     console.error("createProduct error:", e);
@@ -843,7 +879,8 @@ async function listProducts(req, res) {
 
     if (category && String(category).trim()) {
       const parsed = parseEnumSafe(category, ProductCategory, null);
-      if (!parsed) return res.status(400).json({ message: "category invalide" });
+      if (!parsed)
+        return res.status(400).json({ message: "category invalide" });
       filters.category = parsed;
     }
 
@@ -881,7 +918,7 @@ async function listProducts(req, res) {
         ...p,
         cc: p.cc?.toString?.() ?? String(p.cc ?? "0.000"),
         poidsKg: p.poidsKg?.toString?.() ?? String(p.poidsKg ?? "0.000"),
-      }))
+      })),
     );
   } catch (e) {
     console.error("listProducts error:", e);
@@ -892,25 +929,31 @@ async function listProducts(req, res) {
 async function getProductById(req, res) {
   try {
     const { id } = req.params;
-    const p = await safeFindUniqueScoped(prisma.product, req, id, {}, {
-      select: {
-        id: true,
-        sku: true,
-        nom: true,
-        prixBaseFcfa: true,
-        cc: true,
-        poidsKg: true,
-        actif: true,
-        imageUrl: true,
+    const p = await safeFindUniqueScoped(
+      prisma.product,
+      req,
+      id,
+      {},
+      {
+        select: {
+          id: true,
+          sku: true,
+          nom: true,
+          prixBaseFcfa: true,
+          cc: true,
+          poidsKg: true,
+          actif: true,
+          imageUrl: true,
 
-        category: true,
-        details: true,
-        stockQty: true,
+          category: true,
+          details: true,
+          stockQty: true,
 
-        createdAt: true,
-        updatedAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
       },
-    });
+    );
 
     if (!p) return res.status(404).json({ message: "Produit introuvable" });
 
@@ -945,33 +988,55 @@ async function updateProduct(req, res) {
     const data = {
       ...(sku !== undefined ? { sku: String(sku).trim() } : {}),
       ...(nom !== undefined ? { nom: String(nom).trim() } : {}),
-      ...(prixBaseFcfa !== undefined ? { prixBaseFcfa: Number(prixBaseFcfa) } : {}),
+      ...(prixBaseFcfa !== undefined
+        ? { prixBaseFcfa: Number(prixBaseFcfa) }
+        : {}),
       ...(actif !== undefined ? { actif: Boolean(actif) } : {}),
-      ...(imageUrl !== undefined ? { imageUrl: imageUrl ? String(imageUrl).trim() : null } : {}),
+      ...(imageUrl !== undefined
+        ? { imageUrl: imageUrl ? String(imageUrl).trim() : null }
+        : {}),
       ...(cc !== undefined ? { cc: String(cc) } : {}),
       ...(poidsKg !== undefined ? { poidsKg: String(poidsKg) } : {}),
 
       ...(category !== undefined
-        ? { category: parseEnumSafe(category, ProductCategory, ProductCategory.NON_CLASSE || "NON_CLASSE") }
+        ? {
+            category: parseEnumSafe(
+              category,
+              ProductCategory,
+              ProductCategory.NON_CLASSE || "NON_CLASSE",
+            ),
+          }
         : {}),
-      ...(details !== undefined ? { details: details ? String(details).trim() : null } : {}),
-      ...(stockQty !== undefined ? { stockQty: parseStockQty(stockQty, 0) } : {}),
+      ...(details !== undefined
+        ? { details: details ? String(details).trim() : null }
+        : {}),
+      ...(stockQty !== undefined
+        ? { stockQty: parseStockQty(stockQty, 0) }
+        : {}),
     };
 
-    if ("prixBaseFcfa" in data && (!Number.isFinite(data.prixBaseFcfa) || data.prixBaseFcfa < 0)) {
+    if (
+      "prixBaseFcfa" in data &&
+      (!Number.isFinite(data.prixBaseFcfa) || data.prixBaseFcfa < 0)
+    ) {
       return res.status(400).json({ message: "prixBaseFcfa invalide" });
     }
-    if ("sku" in data && !data.sku) return res.status(400).json({ message: "sku invalide" });
-    if ("nom" in data && !data.nom) return res.status(400).json({ message: "nom invalide" });
+    if ("sku" in data && !data.sku)
+      return res.status(400).json({ message: "sku invalide" });
+    if ("nom" in data && !data.nom)
+      return res.status(400).json({ message: "nom invalide" });
 
-    if ("cc" in data && !isDecimalLike(data.cc)) return res.status(400).json({ message: "cc invalide" });
-    if ("poidsKg" in data && !isDecimalLike(data.poidsKg)) return res.status(400).json({ message: "poidsKg invalide" });
+    if ("cc" in data && !isDecimalLike(data.cc))
+      return res.status(400).json({ message: "cc invalide" });
+    if ("poidsKg" in data && !isDecimalLike(data.poidsKg))
+      return res.status(400).json({ message: "poidsKg invalide" });
 
     const exists = await prisma.product.findFirst({
       where: { id, countryId },
       select: { id: true },
     });
-    if (!exists) return res.status(404).json({ message: "Produit introuvable" });
+    if (!exists)
+      return res.status(404).json({ message: "Produit introuvable" });
 
     const updated = await prisma.product.update({
       where: { id: exists.id },
@@ -997,11 +1062,13 @@ async function updateProduct(req, res) {
     return res.json({
       ...updated,
       cc: updated.cc?.toString?.() ?? String(updated.cc ?? "0.000"),
-      poidsKg: updated.poidsKg?.toString?.() ?? String(updated.poidsKg ?? "0.000"),
+      poidsKg:
+        updated.poidsKg?.toString?.() ?? String(updated.poidsKg ?? "0.000"),
     });
   } catch (e) {
     console.error("updateProduct error:", e);
-    if (String(e?.code) === "P2002") return res.status(409).json({ message: "SKU déjà utilisé" });
+    if (String(e?.code) === "P2002")
+      return res.status(409).json({ message: "SKU déjà utilisé" });
     return res.status(500).json({ message: "Erreur serveur (updateProduct)" });
   }
 }
@@ -1057,7 +1124,7 @@ async function importProductsCsv(req, res) {
       const category = parseEnumSafe(
         r.category ?? r.categorie,
         ProductCategory,
-        ProductCategory.NON_CLASSE || "NON_CLASSE"
+        ProductCategory.NON_CLASSE || "NON_CLASSE",
       );
       const details = r.details ? String(r.details).trim() : null;
       const stockQty = parseStockQty(r.stockQty ?? r.stock ?? r.quantite, 0);
@@ -1065,7 +1132,8 @@ async function importProductsCsv(req, res) {
       const rowErr = [];
       if (!sku) rowErr.push("sku manquant");
       if (!nom) rowErr.push("nom manquant");
-      if (!Number.isFinite(prixBaseFcfa) || prixBaseFcfa < 0) rowErr.push("prixBaseFcfa invalide");
+      if (!Number.isFinite(prixBaseFcfa) || prixBaseFcfa < 0)
+        rowErr.push("prixBaseFcfa invalide");
       if (!isDecimalLike(cc)) rowErr.push("cc invalide");
       if (!isDecimalLike(poidsKg)) rowErr.push("poidsKg invalide");
 
@@ -1157,7 +1225,9 @@ async function importProductsCsv(req, res) {
     });
   } catch (e) {
     console.error("importProductsCsv error:", e);
-    return res.status(500).json({ message: "Erreur serveur (importProductsCsv)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (importProductsCsv)" });
   }
 }
 
@@ -1170,10 +1240,19 @@ async function uploadProductImage(req, res) {
     ]);
 
     handler(req, res, async (err) => {
-      if (err) return res.status(400).json({ message: err.message || "Upload échoué" });
+      if (err)
+        return res
+          .status(400)
+          .json({ message: err.message || "Upload échoué" });
 
-      if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-        return res.status(500).json({ message: "Cloudinary non configuré (env manquantes)" });
+      if (
+        !process.env.CLOUDINARY_CLOUD_NAME ||
+        !process.env.CLOUDINARY_API_KEY ||
+        !process.env.CLOUDINARY_API_SECRET
+      ) {
+        return res
+          .status(500)
+          .json({ message: "Cloudinary non configuré (env manquantes)" });
       }
 
       const { id } = req.params;
@@ -1182,12 +1261,19 @@ async function uploadProductImage(req, res) {
         where: { id, countryId },
         select: { id: true, imageUrl: true, sku: true, nom: true },
       });
-      if (!exists) return res.status(404).json({ message: "Produit introuvable" });
+      if (!exists)
+        return res.status(404).json({ message: "Produit introuvable" });
 
       const file = req.files?.file?.[0] || req.files?.image?.[0];
-      if (!file) return res.status(400).json({ message: "Fichier manquant (file/image)" });
+      if (!file)
+        return res
+          .status(400)
+          .json({ message: "Fichier manquant (file/image)" });
 
-      const skuSafe = (exists.sku || `product_${exists.id}`).replace(/[^\w.-]/g, "_");
+      const skuSafe = (exists.sku || `product_${exists.id}`).replace(
+        /[^\w.-]/g,
+        "_",
+      );
       const publicId = `appfbo/products/${skuSafe}`;
 
       let result;
@@ -1206,14 +1292,22 @@ async function uploadProductImage(req, res) {
       const updated = await prisma.product.update({
         where: { id },
         data: { imageUrl: result.secure_url },
-        select: { id: true, sku: true, nom: true, imageUrl: true, updatedAt: true },
+        select: {
+          id: true,
+          sku: true,
+          nom: true,
+          imageUrl: true,
+          updatedAt: true,
+        },
       });
 
       return res.json({ ...updated, cloudinaryPublicId: publicId });
     });
   } catch (e) {
     console.error("uploadProductImage error:", e);
-    return res.status(500).json({ message: "Erreur serveur (uploadProductImage)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (uploadProductImage)" });
   }
 }
 

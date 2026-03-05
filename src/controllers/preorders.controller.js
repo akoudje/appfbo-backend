@@ -146,7 +146,7 @@ async function getSummary(req, res) {
   }
 }
 
-// SUBMIT: fige lignes + totaux + message WhatsApp + statut SUBMITTED
+// SUBMIT: fige lignes + totaux + message WhatsApp + statut SUBMITTED + décrémente stock
 async function submit(req, res) {
   const preorderId = req.params.id;
   const { whatsappTo } = req.body || {};
@@ -157,9 +157,20 @@ async function submit(req, res) {
     include: { items: { include: { product: true } } },
   });
   if (!preorder) return res.status(404).json({ error: "Preorder not found" });
-  if (preorder.status !== "DRAFT") return res.status(400).json({ error: "Preorder not editable" });
+  if (preorder.status !== "DRAFT")
+    return res.status(400).json({ error: "Preorder not editable" });
+
+  // ✅ Bloque commande vide
+  if (!preorder.items || preorder.items.length === 0) {
+    return res.status(400).json({ error: "Panier vide. Ajoute au moins 1 article." });
+  }
 
   const summary = await computePreorderTotals(preorderId, countryId);
+
+  // ✅ Re-bloque si compute renvoie vide (double sécurité)
+  if (!summary.items || summary.items.length === 0) {
+    return res.status(400).json({ error: "Panier vide. Ajoute au moins 1 article." });
+  }
 
   const message = buildWhatsAppMessage({
     preorder: summary.preorder,
@@ -168,48 +179,77 @@ async function submit(req, res) {
   });
 
   const chosen = whatsappTo || BILLING_WHATSAPPS[0];
-  const links = BILLING_WHATSAPPS.map((p) => ({ phone: p, link: buildWhatsAppLink(p, message) }));
+  const links = BILLING_WHATSAPPS.map((p) => ({
+    phone: p,
+    link: buildWhatsAppLink(p, message),
+  }));
 
-  // fige en DB (items + totaux)
-  await prisma.$transaction(async (tx) => {
-    // update items figés
-    for (const it of summary.items) {
-      await tx.preorderItem.update({
-        where: { preorderId_productId: { preorderId, productId: it.productId } },
+  try {
+    await prisma.$transaction(async (tx) => {
+      // ✅ 1) Décrément stock (atomique) + check stock
+      for (const it of summary.items) {
+        const updated = await tx.product.updateMany({
+          where: {
+            id: it.productId,
+            countryId,          // sécurité multi-pays
+            actif: true,
+            stockQty: { gte: it.qty },
+          },
+          data: { stockQty: { decrement: it.qty } },
+        });
+
+        if (updated.count !== 1) {
+          const err = new Error(`Stock insuffisant pour le produit: ${it.nom || it.productId}`);
+          err.statusCode = 409;
+          throw err;
+        }
+      }
+
+      // ✅ 2) fige items (prix/cc/poids)
+      for (const it of summary.items) {
+        await tx.preorderItem.update({
+          where: {
+            preorderId_productId: { preorderId, productId: it.productId },
+          },
+          data: {
+            prixUnitaireFcfa: it.prixUnitaireFcfa,
+            ccUnitaire: String(it.ccUnitaire.toFixed(3)),
+            poidsUnitaireKg: String(it.poidsUnitaireKg.toFixed(3)),
+            lineTotalFcfa: it.lineTotalFcfa,
+            lineTotalCc: String(Number(it.lineTotalCc).toFixed(3)),
+            lineTotalPoids: String(Number(it.lineTotalPoids).toFixed(3)),
+          },
+        });
+      }
+
+      // ✅ 3) update preorder
+      await tx.preorder.update({
+        where: { id: preorderId },
         data: {
-          prixUnitaireFcfa: it.prixUnitaireFcfa,
-          ccUnitaire: String(it.ccUnitaire.toFixed(3)),
-          poidsUnitaireKg: String(it.poidsUnitaireKg.toFixed(3)),
-          lineTotalFcfa: it.lineTotalFcfa,
-          lineTotalCc: String(Number(it.lineTotalCc).toFixed(3)),
-          lineTotalPoids: String(Number(it.lineTotalPoids).toFixed(3)),
+          status: "SUBMITTED",
+          totalCc: String(summary.totals.totalCc.toFixed(3)),
+          totalPoidsKg: String(summary.totals.totalPoidsKg.toFixed(3)),
+          totalProduitsFcfa: summary.totals.totalProduitsFcfa,
+          fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa,
+          totalFcfa: summary.totals.totalFcfa,
+          whatsappMessage: message,
+          factureWhatsappTo: chosen,
+          submittedAt: new Date(),
         },
       });
-    }
-
-    await tx.preorder.update({
-      where: { id: preorderId },
-      data: {
-        status: "SUBMITTED",
-        totalCc: String(summary.totals.totalCc.toFixed(3)),
-        totalPoidsKg: String(summary.totals.totalPoidsKg.toFixed(3)),
-        totalProduitsFcfa: summary.totals.totalProduitsFcfa,
-        fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa,
-        totalFcfa: summary.totals.totalFcfa,
-        whatsappMessage: message,
-        factureWhatsappTo: chosen,
-        submittedAt: new Date(),
-      },
     });
-  });
 
-  res.json({
-    preorderId,
-    status: "SUBMITTED",
-    totals: summary.totals,
-    whatsappMessage: message,
-    billing: links,
-  });
+    return res.json({
+      preorderId,
+      status: "SUBMITTED",
+      totals: summary.totals,
+      whatsappMessage: message,
+      billing: links,
+    });
+  } catch (e) {
+    const status = e.statusCode || 500;
+    return res.status(status).json({ error: e.message || "Erreur submit" });
+  }
 }
 
 module.exports = {
