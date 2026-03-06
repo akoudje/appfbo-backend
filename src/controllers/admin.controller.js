@@ -902,11 +902,17 @@ async function cancelOrder(req, res) {
 
 async function paydunyaWebhook(req, res) {
   try {
+
+    console.log("PAYDUNYA WEBHOOK BODY:", req.body);
+    console.log("PAYDUNYA WEBHOOK QUERY:", req.query);
+
     const token =
       req.body?.token ||
       req.body?.invoice_token ||
       req.query?.token ||
       req.body?.data?.token;
+
+    console.log("PAYDUNYA TOKEN DETECTED:", token);
 
     if (!token) {
       return res.status(200).json({ ok: true });
