@@ -284,7 +284,7 @@ async function updateOrderStatus(req, res) {
 async function invoiceOrder(req, res) {
   try {
     const { id } = req.params;
-    const { factureReference, paymentLink, whatsappTo, note } = req.body || {};
+    const { factureReference, whatsappTo, note } = req.body || {};
 
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
@@ -297,7 +297,7 @@ async function invoiceOrder(req, res) {
 
     if (
       ["INVOICED", "PAYMENT_PROOF_RECEIVED", "PAID", "READY", "FULFILLED"].includes(
-        order.status,
+        order.status
       )
     ) {
       return res.json({
@@ -311,42 +311,59 @@ async function invoiceOrder(req, res) {
     assertTransition(order.status, "INVOICED");
 
     if (!order.items || order.items.length === 0) {
-      return res.status(400).json({ message: "Impossible de facturer une commande vide." });
+      return res
+        .status(400)
+        .json({ message: "Impossible de facturer une commande vide." });
     }
 
     const ref =
       (factureReference && String(factureReference).trim()) ||
       `PF-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(
-        order.fboNumero || "",
+        order.fboNumero || ""
       )
         .replaceAll("-", "")
         .trim()}`;
 
     const now = new Date();
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const data = {
-        status: "INVOICED",
-        factureReference: ref,
-        factureWhatsappTo: whatsappTo
-          ? String(whatsappTo).trim()
-          : order.factureWhatsappTo,
-        paymentLink: paymentLink ? String(paymentLink).trim() : order.paymentLink,
-        invoicedAt: order.invoicedAt || now,
-        invoicedBy: order.invoicedBy || actorLabel(req),
-        invoicedById: order.invoicedById || req.user?.id || null,
-      };
+    const { createPaydunyaPayment } = require("../services/paydunya.service");
 
+    const payment = await createPaydunyaPayment({
+      orderId: order.id,
+      amount: order.totalFcfa,
+      description: `Précommande ${order.fboNumero} - ${order.totalFcfa} FCFA`,
+      customerName: order.fboNomComplet,
+      customerPhone: whatsappTo || order.factureWhatsappTo || undefined,
+      customData: {
+        preorderId: order.id,
+        fboNumero: order.fboNumero,
+        countryId: order.countryId,
+      },
+    });
+
+    const updated = await prisma.$transaction(async (tx) => {
       const saved = await tx.preorder.update({
         where: { id: order.id },
-        data,
+        data: {
+          status: "INVOICED",
+          factureReference: ref,
+          factureWhatsappTo: whatsappTo
+            ? String(whatsappTo).trim()
+            : order.factureWhatsappTo,
+          paymentLink: payment.paymentUrl,
+          paymentRef: payment.token,
+          invoicedAt: order.invoicedAt || now,
+          invoicedBy: order.invoicedBy || actorLabel(req),
+          invoicedById: order.invoicedById || req.user?.id || null,
+        },
       });
 
-      await addLogTx(tx, id, "INVOICE", note || "Préfacture créée", {
+      await addLogTx(tx, id, "INVOICE", note || "Préfacture créée via PayDunya", {
         fromStatus: order.status,
         toStatus: "INVOICED",
         factureReference: saved.factureReference,
         paymentLink: saved.paymentLink,
+        paymentRef: saved.paymentRef,
       });
 
       return saved;
@@ -360,7 +377,6 @@ async function invoiceOrder(req, res) {
       .json({ message: e.message || "Erreur serveur (invoiceOrder)" });
   }
 }
-
 /**
  * POST /api/admin/orders/:id/proof
  * INVOICED -> PAYMENT_PROOF_RECEIVED
@@ -385,7 +401,11 @@ async function markPaymentProof(req, res) {
       });
     }
 
-    if (["PAYMENT_PROOF_RECEIVED", "PAID", "READY", "FULFILLED"].includes(order.status)) {
+    if (
+      ["PAYMENT_PROOF_RECEIVED", "PAID", "READY", "FULFILLED"].includes(
+        order.status,
+      )
+    ) {
       return res.json({
         ok: true,
         alreadyDone: true,
@@ -476,7 +496,8 @@ async function verifyPayment(req, res) {
           paidAt: order.paidAt || now,
           paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
           paymentVerifiedBy: order.paymentVerifiedBy || actorLabel(req),
-          paymentVerifiedById: order.paymentVerifiedById || req.user?.id || null,
+          paymentVerifiedById:
+            order.paymentVerifiedById || req.user?.id || null,
         },
       });
 
@@ -547,7 +568,8 @@ async function payOrder(req, res) {
           paymentVerifiedAt: order.paymentVerifiedAt || now,
           paidAt: order.paidAt || now,
           paymentVerifiedBy: order.paymentVerifiedBy || actorLabel(req),
-          paymentVerifiedById: order.paymentVerifiedById || req.user?.id || null,
+          paymentVerifiedById:
+            order.paymentVerifiedById || req.user?.id || null,
           internalNote: note ? String(note).trim() : order.internalNote,
         },
       });
@@ -584,7 +606,14 @@ async function prepareOrder(req, res) {
         items: {
           include: {
             product: {
-              select: { id: true, nom: true, sku: true, countryId: true, actif: true, stockQty: true },
+              select: {
+                id: true,
+                nom: true,
+                sku: true,
+                countryId: true,
+                actif: true,
+                stockQty: true,
+              },
             },
           },
         },
@@ -607,7 +636,9 @@ async function prepareOrder(req, res) {
     assertTransition(order.status, "READY");
 
     if (!order.items || order.items.length === 0) {
-      return res.status(400).json({ message: "Impossible de préparer une commande vide." });
+      return res
+        .status(400)
+        .json({ message: "Impossible de préparer une commande vide." });
     }
 
     if (order.stockDeductedAt) {
@@ -666,7 +697,9 @@ async function prepareOrder(req, res) {
         data: {
           status: "READY",
           preparedAt: order.preparedAt || now,
-          packingNote: packingNote ? String(packingNote).trim() : order.packingNote,
+          packingNote: packingNote
+            ? String(packingNote).trim()
+            : order.packingNote,
           preparedBy: order.preparedBy || actorLabel(req),
           preparedById: order.preparedById || req.user?.id || null,
           stockDeductedAt: order.stockDeductedAt || now,
@@ -836,7 +869,9 @@ async function cancelOrder(req, res) {
           cancelledBy: order.cancelledBy || actorLabel(req),
           cancelledById: order.cancelledById || req.user?.id || null,
           stockRestoredAt:
-            mustRollbackStock && !order.stockRestoredAt ? now : order.stockRestoredAt,
+            mustRollbackStock && !order.stockRestoredAt
+              ? now
+              : order.stockRestoredAt,
         },
       });
 
@@ -857,6 +892,81 @@ async function cancelOrder(req, res) {
       .json({ message: e.message || "Erreur serveur (cancelOrder)" });
   }
 }
+
+/* ======================================================================================================
+  PAYDUNYA WEBHOOK
+  Point d'entrée pour les notifications de PayDunya (paiement réussi, échec, etc.)
+  PayDunya enverra une requête POST à ce endpoint avec un token d'identification de paiement.
+  Nous vérifions le paiement via l'API PayDunya et mettons à jour la commande en conséquence.
+ ======================================================================================================= */
+
+async function paydunyaWebhook(req, res) {
+  try {
+    const token =
+      req.body?.token ||
+      req.body?.invoice_token ||
+      req.query?.token ||
+      req.body?.data?.token;
+
+    if (!token) {
+      return res.status(200).json({ ok: true });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: { paymentRef: String(token) },
+    });
+
+    if (!order) {
+      return res.status(200).json({ ok: true });
+    }
+
+    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
+      return res.status(200).json({ ok: true, alreadyDone: true });
+    }
+
+    const { confirmPaydunyaPayment } = require("../services/paydunya.service");
+    const confirmation = await confirmPaydunyaPayment(String(token));
+
+    if (confirmation.status !== "completed") {
+      return res.status(200).json({
+        ok: true,
+        pending: true,
+        status: confirmation.status,
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "PAID",
+          paidAt: order.paidAt || new Date(),
+          paymentVerifiedAt: order.paymentVerifiedAt || new Date(),
+          paymentVerifiedBy: order.paymentVerifiedBy || "PAYDUNYA_WEBHOOK",
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "VERIFY_PAYMENT",
+        "Paiement confirmé automatiquement par PayDunya",
+        {
+          fromStatus: order.status,
+          toStatus: "PAID",
+          paymentRef: token,
+          paydunyaStatus: confirmation.status,
+        }
+      );
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error("paydunyaWebhook error:", e);
+    return res.status(200).json({ ok: true });
+  }
+}
+
 
 /* ===================================================================
    STATS
@@ -1557,6 +1667,7 @@ module.exports = {
   prepareOrder,
   fulfillOrder,
   cancelOrder,
+  paydunyaWebhook,
 
   // stats
   getStats,

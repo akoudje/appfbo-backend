@@ -1,4 +1,7 @@
 // src/server.js
+// Point d'entrée de l'API Express, configuration des middlewares globaux, CORS, et montage des routes
+
+
 require("dotenv").config();
 
 const express = require("express");
@@ -9,6 +12,9 @@ const adminRoutes = require("./routes/admin.routes.js");
 const adminAuthRoutes = require("./routes/adminAuth.routes");
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
+
+const paymentsRoutes = require("./routes/payments.routes");
+
 
 const app = express();
 
@@ -83,6 +89,7 @@ app.options(/.*/, cors(corsOptions));
    Middlewares
    ========================================================= */
 app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
 
 /* =========================================================
    Health check
@@ -94,6 +101,11 @@ app.get("/health", (req, res) => res.json({ ok: true }));
    ========================================================= */
 app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
+
+/* =========================================================
+    Routes de paiement (webhooks, etc)
+    ============================================================*/
+app.use("/api/payments", paymentsRoutes);
 
 /* =========================================================
    Admin AUTH (publique)

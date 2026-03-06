@@ -1,4 +1,6 @@
 // src/routes/admin.routes.js
+// Routes d'administration (protegées par auth + RBAC)
+
 const express = require("express");
 const { Permission } = require("../auth/permissions");
 const { resolveCountry } = require("../middlewares/resolveCountry");
