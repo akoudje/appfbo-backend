@@ -13,7 +13,7 @@ function buildWhatsAppMessage({ preorder, items, totals }) {
 
   lines.push(` Produits demandé :`);
   for (const it of items) {
-    lines.push(`- x${it.qty} ${it.nom} | ${it.lineTotalFcfa} FCFA | ${it.lineTotalCc} CC`);
+    lines.push(`- x${it.qty} ${it.sku} ${it.nom} | ${it.lineTotalFcfa} FCFA | ${it.lineTotalCc} CC`);
   }
 
   lines.push(``);

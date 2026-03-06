@@ -1,17 +1,20 @@
-// pricing.service.js6
-.30
+// src/services/pricing.service.js
 
 const prisma = require("../prisma");
 
 function round3(n) {
-  return Math.round(Number(n) * 1000) / 1000;
+  return Math.round(Number(n || 0) * 1000) / 1000;
 }
 
-// Règle simple de livraison (MVP) : tu pourras remplacer plus tard
+function toInt(n) {
+  return Math.round(Number(n || 0));
+}
+
+// Règle simple de livraison (MVP)
 function computeDeliveryFeeFcfa({ deliveryMode, totalPoidsKg }) {
   if (deliveryMode !== "LIVRAISON") return 0;
 
-  const w = Number(totalPoidsKg);
+  const w = Number(totalPoidsKg || 0);
   if (w <= 1) return 1000;
   if (w <= 3) return 2000;
   if (w <= 5) return 3000;
@@ -26,13 +29,18 @@ async function getDiscountPercentByGrade(grade, countryId) {
         grade,
       },
     },
+    select: {
+      discountPercent: true,
+    },
   });
+
   return row ? Number(row.discountPercent) : 0;
 }
 
 function applyDiscount(prixBaseFcfa, discountPercent) {
-  const p = Number(prixBaseFcfa);
-  const d = Number(discountPercent);
+  const p = Number(prixBaseFcfa || 0);
+  const d = Number(discountPercent || 0);
+
   const discounted = Math.round(p * (1 - d / 100));
   return Math.max(discounted, 0);
 }
@@ -44,10 +52,25 @@ async function computePreorderTotals(preorderId, countryId) {
       ...(countryId ? { countryId } : {}),
     },
     include: {
-      items: { include: { product: true } },
+      items: {
+        include: {
+          product: true,
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+      },
+      country: {
+        include: {
+          settings: true,
+        },
+      },
     },
   });
-  if (!preorder) throw new Error("PREORDER_NOT_FOUND");
+
+  if (!preorder) {
+    throw new Error("PREORDER_NOT_FOUND");
+  }
 
   const discountPercent = await getDiscountPercentByGrade(
     preorder.fboGrade,
@@ -58,39 +81,64 @@ async function computePreorderTotals(preorderId, countryId) {
   let totalPoids = 0;
   let totalProduitsFcfa = 0;
 
-  const computedItems = preorder.items.map((it) => {
+  const computedItems = [];
+
+  for (const it of preorder.items) {
+    if (!it.product) {
+      throw new Error("PRODUCT_NOT_FOUND");
+    }
+
     if (it.product.countryId !== preorder.countryId) {
       throw new Error("PRODUCT_COUNTRY_MISMATCH");
     }
 
-    const qty = it.qty;
+    if (!it.product.actif) {
+      throw new Error("PRODUCT_INACTIVE");
+    }
 
-    const ccU = Number(it.product.cc);
-    const poidsU = Number(it.product.poidsKg);
-    const prixU = applyDiscount(it.product.prixBaseFcfa, discountPercent);
+    const qty = Math.max(0, Number(it.qty || 0));
+    if (qty <= 0) continue;
 
-    const lineCc = ccU * qty;
-    const linePoids = poidsU * qty;
-    const lineFcfa = prixU * qty;
+    const prixCatalogueFcfa = Number(it.product.prixBaseFcfa || 0);
+    const ccUnitaire = Number(it.product.cc || 0);
+    const poidsUnitaireKg = Number(it.product.poidsKg || 0);
+    const prixUnitaireFcfa = applyDiscount(
+      prixCatalogueFcfa,
+      discountPercent
+    );
+
+    const lineCc = ccUnitaire * qty;
+    const linePoids = poidsUnitaireKg * qty;
+    const lineFcfa = prixUnitaireFcfa * qty;
 
     totalCc += lineCc;
     totalPoids += linePoids;
     totalProduitsFcfa += lineFcfa;
 
-    return {
+    computedItems.push({
       productId: it.productId,
       qty,
-      prixUnitaireFcfa: prixU,
-      ccUnitaire: ccU,
-      poidsUnitaireKg: poidsU,
-      lineTotalFcfa: lineFcfa,
+
+      productSkuSnapshot: it.product.sku || null,
+      productNameSnapshot: it.product.nom || null,
+
+      prixCatalogueFcfa,
+      discountPercent,
+      prixUnitaireFcfa,
+
+      ccUnitaire: round3(ccUnitaire),
+      poidsUnitaireKg: round3(poidsUnitaireKg),
+
+      lineTotalFcfa: toInt(lineFcfa),
       lineTotalCc: round3(lineCc),
       lineTotalPoids: round3(linePoids),
+
       nom: it.product.nom,
       sku: it.product.sku,
       imageUrl: it.product.imageUrl || null,
-    };
-  });
+      stockQty: Number(it.product.stockQty || 0),
+    });
+  }
 
   const fraisLivraisonFcfa = computeDeliveryFeeFcfa({
     deliveryMode: preorder.deliveryMode,
@@ -106,9 +154,9 @@ async function computePreorderTotals(preorderId, countryId) {
     totals: {
       totalCc: round3(totalCc),
       totalPoidsKg: round3(totalPoids),
-      totalProduitsFcfa,
-      fraisLivraisonFcfa,
-      totalFcfa,
+      totalProduitsFcfa: toInt(totalProduitsFcfa),
+      fraisLivraisonFcfa: toInt(fraisLivraisonFcfa),
+      totalFcfa: toInt(totalFcfa),
     },
   };
 }

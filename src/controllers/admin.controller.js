@@ -103,14 +103,14 @@ const upload = multer({
    =================================================================== */
 
 const ALLOWED = {
-  SUBMITTED: ["INVOICED", "CANCELLED"],
-  INVOICED: ["PAYMENT_PROOF_RECEIVED", "CANCELLED"],
+  DRAFT: ["CANCELLED"],
+  SUBMITTED: ["INVOICED", "PAID", "CANCELLED"], // PAID via cash
+  INVOICED: ["PAYMENT_PROOF_RECEIVED", "PAID", "CANCELLED"], // PAID via cash
   PAYMENT_PROOF_RECEIVED: ["PAID", "CANCELLED"],
-  PAID: ["READY"],
-  READY: ["FULFILLED"],
+  PAID: ["READY", "CANCELLED"],
+  READY: ["FULFILLED", "CANCELLED"],
   FULFILLED: [],
   CANCELLED: [],
-  DRAFT: ["CANCELLED"],
 };
 
 function assertTransition(from, to) {
@@ -122,14 +122,19 @@ function assertTransition(from, to) {
   }
 }
 
-async function addLog(preorderId, action, note, meta) {
-  try {
-    await prisma.preorderLog.create({
-      data: { preorderId, action, note: note || null, meta: meta || undefined },
-    });
-  } catch (_) {
-    // noop
-  }
+async function addLogTx(tx, preorderId, action, note, meta) {
+  await tx.preorderLog.create({
+    data: {
+      preorderId,
+      action,
+      note: note || null,
+      meta: meta || undefined,
+    },
+  });
+}
+
+function actorLabel(req) {
+  return req.user?.email || req.user?.id || req.user?.role || "admin";
 }
 
 /**
@@ -154,8 +159,6 @@ async function listOrders(req, res) {
     const skip = (page - 1) * pageSize;
 
     const where = scopeWhere(req);
-
-    // ✅ Par défaut, on n'affiche pas les brouillons
     const includeDrafts = String(req.query.includeDrafts) === "true";
 
     if (!status && !includeDrafts) {
@@ -169,6 +172,7 @@ async function listOrders(req, res) {
       where.OR = [
         { fboNumero: { contains: qs, mode: "insensitive" } },
         { fboNomComplet: { contains: qs, mode: "insensitive" } },
+        { factureReference: { contains: qs, mode: "insensitive" } },
       ];
     }
 
@@ -202,6 +206,7 @@ async function listOrders(req, res) {
           pointDeVente: true,
           paymentMode: true,
           deliveryMode: true,
+          factureReference: true,
           createdAt: true,
           _count: { select: { items: true } },
         },
@@ -240,12 +245,20 @@ async function getOrderById(req, res) {
           },
           fbo: true,
           logs: { orderBy: { createdAt: "desc" } },
+          stockMovements: {
+            orderBy: { createdAt: "desc" },
+            include: {
+              product: { select: { id: true, sku: true, nom: true } },
+            },
+          },
         },
       },
     );
 
-    if (!order)
+    if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
+
     return res.json(order);
   } catch (e) {
     console.error("getOrderById error:", e);
@@ -255,56 +268,13 @@ async function getOrderById(req, res) {
 
 /**
  * PATCH /api/admin/orders/:id/status
- * ⚠️ Endpoint générique (optionnel) : verrouille les transitions.
+ * Déconseillé en prod métier. Garde-le seulement si nécessaire en interne.
  */
 async function updateOrderStatus(req, res) {
-  try {
-    const { id } = req.params;
-    const countryId = req.countryId;
-    const { status: next } = req.body || {};
-    if (!next) return res.status(400).json({ message: "status requis" });
-
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
-      return res.status(404).json({ message: "Commande introuvable" });
-
-    assertTransition(order.status, next);
-
-    const patch = { status: next };
-
-    if (next === "SUBMITTED") patch.submittedAt = new Date();
-    if (next === "INVOICED") patch.invoicedAt = new Date();
-    if (next === "PAYMENT_PROOF_RECEIVED") patch.proofReceivedAt = new Date();
-    if (next === "PAID") patch.paidAt = new Date();
-    if (next === "READY") patch.preparedAt = new Date();
-    if (next === "FULFILLED") patch.fulfilledAt = new Date();
-    if (next === "CANCELLED") patch.cancelledAt = new Date();
-
-    const updated = await prisma.preorder.update({
-      where: { id: order.id }, // order trouvé avec countryId
-      data: patch,
-      select: {
-        id: true,
-        status: true,
-        totalFcfa: true,
-        submittedAt: true,
-        paidAt: true,
-        updatedAt: true,
-      },
-    });
-
-    await addLog(id, "STATUS", `Status -> ${next}`, {
-      from: order.status,
-      to: next,
-    });
-
-    return res.json(updated);
-  } catch (e) {
-    console.error("updateOrderStatus error:", e);
-    return res
-      .status(e.statusCode || 500)
-      .json({ message: e.message || "Erreur serveur (updateOrderStatus)" });
-  }
+  return res.status(400).json({
+    message:
+      "Endpoint générique désactivé. Utiliser les endpoints métier dédiés.",
+  });
 }
 
 /**
@@ -314,14 +284,35 @@ async function updateOrderStatus(req, res) {
 async function invoiceOrder(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
     const { factureReference, paymentLink, whatsappTo, note } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: { items: true },
+    });
+
+    if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (
+      ["INVOICED", "PAYMENT_PROOF_RECEIVED", "PAID", "READY", "FULFILLED"].includes(
+        order.status,
+      )
+    ) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
 
     assertTransition(order.status, "INVOICED");
+
+    if (!order.items || order.items.length === 0) {
+      return res.status(400).json({ message: "Impossible de facturer une commande vide." });
+    }
 
     const ref =
       (factureReference && String(factureReference).trim()) ||
@@ -331,23 +322,34 @@ async function invoiceOrder(req, res) {
         .replaceAll("-", "")
         .trim()}`;
 
-    const updated = await prisma.preorder.update({
-      where: { id },
-      data: {
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const data = {
         status: "INVOICED",
         factureReference: ref,
         factureWhatsappTo: whatsappTo
           ? String(whatsappTo).trim()
           : order.factureWhatsappTo,
-        paymentLink: paymentLink ? String(paymentLink).trim() : null,
-        invoicedAt: new Date(),
-        invoicedBy: req.user?.id || req.user?.email || req.user?.role || null,
-        invoicedById: req.user?.id || null,
-      },
-    });
+        paymentLink: paymentLink ? String(paymentLink).trim() : order.paymentLink,
+        invoicedAt: order.invoicedAt || now,
+        invoicedBy: order.invoicedBy || actorLabel(req),
+        invoicedById: order.invoicedById || req.user?.id || null,
+      };
 
-    await addLog(id, "INVOICE", note || "Préfacture créée", {
-      paymentLink: updated.paymentLink,
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data,
+      });
+
+      await addLogTx(tx, id, "INVOICE", note || "Préfacture créée", {
+        fromStatus: order.status,
+        toStatus: "INVOICED",
+        factureReference: saved.factureReference,
+        paymentLink: saved.paymentLink,
+      });
+
+      return saved;
     });
 
     return res.json(updated);
@@ -362,45 +364,61 @@ async function invoiceOrder(req, res) {
 /**
  * POST /api/admin/orders/:id/proof
  * INVOICED -> PAYMENT_PROOF_RECEIVED
- * ⚠️ interdit si ESPECES (pas de preuve)
  */
 async function markPaymentProof(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
     const { paymentProofUrl, paymentRef, note } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+    });
+
+    if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
 
     if (order.paymentMode === "ESPECES") {
       return res.status(400).json({
         message:
-          "Preuve de paiement non applicable au mode ESPECES. Utiliser Encaisser espèces (/pay).",
+          "Preuve de paiement non applicable au mode ESPECES. Utiliser /pay.",
+      });
+    }
+
+    if (["PAYMENT_PROOF_RECEIVED", "PAID", "READY", "FULFILLED"].includes(order.status)) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
       });
     }
 
     assertTransition(order.status, "PAYMENT_PROOF_RECEIVED");
 
-    const updated = await prisma.preorder.update({
-      where: { id },
-      data: {
-        status: "PAYMENT_PROOF_RECEIVED",
-        paymentProofUrl: paymentProofUrl
-          ? String(paymentProofUrl).trim()
-          : null,
-        paymentRef: paymentRef ? String(paymentRef).trim() : null,
-        paymentProofNote: note ? String(note).trim() : null,
-        proofReceivedAt: new Date(),
-        proofReceivedBy:
-          req.user?.id || req.user?.email || req.user?.role || null,
-        proofReceivedById: req.user?.id || null,
-      },
-    });
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "PAYMENT_PROOF_RECEIVED",
+          paymentProofUrl: paymentProofUrl
+            ? String(paymentProofUrl).trim()
+            : order.paymentProofUrl,
+          paymentRef: paymentRef ? String(paymentRef).trim() : order.paymentRef,
+          paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
+          proofReceivedAt: order.proofReceivedAt || new Date(),
+          proofReceivedBy: order.proofReceivedBy || actorLabel(req),
+          proofReceivedById: order.proofReceivedById || req.user?.id || null,
+        },
+      });
 
-    await addLog(id, "PAYMENT_PROOF_RECEIVED", note || "Preuve reçue", {
-      paymentRef: updated.paymentRef,
+      await addLogTx(tx, id, "RECEIVE_PAYMENT_PROOF", note || "Preuve reçue", {
+        fromStatus: order.status,
+        toStatus: "PAYMENT_PROOF_RECEIVED",
+        paymentRef: saved.paymentRef,
+      });
+
+      return saved;
     });
 
     return res.json(updated);
@@ -415,40 +433,60 @@ async function markPaymentProof(req, res) {
 /**
  * POST /api/admin/orders/:id/verify-payment
  * PAYMENT_PROOF_RECEIVED -> PAID
- * ⚠️ interdit si ESPECES (cash = /pay)
  */
 async function verifyPayment(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
     const { note } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+    });
+
+    if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
 
     if (order.paymentMode === "ESPECES") {
       return res.status(400).json({
         message:
-          "Validation électronique non applicable au mode ESPECES. Utiliser Encaisser espèces (/pay).",
+          "Validation électronique non applicable à ESPECES. Utiliser /pay.",
+      });
+    }
+
+    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
       });
     }
 
     assertTransition(order.status, "PAID");
 
-    const updated = await prisma.preorder.update({
-      where: { id },
-      data: {
-        status: "PAID",
-        paidAt: new Date(),
-        paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
-        paymentVerifiedBy:
-          req.user?.id || req.user?.email || req.user?.role || null,
-        paymentVerifiedById: req.user?.id || null,
-      },
-    });
+    const now = new Date();
 
-    await addLog(id, "PAYMENT_VERIFIED", note || "Paiement vérifié", null);
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "PAID",
+          paymentVerifiedAt: order.paymentVerifiedAt || now,
+          paidAt: order.paidAt || now,
+          paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
+          paymentVerifiedBy: order.paymentVerifiedBy || actorLabel(req),
+          paymentVerifiedById: order.paymentVerifiedById || req.user?.id || null,
+        },
+      });
+
+      await addLogTx(tx, id, "VERIFY_PAYMENT", note || "Paiement vérifié", {
+        fromStatus: order.status,
+        toStatus: "PAID",
+      });
+
+      return saved;
+    });
 
     return res.json(updated);
   } catch (e) {
@@ -466,20 +504,32 @@ async function verifyPayment(req, res) {
 async function payOrder(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
+    const { note } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+    });
+
+    if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
 
     if (order.paymentMode !== "ESPECES") {
       return res.status(400).json({
         message:
-          "Paiement direct autorisé uniquement pour mode ESPECES. Utiliser verify-payment pour paiements électroniques.",
+          "Paiement direct autorisé uniquement pour ESPECES. Utiliser /verify-payment pour les paiements électroniques.",
       });
     }
 
-    // Cash : on autorise depuis SUBMITTED ou INVOICED (le facturier peut encaisser direct)
+    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
+
     const allowedFrom = ["SUBMITTED", "INVOICED"];
     if (!allowedFrom.includes(order.status)) {
       return res.status(400).json({
@@ -487,16 +537,28 @@ async function payOrder(req, res) {
       });
     }
 
-    const updated = await prisma.preorder.update({
-      where: { id },
-      data: {
-        status: "PAID",
-        paidAt: new Date(),
-      },
-    });
+    const now = new Date();
 
-    await addLog(id, "CASH_PAYMENT", "Paiement espèces encaissé au bureau", {
-      fromStatus: order.status,
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "PAID",
+          paymentVerifiedAt: order.paymentVerifiedAt || now,
+          paidAt: order.paidAt || now,
+          paymentVerifiedBy: order.paymentVerifiedBy || actorLabel(req),
+          paymentVerifiedById: order.paymentVerifiedById || req.user?.id || null,
+          internalNote: note ? String(note).trim() : order.internalNote,
+        },
+      });
+
+      await addLogTx(tx, id, "MARK_PAID", note || "Paiement espèces encaissé", {
+        fromStatus: order.status,
+        toStatus: "PAID",
+        paymentMode: order.paymentMode,
+      });
+
+      return saved;
     });
 
     return res.json(updated);
@@ -509,31 +571,116 @@ async function payOrder(req, res) {
 /**
  * POST /api/admin/orders/:id/prepare
  * PAID -> READY
+ * Décrémente le stock ICI
  */
 async function prepareOrder(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
     const { packingNote } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
-      return res.status(404).json({ message: "Commande introuvable" });
-
-    assertTransition(order.status, "READY");
-
-    const updated = await prisma.preorder.update({
-      where: { id },
-      data: {
-        status: "READY",
-        preparedAt: new Date(),
-        packingNote: packingNote ? String(packingNote).trim() : null,
-        preparedBy: req.user?.id || req.user?.email || req.user?.role || null,
-        preparedById: req.user?.id || null,
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: {
+          include: {
+            product: {
+              select: { id: true, nom: true, sku: true, countryId: true, actif: true, stockQty: true },
+            },
+          },
+        },
       },
     });
 
-    await addLog(id, "PREPARED", packingNote || "Colis prêt", null);
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (["READY", "FULFILLED"].includes(order.status)) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
+
+    assertTransition(order.status, "READY");
+
+    if (!order.items || order.items.length === 0) {
+      return res.status(400).json({ message: "Impossible de préparer une commande vide." });
+    }
+
+    if (order.stockDeductedAt) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        message: "Le stock a déjà été décrémenté pour cette commande.",
+      });
+    }
+
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      for (const item of order.items) {
+        const updatedStock = await tx.product.updateMany({
+          where: {
+            id: item.productId,
+            countryId: order.countryId,
+            actif: true,
+            stockQty: { gte: item.qty },
+          },
+          data: {
+            stockQty: { decrement: item.qty },
+          },
+        });
+
+        if (updatedStock.count !== 1) {
+          const err = new Error(
+            `Stock insuffisant pour ${item.productNameSnapshot || item.product?.nom || item.productId}`,
+          );
+          err.statusCode = 409;
+          throw err;
+        }
+
+        await tx.stockMovement.create({
+          data: {
+            productId: item.productId,
+            preorderId: order.id,
+            type: "DEBIT",
+            reason: "PREPARE_ORDER",
+            qty: item.qty,
+            note: "Sortie de stock lors de la préparation commande",
+            meta: {
+              preorderId: order.id,
+              productId: item.productId,
+              qty: item.qty,
+            },
+            createdById: req.user?.id || null,
+          },
+        });
+      }
+
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "READY",
+          preparedAt: order.preparedAt || now,
+          packingNote: packingNote ? String(packingNote).trim() : order.packingNote,
+          preparedBy: order.preparedBy || actorLabel(req),
+          preparedById: order.preparedById || req.user?.id || null,
+          stockDeductedAt: order.stockDeductedAt || now,
+        },
+      });
+
+      await addLogTx(tx, id, "PREPARE", packingNote || "Colis prêt", {
+        fromStatus: order.status,
+        toStatus: "READY",
+        stockDeducted: true,
+      });
+
+      return saved;
+    });
 
     return res.json(updated);
   } catch (e) {
@@ -551,31 +698,49 @@ async function prepareOrder(req, res) {
 async function fulfillOrder(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
     const { deliveryTracking, note } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+    });
+
+    if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (order.status === "FULFILLED") {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
 
     assertTransition(order.status, "FULFILLED");
 
-    const updated = await prisma.preorder.update({
-      where: { id },
-      data: {
-        status: "FULFILLED",
-        fulfilledAt: new Date(),
-        deliveryTracking: deliveryTracking
-          ? String(deliveryTracking).trim()
-          : null,
-        internalNote: note ? String(note).trim() : order.internalNote,
-        fulfilledBy: req.user?.id || req.user?.email || req.user?.role || null,
-        fulfilledById: req.user?.id || null,
-      },
-    });
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "FULFILLED",
+          fulfilledAt: order.fulfilledAt || new Date(),
+          deliveryTracking: deliveryTracking
+            ? String(deliveryTracking).trim()
+            : order.deliveryTracking,
+          internalNote: note ? String(note).trim() : order.internalNote,
+          fulfilledBy: order.fulfilledBy || actorLabel(req),
+          fulfilledById: order.fulfilledById || req.user?.id || null,
+        },
+      });
 
-    await addLog(id, "FULFILLED", note || "Commande clôturée", {
-      deliveryTracking: updated.deliveryTracking,
+      await addLogTx(tx, id, "FULFILL", note || "Commande clôturée", {
+        fromStatus: order.status,
+        toStatus: "FULFILLED",
+        deliveryTracking: saved.deliveryTracking,
+      });
+
+      return saved;
     });
 
     return res.json(updated);
@@ -589,32 +754,100 @@ async function fulfillOrder(req, res) {
 
 /**
  * POST /api/admin/orders/:id/cancel
- * * -> CANCELLED (selon transitions)
+ * DRAFT|SUBMITTED|INVOICED|PAYMENT_PROOF_RECEIVED|PAID|READY -> CANCELLED
+ * Si stock déjà sorti, rollback stock
  */
 async function cancelOrder(req, res) {
   try {
     const { id } = req.params;
-    const countryId = req.countryId;
     const { reason } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({ where: { id, countryId } });
-    if (!order)
-      return res.status(404).json({ message: "Commande introuvable" });
-
-    assertTransition(order.status, "CANCELLED");
-
-    const updated = await prisma.preorder.update({
-      where: { id },
-      data: {
-        status: "CANCELLED",
-        cancelledAt: new Date(),
-        cancelReason: reason ? String(reason).trim() : "Annulée",
-        cancelledBy: req.user?.id || req.user?.email || req.user?.role || null,
-        cancelledById: req.user?.id || null,
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: {
+          include: {
+            product: {
+              select: { id: true, nom: true, sku: true },
+            },
+          },
+        },
       },
     });
 
-    await addLog(id, "CANCELLED", updated.cancelReason, null);
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (order.status === "CANCELLED") {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
+
+    assertTransition(order.status, "CANCELLED");
+
+    const cancelReason =
+      reason && String(reason).trim() ? String(reason).trim() : "Annulée";
+
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const mustRollbackStock =
+        !!order.stockDeductedAt && !order.stockRestoredAt;
+
+      if (mustRollbackStock) {
+        for (const item of order.items) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              stockQty: { increment: item.qty },
+            },
+          });
+
+          await tx.stockMovement.create({
+            data: {
+              productId: item.productId,
+              preorderId: order.id,
+              type: "CREDIT",
+              reason: "CANCEL_ORDER",
+              qty: item.qty,
+              note: "Retour stock suite annulation commande",
+              meta: {
+                preorderId: order.id,
+                productId: item.productId,
+                qty: item.qty,
+              },
+              createdById: req.user?.id || null,
+            },
+          });
+        }
+      }
+
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: order.cancelledAt || now,
+          cancelReason,
+          cancelledBy: order.cancelledBy || actorLabel(req),
+          cancelledById: order.cancelledById || req.user?.id || null,
+          stockRestoredAt:
+            mustRollbackStock && !order.stockRestoredAt ? now : order.stockRestoredAt,
+        },
+      });
+
+      await addLogTx(tx, id, "CANCEL", cancelReason, {
+        fromStatus: order.status,
+        toStatus: "CANCELLED",
+        stockRollback: mustRollbackStock,
+      });
+
+      return saved;
+    });
 
     return res.json(updated);
   } catch (e) {

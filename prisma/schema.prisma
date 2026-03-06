@@ -10,9 +10,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-//
+// -------------------------------------------------------------------------------
 // ENUMS
-//
+// -------------------------------------------------------------------------------
+
 enum Grade {
   ANIMATEUR_ADJOINT
   ANIMATEUR
@@ -68,9 +69,36 @@ enum AdminRole {
   ORDER_PREPARER
 }
 
-//
+enum PreorderLogAction {
+  CREATE_DRAFT
+  SET_ITEMS
+  REPRICE
+  SUBMIT
+  INVOICE
+  RECEIVE_PAYMENT_PROOF
+  VERIFY_PAYMENT
+  MARK_PAID
+  PREPARE
+  FULFILL
+  CANCEL
+  STOCK_DEBIT
+  STOCK_CREDIT
+}
+
+enum StockMovementType {
+  DEBIT
+  CREDIT
+}
+
+enum StockMovementReason {
+  PREPARE_ORDER
+  CANCEL_ORDER
+  MANUAL_ADJUSTMENT
+}
+
+// ------------------------------------------------------------------------------------
 // MODELS
-//
+// ---------------------------------------------------------------------------------
 
 model Fbo {
   id           String @id @default(cuid())
@@ -82,7 +110,7 @@ model Fbo {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  preorders Preorder[]
+  preorders    Preorder[]
   fboCountries FboCountry[]
 
   @@index([pointDeVente])
@@ -126,12 +154,13 @@ model AdminUser {
   countryId String?
   country   Country? @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
-  invoicedPreorders        Preorder[] @relation("PreorderInvoicedBy")
-  proofReceivedPreorders   Preorder[] @relation("PreorderProofReceivedBy")
-  paymentVerifiedPreorders Preorder[] @relation("PreorderPaymentVerifiedBy")
-  preparedPreorders        Preorder[] @relation("PreorderPreparedBy")
-  fulfilledPreorders       Preorder[] @relation("PreorderFulfilledBy")
-  cancelledPreorders       Preorder[] @relation("PreorderCancelledBy")
+  invoicedPreorders        Preorder[]      @relation("PreorderInvoicedBy")
+  proofReceivedPreorders   Preorder[]      @relation("PreorderProofReceivedBy")
+  paymentVerifiedPreorders Preorder[]      @relation("PreorderPaymentVerifiedBy")
+  preparedPreorders        Preorder[]      @relation("PreorderPreparedBy")
+  fulfilledPreorders       Preorder[]      @relation("PreorderFulfilledBy")
+  cancelledPreorders       Preorder[]      @relation("PreorderCancelledBy")
+  stockMovements           StockMovement[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -143,8 +172,8 @@ model AdminUser {
 model FboCountry {
   id String @id @default(cuid())
 
-  fboId   String
-  fbo     Fbo    @relation(fields: [fboId], references: [id], onDelete: Cascade)
+  fboId String
+  fbo   Fbo    @relation(fields: [fboId], references: [id], onDelete: Cascade)
 
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
@@ -158,10 +187,10 @@ model FboCountry {
 }
 
 model Product {
-  id       String  @id @default(cuid())
-  sku      String  @unique
-  nom      String
-  imageUrl String?
+  id        String  @id @default(cuid())
+  sku       String  @unique
+  nom       String
+  imageUrl  String?
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
@@ -178,7 +207,8 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  preorderItems PreorderItem[]
+  preorderItems  PreorderItem[]
+  stockMovements StockMovement[]
 
   @@index([actif])
   @@index([nom])
@@ -192,7 +222,6 @@ model GradeDiscount {
   country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
   grade     Grade
 
-  // Remise en % (5 à 48). Exemple: 12.5
   discountPercent Decimal @db.Decimal(5, 2)
 
   createdAt DateTime @default(now())
@@ -205,57 +234,51 @@ model GradeDiscount {
 model Preorder {
   id     String         @id @default(cuid())
   status PreorderStatus @default(DRAFT)
-  countryId String
-  country   Country      @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
-  // Liens & infos FBO au moment de la précommande
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
   fboId String
   fbo   Fbo    @relation(fields: [fboId], references: [id], onDelete: Restrict)
 
-  // On fige certaines infos dans la précommande (même si FBO change après)
   fboNumero     String
   fboNomComplet String
   fboGrade      Grade
   pointDeVente  String
 
-  paymentMode  PaymentMode
-  deliveryMode DeliveryMode
+  paymentMode  PaymentMode?
+  deliveryMode DeliveryMode?
 
-  // Totaux figés (calculés lors du submit)
   totalCc            Decimal @default(0.000) @db.Decimal(12, 3)
   totalPoidsKg       Decimal @default(0.000) @db.Decimal(12, 3)
   totalProduitsFcfa  Int     @default(0)
   fraisLivraisonFcfa Int     @default(0)
   totalFcfa          Int     @default(0)
 
-  // Message WhatsApp généré à l’étape 3
   whatsappMessage String?
 
-  // Pour tracer la facturation
   factureReference  String?
-  factureWhatsappTo String? // ex: "+221...." si tu veux garder le numéro choisi
+  factureWhatsappTo String?
 
-  // ---- Traitement admin (facturier / préparateur) ----
-
-  // Lien de paiement envoyé au FBO (Wave/OM/autre)
   paymentLink String?
 
-  // Preuve de paiement (URL, ou texte si tu ne gères pas upload maintenant)
   paymentProofUrl  String?
   paymentRef       String?
   paymentProofNote String? @db.Text
 
-  // Notes internes (support / préparation)
   internalNote String? @db.Text
 
-  // Timestamps traitement
-  invoicedAt      DateTime?
-  proofReceivedAt DateTime?
-  preparedAt      DateTime?
-  fulfilledAt     DateTime?
-  cancelledAt     DateTime?
+  invoicedAt        DateTime?
+  proofReceivedAt   DateTime?
+  paymentVerifiedAt DateTime?
+  paidAt            DateTime?
+  preparedAt        DateTime?
+  fulfilledAt       DateTime?
+  cancelledAt       DateTime?
 
-  // Traces "par qui" (si pas encore de table User admin, on stocke un label)
+  stockDeductedAt DateTime?
+  stockRestoredAt DateTime?
+
   invoicedBy        String?
   proofReceivedBy   String?
   paymentVerifiedBy String?
@@ -277,7 +300,6 @@ model Preorder {
   fulfilledByAdmin       AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
   cancelledByAdmin       AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
 
-  // Livraison / retrait (optionnel)
   deliveryTracking String?
   packingNote      String? @db.Text
   cancelReason     String? @db.Text
@@ -285,10 +307,10 @@ model Preorder {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   submittedAt DateTime?
-  paidAt      DateTime?
 
-  items PreorderItem[]
-  logs  PreorderLog[]
+  items          PreorderItem[]
+  logs           PreorderLog[]
+  stockMovements StockMovement[]
 
   @@index([status, createdAt])
   @@index([countryId, status, createdAt])
@@ -300,6 +322,7 @@ model Preorder {
   @@index([preparedById])
   @@index([fulfilledById])
   @@index([cancelledById])
+  @@index([factureReference])
 }
 
 model PreorderItem {
@@ -313,10 +336,15 @@ model PreorderItem {
 
   qty Int @default(1)
 
-  // On fige les valeurs unitaires au moment du submit (important pour la facturation)
-  prixUnitaireFcfa Int
-  ccUnitaire       Decimal @db.Decimal(10, 3)
-  poidsUnitaireKg  Decimal @db.Decimal(10, 3)
+  productSkuSnapshot  String?
+  productNameSnapshot String?
+
+  prixCatalogueFcfa Int
+  discountPercent   Decimal @default(0.00) @db.Decimal(5, 2)
+  prixUnitaireFcfa  Int
+
+  ccUnitaire      Decimal @db.Decimal(10, 3)
+  poidsUnitaireKg Decimal @db.Decimal(10, 3)
 
   lineTotalFcfa  Int
   lineTotalCc    Decimal @db.Decimal(12, 3)
@@ -334,11 +362,39 @@ model PreorderLog {
   preorderId String
   preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
-  action String
-  note   String? @db.Text
+  action PreorderLogAction
+  note   String?           @db.Text
   meta   Json?
 
   createdAt DateTime @default(now())
 
   @@index([preorderId, createdAt])
+}
+
+model StockMovement {
+  id String @id @default(cuid())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  preorderId String?
+  preorder   Preorder? @relation(fields: [preorderId], references: [id], onDelete: SetNull)
+
+  type   StockMovementType
+  reason StockMovementReason
+
+  qty Int
+
+  note String? @db.Text
+  meta Json?
+
+  createdById    String?
+  createdByAdmin AdminUser? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, createdAt])
+  @@index([preorderId])
+  @@index([reason, createdAt])
+  @@index([createdById])
 }
