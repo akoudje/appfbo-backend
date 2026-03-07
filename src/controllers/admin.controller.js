@@ -902,7 +902,6 @@ async function cancelOrder(req, res) {
 
 async function paydunyaWebhook(req, res) {
   try {
-
     console.log("PAYDUNYA WEBHOOK BODY:", req.body);
     console.log("PAYDUNYA WEBHOOK QUERY:", req.query);
 
@@ -910,9 +909,16 @@ async function paydunyaWebhook(req, res) {
       req.body?.token ||
       req.body?.invoice_token ||
       req.query?.token ||
-      req.body?.data?.token;
+      req.body?.data?.token ||
+      req.body?.data?.invoice?.token;
+
+    const paydunyaStatus =
+      req.body?.status ||
+      req.body?.data?.status ||
+      null;
 
     console.log("PAYDUNYA TOKEN DETECTED:", token);
+    console.log("PAYDUNYA STATUS DETECTED:", paydunyaStatus);
 
     if (!token) {
       return res.status(200).json({ ok: true });
@@ -930,14 +936,11 @@ async function paydunyaWebhook(req, res) {
       return res.status(200).json({ ok: true, alreadyDone: true });
     }
 
-    const { confirmPaydunyaPayment } = require("../services/paydunya.service");
-    const confirmation = await confirmPaydunyaPayment(String(token));
-
-    if (confirmation.status !== "completed") {
+    if (String(paydunyaStatus).toLowerCase() !== "completed") {
       return res.status(200).json({
         ok: true,
         pending: true,
-        status: confirmation.status,
+        status: paydunyaStatus,
       });
     }
 
@@ -961,7 +964,7 @@ async function paydunyaWebhook(req, res) {
           fromStatus: order.status,
           toStatus: "PAID",
           paymentRef: token,
-          paydunyaStatus: confirmation.status,
+          paydunyaStatus,
         }
       );
     });
