@@ -41,26 +41,36 @@ function buildPaymentWhatsAppMessage({
   paymentLink,
   paymentMode,
 }) {
+  const amount = new Intl.NumberFormat("fr-FR").format(
+    Number(totalFcfa || 0)
+  );
+
   const lines = [
     `Bonjour ${fboNomComplet || "Cher FBO"},`,
     "",
-    "Votre précommande FOREVER a bien été enregistrée et votre préfacture est prête."  ,
+    "Votre précommande FOREVER a bien été enregistrée et votre facture est prête.",
     "",
     `Référence : ${factureReference || "-"}`,
     `Numéro FBO : ${fboNumero || "-"}`,
-    `Montant totalà payer : ${new Intl.NumberFormat("fr-FR").format(Number(totalFcfa || 0))} FCFA`,
+    `Montant à payer : ${amount} FCFA`,
   ];
 
   if (paymentMode === "ESPECES") {
     lines.push("");
-    lines.push("Merci de vous présenter au bureau pour régler le paiement en espèces.");
+    lines.push(
+      "Merci de vous présenter au bureau pour effectuer le règlement en espèces."
+    );
+    lines.push("Votre commande sera préparée après validation du paiement.");
   } else if (paymentLink) {
     lines.push("");
-    lines.push("Veuillez finaliser votre paiement via le lien ci-dessous :");
+    lines.push("Veuillez finaliser votre paiement en cliquant sur le lien ci-dessous :");
     lines.push(paymentLink);
+    lines.push("");
+    lines.push("Une fois le paiement confirmé, votre commande sera préparée.");
+  } else {
+    lines.push("");
+    lines.push("Merci de procéder au règlement selon les instructions communiquées.");
   }
-  lines.push("");
-  lines.push("Une fois le paiement confirmé, votre commande sera préparée.");
 
   lines.push("");
   lines.push("Merci.");
@@ -68,6 +78,8 @@ function buildPaymentWhatsAppMessage({
 
   return lines.join("\n");
 }
+
+
 module.exports = {
   buildWhatsAppMessage,
   buildWhatsAppLink,
