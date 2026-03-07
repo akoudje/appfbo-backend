@@ -44,11 +44,11 @@ function buildPaymentWhatsAppMessage({
   const lines = [
     `Bonjour ${fboNomComplet || "Cher FBO"},`,
     "",
-    "Votre précommande FOREVER a été validée.",
+    "Votre précommande FOREVER a bien été enregistrée et votre préfacture est prête."  ,
     "",
     `Référence : ${factureReference || "-"}`,
     `Numéro FBO : ${fboNumero || "-"}`,
-    `Montant à payer : ${new Intl.NumberFormat("fr-FR").format(Number(totalFcfa || 0))} FCFA`,
+    `Montant totalà payer : ${new Intl.NumberFormat("fr-FR").format(Number(totalFcfa || 0))} FCFA`,
   ];
 
   if (paymentMode === "ESPECES") {
@@ -59,6 +59,8 @@ function buildPaymentWhatsAppMessage({
     lines.push("Veuillez finaliser votre paiement via le lien ci-dessous :");
     lines.push(paymentLink);
   }
+
+  lines.push("Une fois le paiement confirmé, votre commande sera préparée.");
 
   lines.push("");
   lines.push("Merci.");
