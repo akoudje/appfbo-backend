@@ -31,4 +31,43 @@ function buildWhatsAppLink(phone, message) {
   return `https://wa.me/${clean}?text=${encoded}`;
 }
 
-module.exports = { buildWhatsAppMessage, buildWhatsAppLink };
+
+
+function buildPaymentWhatsAppMessage({
+  fboNomComplet,
+  fboNumero,
+  factureReference,
+  totalFcfa,
+  paymentLink,
+  paymentMode,
+}) {
+  const lines = [
+    `Bonjour ${fboNomComplet || "Cher FBO"},`,
+    "",
+    "Votre précommande FOREVER a été validée.",
+    "",
+    `Référence : ${factureReference || "-"}`,
+    `Numéro FBO : ${fboNumero || "-"}`,
+    `Montant à payer : ${new Intl.NumberFormat("fr-FR").format(Number(totalFcfa || 0))} FCFA`,
+  ];
+
+  if (paymentMode === "ESPECES") {
+    lines.push("");
+    lines.push("Merci de vous présenter au bureau pour régler le paiement en espèces.");
+  } else if (paymentLink) {
+    lines.push("");
+    lines.push("Veuillez finaliser votre paiement via le lien ci-dessous :");
+    lines.push(paymentLink);
+  }
+
+  lines.push("");
+  lines.push("Merci.");
+  lines.push("FOREVER");
+
+  return lines.join("\n");
+}
+module.exports = {
+  buildWhatsAppMessage,
+  buildWhatsAppLink,
+  buildPaymentWhatsAppMessage,
+};

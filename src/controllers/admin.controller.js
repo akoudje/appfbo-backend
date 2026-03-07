@@ -4,6 +4,8 @@ const { ProductCategory } = require("@prisma/client");
 const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
 const prisma = require("../prisma");
+const { buildPaymentWhatsAppMessage } = require("../services/whatsapp.service");
+
 const {
   scopeWhere,
   scopeCreate,
@@ -296,9 +298,13 @@ async function invoiceOrder(req, res) {
     }
 
     if (
-      ["INVOICED", "PAYMENT_PROOF_RECEIVED", "PAID", "READY", "FULFILLED"].includes(
-        order.status
-      )
+      [
+        "INVOICED",
+        "PAYMENT_PROOF_RECEIVED",
+        "PAID",
+        "READY",
+        "FULFILLED",
+      ].includes(order.status)
     ) {
       return res.json({
         ok: true,
@@ -319,7 +325,7 @@ async function invoiceOrder(req, res) {
     const ref =
       (factureReference && String(factureReference).trim()) ||
       `PF-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(
-        order.fboNumero || ""
+        order.fboNumero || "",
       )
         .replaceAll("-", "")
         .trim()}`;
@@ -341,30 +347,48 @@ async function invoiceOrder(req, res) {
       },
     });
 
+    const nextWhatsappTo = whatsappTo
+      ? String(whatsappTo).trim()
+      : order.factureWhatsappTo;
+
+    const paymentWhatsappMessage = buildPaymentWhatsAppMessage({
+      fboNomComplet: order.fboNomComplet,
+      fboNumero: order.fboNumero,
+      factureReference: ref,
+      totalFcfa: order.totalFcfa,
+      paymentLink: payment.paymentUrl,
+      paymentMode: order.paymentMode,
+    });
+
     const updated = await prisma.$transaction(async (tx) => {
       const saved = await tx.preorder.update({
         where: { id: order.id },
         data: {
           status: "INVOICED",
           factureReference: ref,
-          factureWhatsappTo: whatsappTo
-            ? String(whatsappTo).trim()
-            : order.factureWhatsappTo,
+          factureWhatsappTo: nextWhatsappTo,
           paymentLink: payment.paymentUrl,
           paymentRef: payment.token,
+          whatsappMessage: paymentWhatsappMessage,
           invoicedAt: order.invoicedAt || now,
           invoicedBy: order.invoicedBy || actorLabel(req),
           invoicedById: order.invoicedById || req.user?.id || null,
         },
       });
 
-      await addLogTx(tx, id, "INVOICE", note || "Préfacture créée via PayDunya", {
-        fromStatus: order.status,
-        toStatus: "INVOICED",
-        factureReference: saved.factureReference,
-        paymentLink: saved.paymentLink,
-        paymentRef: saved.paymentRef,
-      });
+      await addLogTx(
+        tx,
+        id,
+        "INVOICE",
+        note || "Préfacture créée via PayDunya",
+        {
+          fromStatus: order.status,
+          toStatus: "INVOICED",
+          factureReference: saved.factureReference,
+          paymentLink: saved.paymentLink,
+          paymentRef: saved.paymentRef,
+        },
+      );
 
       return saved;
     });
@@ -912,10 +936,7 @@ async function paydunyaWebhook(req, res) {
       req.body?.data?.token ||
       req.body?.data?.invoice?.token;
 
-    const paydunyaStatus =
-      req.body?.status ||
-      req.body?.data?.status ||
-      null;
+    const paydunyaStatus = req.body?.status || req.body?.data?.status || null;
 
     console.log("PAYDUNYA TOKEN DETECTED:", token);
     console.log("PAYDUNYA STATUS DETECTED:", paydunyaStatus);
@@ -965,7 +986,7 @@ async function paydunyaWebhook(req, res) {
           toStatus: "PAID",
           paymentRef: token,
           paydunyaStatus,
-        }
+        },
       );
     });
 
@@ -975,7 +996,6 @@ async function paydunyaWebhook(req, res) {
     return res.status(200).json({ ok: true });
   }
 }
-
 
 /* ===================================================================
    STATS
