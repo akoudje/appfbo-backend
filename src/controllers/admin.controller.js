@@ -332,33 +332,74 @@ async function invoiceOrder(req, res) {
 
     const now = new Date();
 
-    const { createPaydunyaPayment } = require("../services/paydunya.service");
-
-    const payment = await createPaydunyaPayment({
-      orderId: order.id,
-      amount: order.totalFcfa,
-      description: `Précommande ${order.fboNumero} - ${order.totalFcfa} FCFA`,
-      customerName: order.fboNomComplet,
-      customerPhone: whatsappTo || order.factureWhatsappTo || undefined,
-      customData: {
-        preorderId: order.id,
-        fboNumero: order.fboNumero,
-        countryId: order.countryId,
-      },
-    });
-
     const nextWhatsappTo = whatsappTo
       ? String(whatsappTo).trim()
       : order.factureWhatsappTo;
 
-    const paymentWhatsappMessage = buildPaymentWhatsAppMessage({
-      fboNomComplet: order.fboNomComplet,
-      fboNumero: order.fboNumero,
-      factureReference: ref,
-      totalFcfa: order.totalFcfa,
-      paymentLink: payment.paymentUrl,
-      paymentMode: order.paymentMode,
-    });
+    let generatedPaymentLink = null;
+    let generatedPaymentRef = null;
+    let paymentWhatsappMessage = order.whatsappMessage || null;
+    let invoiceLogNote = note || "Préfacture créée";
+    let paymentProvider = null;
+    let paymentFlow = null;
+
+    if (order.paymentMode !== "ESPECES") {
+      const { createPaydunyaPayment } = require("../services/paydunya.service");
+      const {
+        buildPaymentWhatsAppMessage,
+      } = require("../services/whatsapp.service");
+
+      const payment = await createPaydunyaPayment({
+        orderId: order.id,
+        amount: order.totalFcfa,
+        description: `Précommande ${order.fboNumero} - ${order.totalFcfa} FCFA`,
+        customerName: order.fboNomComplet,
+        customerPhone: nextWhatsappTo || undefined,
+        customData: {
+          preorderId: order.id,
+          fboNumero: order.fboNumero,
+          countryId: order.countryId,
+        },
+      });
+
+      generatedPaymentLink = payment.paymentUrl;
+      generatedPaymentRef = payment.token;
+      paymentProvider = "PAYDUNYA";
+      paymentFlow = "AUTO";
+
+      paymentWhatsappMessage = buildPaymentWhatsAppMessage({
+        fboNomComplet: order.fboNomComplet,
+        fboNumero: order.fboNumero,
+        factureReference: ref,
+        totalFcfa: order.totalFcfa,
+        paymentLink: generatedPaymentLink,
+        paymentMode: order.paymentMode,
+      });
+
+      if (!note) {
+        invoiceLogNote = "Préfacture créée via PayDunya";
+      }
+    } else {
+      const {
+        buildPaymentWhatsAppMessage,
+      } = require("../services/whatsapp.service");
+
+      paymentProvider = "CASH";
+      paymentFlow = "MANUAL";
+
+      paymentWhatsappMessage = buildPaymentWhatsAppMessage({
+        fboNomComplet: order.fboNomComplet,
+        fboNumero: order.fboNumero,
+        factureReference: ref,
+        totalFcfa: order.totalFcfa,
+        paymentLink: null,
+        paymentMode: order.paymentMode,
+      });
+
+      if (!note) {
+        invoiceLogNote = "Préfacture créée - paiement en espèces";
+      }
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       const saved = await tx.preorder.update({
@@ -367,8 +408,8 @@ async function invoiceOrder(req, res) {
           status: "INVOICED",
           factureReference: ref,
           factureWhatsappTo: nextWhatsappTo,
-          paymentLink: payment.paymentUrl,
-          paymentRef: payment.token,
+          paymentLink: generatedPaymentLink,
+          paymentRef: generatedPaymentRef,
           whatsappMessage: paymentWhatsappMessage,
           invoicedAt: order.invoicedAt || now,
           invoicedBy: order.invoicedBy || actorLabel(req),
@@ -376,19 +417,16 @@ async function invoiceOrder(req, res) {
         },
       });
 
-      await addLogTx(
-        tx,
-        id,
-        "INVOICE",
-        note || "Préfacture créée via PayDunya",
-        {
-          fromStatus: order.status,
-          toStatus: "INVOICED",
-          factureReference: saved.factureReference,
-          paymentLink: saved.paymentLink,
-          paymentRef: saved.paymentRef,
-        },
-      );
+      await addLogTx(tx, id, "INVOICE", invoiceLogNote, {
+        fromStatus: order.status,
+        toStatus: "INVOICED",
+        factureReference: saved.factureReference,
+        paymentLink: saved.paymentLink,
+        paymentRef: saved.paymentRef,
+        paymentMode: order.paymentMode,
+        paymentProvider,
+        paymentFlow,
+      });
 
       return saved;
     });

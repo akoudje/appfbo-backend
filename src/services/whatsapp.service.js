@@ -59,7 +59,7 @@ function buildPaymentWhatsAppMessage({
     lines.push("Veuillez finaliser votre paiement via le lien ci-dessous :");
     lines.push(paymentLink);
   }
-
+  lines.push("");
   lines.push("Une fois le paiement confirmé, votre commande sera préparée.");
 
   lines.push("");
