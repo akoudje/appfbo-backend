@@ -18,7 +18,7 @@
     "dev": "nodemon src/server.js",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio"
-    ""prisma:seed": "node prisma/seed.js"
+    "prisma:seed": "node prisma/seed.js"
   },
   "keywords": [],
   "author": "",
