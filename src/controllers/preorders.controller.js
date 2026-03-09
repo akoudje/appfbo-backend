@@ -5,11 +5,10 @@
 // 3) getSummary : récapitulatif de la précommande avant validation (calcul des totaux, message WhatsApp, etc.)
 // 4) submit : validation finale qui fige les totaux, génère le message WhatsApp, change le statut en SUBMITTED
 
-
 const prisma = require("../prisma");
 const { computePreorderTotals } = require("../services/pricing.service");
 const {
-  buildWhatsAppMessage,
+  buildPreorderWhatsAppMessage,
   buildWhatsAppLink,
 } = require("../services/whatsapp.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
@@ -185,7 +184,7 @@ async function setItems(req, res) {
         data: {
           totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
           totalPoidsKg: String(
-            Number(summary.totals.totalPoidsKg || 0).toFixed(3)
+            Number(summary.totals.totalPoidsKg || 0).toFixed(3),
           ),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
@@ -315,7 +314,7 @@ async function submit(req, res) {
       });
     }
 
-    const message = buildWhatsAppMessage({
+    const message = buildPreorderWhatsAppMessage({
       preorder: summary.preorder,
       items: summary.items,
       totals: summary.totals,
@@ -346,9 +345,9 @@ async function submit(req, res) {
                 : it.prixUnitaireFcfa,
 
             discountPercent: String(
-              Number(it.discountPercent != null ? it.discountPercent : 0).toFixed(
-                2
-              )
+              Number(
+                it.discountPercent != null ? it.discountPercent : 0,
+              ).toFixed(2),
             ),
 
             prixUnitaireFcfa: it.prixUnitaireFcfa,
@@ -369,7 +368,7 @@ async function submit(req, res) {
           status: "SUBMITTED",
           totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
           totalPoidsKg: String(
-            Number(summary.totals.totalPoidsKg || 0).toFixed(3)
+            Number(summary.totals.totalPoidsKg || 0).toFixed(3),
           ),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,

@@ -195,6 +195,7 @@ module.exports = {
   formatFcfa,
   normalizePhone,
   buildPreorderWhatsAppMessage,
+  buildWhatsAppMessage: buildPreorderWhatsAppMessage,
   buildWhatsAppLink,
   buildPaymentWhatsAppMessage,
   buildInvoiceWhatsAppMessage,
