@@ -1,4 +1,4 @@
-// src/services/whatsapp/whatsapp.service.js
+// src/services/whatsapp.service.js
 
 /**
  * Formate un montant FCFA
@@ -43,6 +43,14 @@ function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   lines.push(`GLOBAL : ${formatFcfa(totals.totalFcfa)}`);
 
   return lines.join("\n");
+}
+
+/**
+ * Alias rétrocompatible
+ * Permet à l'ancien code d'utiliser encore buildWhatsAppMessage
+ */
+function buildWhatsAppMessage(args) {
+  return buildPreorderWhatsAppMessage(args);
 }
 
 /**
@@ -93,7 +101,9 @@ function buildPaymentWhatsAppMessage({
     lines.push("Une fois le paiement confirmé, votre commande sera préparée.");
   } else {
     lines.push("");
-    lines.push("Merci de procéder au règlement selon les instructions communiquées.");
+    lines.push(
+      "Merci de procéder au règlement selon les instructions communiquées."
+    );
   }
 
   if (note) {
@@ -109,15 +119,14 @@ function buildPaymentWhatsAppMessage({
 }
 
 /**
- * Alias plus explicite pour ton nouveau workflow
- * Permet d’éviter de dupliquer la logique ailleurs.
+ * Alias plus explicite pour le workflow de facturation
  */
 function buildInvoiceWhatsAppMessage({
   customerName,
   fboNumero,
   invoiceRef,
   totalFcfa,
-  trackedPaymentLink,
+  paymentLink,
   paymentMode,
   note,
 }) {
@@ -126,7 +135,7 @@ function buildInvoiceWhatsAppMessage({
     fboNumero,
     factureReference: invoiceRef,
     totalFcfa,
-    paymentLink: trackedPaymentLink,
+    paymentLink,
     paymentMode,
     note,
   });
@@ -195,7 +204,7 @@ module.exports = {
   formatFcfa,
   normalizePhone,
   buildPreorderWhatsAppMessage,
-  buildWhatsAppMessage: buildPreorderWhatsAppMessage,
+  buildWhatsAppMessage,
   buildWhatsAppLink,
   buildPaymentWhatsAppMessage,
   buildInvoiceWhatsAppMessage,

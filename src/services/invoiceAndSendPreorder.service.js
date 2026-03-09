@@ -1,16 +1,15 @@
 // src/services/orders/invoiceAndSendPreorder.service.js
 
-const { PrismaClient, PreorderLogAction, PaymentMode } = require("@prisma/client");
+const {
+  PrismaClient,
+  PreorderLogAction,
+  PaymentMode,
+} = require("@prisma/client");
+
 const prisma = new PrismaClient();
 
-const whatsappService = require("../services/whatsapp.service"); // ✅ plus de destructuring
-
-/**
- * Formate un montant FCFA
- */
-function formatFcfa(value) {
-  return `${new Intl.NumberFormat("fr-FR").format(Number(value || 0))} FCFA`;
-}
+const whatsappService = require("../whatsapp.service");
+const { createPaydunyaPayment } = require("../paydunya.service");
 
 /**
  * Génère une référence de préfacture lisible
@@ -34,46 +33,28 @@ function isCashPayment(paymentMode) {
 }
 
 /**
- * Construit le message WhatsApp envoyé au FBO
+ * Crée un vrai lien PayDunya + token de paiement
  */
-function buildInvoiceWhatsAppMessage({
-  customerName,
-  invoiceRef,
-  totalFcfa,
-  trackedPaymentLink,
-  isCash,
-  note,
-}) {
-  const safeName = customerName || "cher partenaire";
-  const safeInvoiceRef = invoiceRef || "votre préfacture";
-  const safeAmount = formatFcfa(totalFcfa);
+async function createPaymentLinkForPreorder(preorder, invoiceRef, whatsappTo) {
+  const payment = await createPaydunyaPayment({
+    orderId: preorder.id,
+    amount: preorder.totalFcfa,
+    description: `Précommande ${preorder.fboNumero} - ${preorder.totalFcfa} FCFA`,
+    customerName: preorder.fboNomComplet,
+    customerPhone: whatsappTo || undefined,
+    customData: {
+      preorderId: preorder.id,
+      fboNumero: preorder.fboNumero,
+      countryId: preorder.countryId,
+      invoiceRef,
+    },
+  });
 
-  if (isCash) {
-    return [
-      `Bonjour ${safeName},`,
-      `Votre préfacture ${safeInvoiceRef} d’un montant de ${safeAmount} est prête.`,
-      `Merci de vous présenter au bureau pour effectuer le règlement en espèces.`,
-      note || "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  return [
-    `Bonjour ${safeName},`,
-    `Votre préfacture ${safeInvoiceRef} d’un montant de ${safeAmount} est prête.`,
-    `Lien de paiement : ${trackedPaymentLink}`,
-    note || "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-/**
- * Placeholder PayDunya
- */
-async function createPaymentLinkForPreorder(preorder, invoiceRef) {
-  return `https://pay.example.com/preorders/${preorder.id}?invoice=${encodeURIComponent(invoiceRef)}`;
+  return {
+    paymentLink: payment.paymentUrl,
+    paymentRef: payment.token,
+    raw: payment.raw,
+  };
 }
 
 /**
@@ -120,7 +101,10 @@ async function invoiceAndSendPreorder({
     throw new Error("PREORDER_ID_REQUIRED");
   }
 
-  const appBaseUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+  const appBaseUrl =
+    process.env.APP_BASE_URL ||
+    process.env.FRONTEND_URL ||
+    "http://localhost:5173";
 
   return prisma.$transaction(async (tx) => {
     const preorder = await tx.preorder.findUnique({
@@ -144,14 +128,25 @@ async function invoiceAndSendPreorder({
     }
 
     const invoiceRef =
-      String(invoiceRefInput || "").trim() || preorder.factureReference || generateInvoiceRef(preorder);
+      String(invoiceRefInput || "").trim() ||
+      preorder.factureReference ||
+      generateInvoiceRef(preorder);
 
     const whatsappTo = resolveWhatsappTo(preorder, whatsappToInput);
     const cash = isCashPayment(preorder.paymentMode);
 
     let paymentLinkTarget = null;
+    let paymentRef = null;
+
     if (!cash) {
-      paymentLinkTarget = await createPaymentLinkForPreorder(preorder, invoiceRef);
+      const payment = await createPaymentLinkForPreorder(
+        preorder,
+        invoiceRef,
+        whatsappTo
+      );
+
+      paymentLinkTarget = payment.paymentLink;
+      paymentRef = payment.paymentRef;
     }
 
     const messagePurpose = cash ? "INVOICE" : "PAYMENT_LINK";
@@ -168,16 +163,19 @@ async function invoiceAndSendPreorder({
       },
     });
 
+    // Conservé pour une future évolution de tracking, mais non utilisé dans le message FBO
     const trackedPaymentLink = !cash
       ? `${appBaseUrl}/pay/o/${preorder.id}/${createdMessage.id}`
       : null;
 
-    const whatsappMessage = buildInvoiceWhatsAppMessage({
+    // ✅ Le message envoyé au FBO contient le vrai lien PayDunya
+    const whatsappMessage = whatsappService.buildInvoiceWhatsAppMessage({
       customerName: preorder.fboNomComplet || preorder.fbo?.nomComplet,
+      fboNumero: preorder.fboNumero,
       invoiceRef,
       totalFcfa: preorder.totalFcfa,
-      trackedPaymentLink,
-      isCash: cash,
+      paymentLink: paymentLinkTarget,
+      paymentMode: preorder.paymentMode,
       note: invoiceNote,
     });
 
@@ -245,7 +243,8 @@ async function invoiceAndSendPreorder({
         factureReference: invoiceRef,
         factureWhatsappTo: whatsappTo,
         paymentLink: paymentLinkTarget,
-        whatsappMessage,
+        paymentRef: paymentRef,
+        whatsappMessage: whatsappMessage,
         invoicedAt: now,
         invoicedBy: actorName,
         invoicedById: actorAdminId || null,
@@ -269,6 +268,7 @@ async function invoiceAndSendPreorder({
         messageStatus: finalMessageStatus,
         paymentLinkTarget,
         paymentLinkTracked: trackedPaymentLink,
+        paymentRef,
         paymentMode: preorder.paymentMode,
         actorName,
       },
@@ -281,13 +281,12 @@ async function invoiceAndSendPreorder({
       whatsappTo,
       paymentLinkTarget,
       trackedPaymentLink,
+      paymentRef,
     };
   });
 }
 
 module.exports = {
   invoiceAndSendPreorder,
-  buildInvoiceWhatsAppMessage,
   generateInvoiceRef,
-  formatFcfa,
 };
