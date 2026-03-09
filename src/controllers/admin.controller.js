@@ -9,7 +9,7 @@ const prisma = require("../prisma");
 
 const {
   invoiceAndSendPreorder,
-} = require("../services/orders/invoiceAndSendPreorder.service");
+} = require("../services/invoiceAndSendPreorder.service");
 
 const {
   scopeWhere,
