@@ -3,8 +3,7 @@
 const { PrismaClient, PreorderLogAction, PaymentMode } = require("@prisma/client");
 const prisma = new PrismaClient();
 
-const whatsappService = require("../services/whatsapp.service");
-const { buildInvoiceWhatsAppMessage } = whatsappService;
+const whatsappService = require("../services/whatsapp.service"); // ✅ plus de destructuring
 
 /**
  * Formate un montant FCFA
@@ -72,7 +71,6 @@ function buildInvoiceWhatsAppMessage({
 
 /**
  * Placeholder PayDunya
- * À remplacer ensuite par ton vrai service PayDunya.
  */
 async function createPaymentLinkForPreorder(preorder, invoiceRef) {
   return `https://pay.example.com/preorders/${preorder.id}?invoice=${encodeURIComponent(invoiceRef)}`;
@@ -80,7 +78,6 @@ async function createPaymentLinkForPreorder(preorder, invoiceRef) {
 
 /**
  * Essaie de trouver le numéro WhatsApp du FBO
- * Adapte ici selon ton vrai modèle si tu ajoutes un téléphone dans Fbo plus tard.
  */
 function resolveWhatsappTo(preorder, whatsappToInput) {
   if (whatsappToInput && String(whatsappToInput).trim()) {
@@ -245,16 +242,13 @@ async function invoiceAndSendPreorder({
       where: { id: preorder.id },
       data: {
         status: "INVOICED",
-
         factureReference: invoiceRef,
         factureWhatsappTo: whatsappTo,
         paymentLink: paymentLinkTarget,
         whatsappMessage,
         invoicedAt: now,
         invoicedBy: actorName,
-
         invoicedById: actorAdminId || null,
-
         lastWhatsappMessageId: savedMessage.id,
         lastWhatsappStatus: finalMessageStatus,
         lastWhatsappStatusAt: now,
