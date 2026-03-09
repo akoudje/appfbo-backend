@@ -4,7 +4,12 @@ const { ProductCategory } = require("@prisma/client");
 const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
 const prisma = require("../prisma");
-const { buildPaymentWhatsAppMessage } = require("../services/whatsapp.service");
+
+// const { buildPaymentWhatsAppMessage } = require("../services/whatsapp.service");
+
+const {
+  invoiceAndSendPreorder,
+} = require("../services/orders/invoiceAndSendPreorder.service");
 
 const {
   scopeWhere,
@@ -281,164 +286,57 @@ async function updateOrderStatus(req, res) {
 
 /**
  * POST /api/admin/orders/:id/invoice
- * SUBMITTED -> INVOICED
+ * SUBMITTED -> INVOICED + création OrderMessage + tentative d'envoi WhatsApp
  */
 async function invoiceOrder(req, res) {
   try {
     const { id } = req.params;
     const { factureReference, whatsappTo, note } = req.body || {};
 
-    const order = await prisma.preorder.findFirst({
-      where: scopeWhere(req, { id }),
-      include: { items: true },
+    const actorName =
+      req.user?.fullName ||
+      req.user?.email ||
+      req.user?.id ||
+      req.user?.role ||
+      "admin";
+
+    const actorAdminId = req.user?.id || null;
+
+    const result = await invoiceAndSendPreorder({
+      preorderId: id,
+      actorName,
+      actorAdminId,
+      invoiceRefInput: factureReference,
+      whatsappToInput: whatsappTo,
+      invoiceNote: note,
     });
 
-    if (!order) {
+    return res.json(result.preorder);
+  } catch (e) {
+    console.error("invoiceOrder error:", e);
+
+    if (e.message === "PREORDER_NOT_FOUND") {
       return res.status(404).json({ message: "Commande introuvable" });
     }
 
-    if (
-      [
-        "INVOICED",
-        "PAYMENT_PROOF_RECEIVED",
-        "PAID",
-        "READY",
-        "FULFILLED",
-      ].includes(order.status)
-    ) {
-      return res.json({
-        ok: true,
-        alreadyDone: true,
-        status: order.status,
-        order,
+    if (e.message === "PREORDER_NOT_INVOICEABLE") {
+      return res.status(400).json({
+        message: "Cette commande ne peut pas être facturée actuellement.",
       });
     }
 
-    assertTransition(order.status, "INVOICED");
-
-    if (!order.items || order.items.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "Impossible de facturer une commande vide." });
+    if (e.message === "PREORDER_ID_REQUIRED") {
+      return res.status(400).json({
+        message: "Identifiant de commande manquant.",
+      });
     }
 
-    const ref =
-      (factureReference && String(factureReference).trim()) ||
-      `PF-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${String(
-        order.fboNumero || "",
-      )
-        .replaceAll("-", "")
-        .trim()}`;
-
-    const now = new Date();
-
-    const nextWhatsappTo = whatsappTo
-      ? String(whatsappTo).trim()
-      : order.factureWhatsappTo;
-
-    let generatedPaymentLink = null;
-    let generatedPaymentRef = null;
-    let paymentWhatsappMessage = order.whatsappMessage || null;
-    let invoiceLogNote = note || "Préfacture créée";
-    let paymentProvider = null;
-    let paymentFlow = null;
-
-    if (order.paymentMode !== "ESPECES") {
-      const { createPaydunyaPayment } = require("../services/paydunya.service");
-      const {
-        buildPaymentWhatsAppMessage,
-      } = require("../services/whatsapp.service");
-
-      const payment = await createPaydunyaPayment({
-        orderId: order.id,
-        amount: order.totalFcfa,
-        description: `Précommande ${order.fboNumero} - ${order.totalFcfa} FCFA`,
-        customerName: order.fboNomComplet,
-        customerPhone: nextWhatsappTo || undefined,
-        customData: {
-          preorderId: order.id,
-          fboNumero: order.fboNumero,
-          countryId: order.countryId,
-        },
-      });
-
-      generatedPaymentLink = payment.paymentUrl;
-      generatedPaymentRef = payment.token;
-      paymentProvider = "PAYDUNYA";
-      paymentFlow = "AUTO";
-
-      paymentWhatsappMessage = buildPaymentWhatsAppMessage({
-        fboNomComplet: order.fboNomComplet,
-        fboNumero: order.fboNumero,
-        factureReference: ref,
-        totalFcfa: order.totalFcfa,
-        paymentLink: generatedPaymentLink,
-        paymentMode: order.paymentMode,
-      });
-
-      if (!note) {
-        invoiceLogNote = "Préfacture créée via PayDunya";
-      }
-    } else {
-      const {
-        buildPaymentWhatsAppMessage,
-      } = require("../services/whatsapp.service");
-
-      paymentProvider = "CASH";
-      paymentFlow = "MANUAL";
-
-      paymentWhatsappMessage = buildPaymentWhatsAppMessage({
-        fboNomComplet: order.fboNomComplet,
-        fboNumero: order.fboNumero,
-        factureReference: ref,
-        totalFcfa: order.totalFcfa,
-        paymentLink: null,
-        paymentMode: order.paymentMode,
-      });
-
-      if (!note) {
-        invoiceLogNote = "Préfacture créée - paiement en espèces";
-      }
-    }
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const saved = await tx.preorder.update({
-        where: { id: order.id },
-        data: {
-          status: "INVOICED",
-          factureReference: ref,
-          factureWhatsappTo: nextWhatsappTo,
-          paymentLink: generatedPaymentLink,
-          paymentRef: generatedPaymentRef,
-          whatsappMessage: paymentWhatsappMessage,
-          invoicedAt: order.invoicedAt || now,
-          invoicedBy: order.invoicedBy || actorLabel(req),
-          invoicedById: order.invoicedById || req.user?.id || null,
-        },
-      });
-
-      await addLogTx(tx, id, "INVOICE", invoiceLogNote, {
-        fromStatus: order.status,
-        toStatus: "INVOICED",
-        factureReference: saved.factureReference,
-        paymentLink: saved.paymentLink,
-        paymentRef: saved.paymentRef,
-        paymentMode: order.paymentMode,
-        paymentProvider,
-        paymentFlow,
-      });
-
-      return saved;
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (invoiceOrder)",
     });
-
-    return res.json(updated);
-  } catch (e) {
-    console.error("invoiceOrder error:", e);
-    return res
-      .status(e.statusCode || 500)
-      .json({ message: e.message || "Erreur serveur (invoiceOrder)" });
   }
 }
+
 /**
  * POST /api/admin/orders/:id/proof
  * INVOICED -> PAYMENT_PROOF_RECEIVED
@@ -847,6 +745,40 @@ async function fulfillOrder(req, res) {
   }
 }
 
+/**
+ * GET /api/admin/orders/:id/messages
+ */
+async function listOrderMessages(req, res) {
+  try {
+    const { id } = req.params;
+
+    const preorder = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: { id: true },
+    });
+
+    if (!preorder) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const messages = await prisma.orderMessage.findMany({
+      where: { preorderId: id },
+      include: {
+        events: {
+          orderBy: { createdAt: "desc" },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return res.json(messages);
+  } catch (e) {
+    console.error("listOrderMessages error:", e);
+    return res.status(500).json({
+      message: "Erreur serveur (listOrderMessages)",
+    });
+  }
+}
 /**
  * POST /api/admin/orders/:id/cancel
  * DRAFT|SUBMITTED|INVOICED|PAYMENT_PROOF_RECEIVED|PAID|READY -> CANCELLED
@@ -1725,6 +1657,7 @@ async function uploadProductImage(req, res) {
 module.exports = {
   // orders
   listOrders,
+  listOrderMessages,
   getOrderById,
   updateOrderStatus,
   invoiceOrder,

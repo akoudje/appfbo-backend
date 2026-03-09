@@ -14,6 +14,7 @@ const {
   // orders
   listOrders,
   getOrderById,
+  listOrderMessages,
   updateOrderStatus,
   invoiceOrder,
   payOrder,
@@ -50,8 +51,11 @@ router.use(resolveCountry, requireAuth, requireCountryScope);
  */
 router.get("/orders", requirePermission(Permission.PREORDER_READ), listOrders);
 router.get("/orders/:id", requirePermission(Permission.PREORDER_READ), getOrderById);
+router.get("/orders/:id/messages", requirePermission(Permission.PREORDER_READ), listOrderMessages);
+
 router.get("/preorders", requirePermission(Permission.PREORDER_READ), listOrders);
 router.get("/preorders/:id", requirePermission(Permission.PREORDER_READ), getOrderById);
+router.get("/preorders/:id/messages", requirePermission(Permission.PREORDER_READ), listOrderMessages);
 
 // optionnel (si tu veux un endpoint générique)
 router.patch(

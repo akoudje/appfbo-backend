@@ -1,3 +1,11 @@
+// src/controllers/preorders.controller.js
+// Ce controller gère le processus de précommande en 4 étapes :
+// 1) createDraft : création du brouillon de précommande avec les infos FBO + mode paiement/livraison
+// 2) setItems : définition du panier (remplace le panier précédent)
+// 3) getSummary : récapitulatif de la précommande avant validation (calcul des totaux, message WhatsApp, etc.)
+// 4) submit : validation finale qui fige les totaux, génère le message WhatsApp, change le statut en SUBMITTED
+
+
 const prisma = require("../prisma");
 const { computePreorderTotals } = require("../services/pricing.service");
 const {

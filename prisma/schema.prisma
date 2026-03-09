@@ -14,6 +14,30 @@ datasource db {
 // ENUMS
 // -------------------------------------------------------------------------------
 
+// WHATSAPP----------------------------------
+
+enum OrderMessageChannel {
+  WHATSAPP
+}
+
+enum OrderMessagePurpose {
+  INVOICE
+  PAYMENT_LINK
+  REMINDER
+  PAYMENT_CONFIRMED
+  ORDER_READY
+}
+
+enum OrderMessageStatus {
+  DRAFT
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  CANCELLED
+}
+
 enum Grade {
   ANIMATEUR_ADJOINT
   ANIMATEUR
@@ -99,6 +123,58 @@ enum StockMovementReason {
 // ------------------------------------------------------------------------------------
 // MODELS
 // ---------------------------------------------------------------------------------
+
+model OrderMessage {
+  id String @id @default(cuid())
+
+  preorderId String
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  channel OrderMessageChannel @default(WHATSAPP)
+  purpose OrderMessagePurpose
+  status  OrderMessageStatus  @default(DRAFT)
+
+  toPhone String?
+  body    String? @db.Text
+
+  provider          String?
+  providerMessageId String? @unique
+
+  paymentLinkTracked String? @db.Text
+  paymentLinkTarget  String? @db.Text
+
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  readAt       DateTime?
+  failedAt     DateTime?
+  lastStatusAt DateTime?
+
+  errorCode    String?
+  errorMessage String? @db.Text
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events OrderMessageEvent[]
+
+  @@index([preorderId, createdAt])
+  @@index([status])
+  @@index([provider, providerMessageId])
+}
+
+model OrderMessageEvent {
+  id             String       @id @default(cuid())
+  orderMessageId String
+  orderMessage   OrderMessage @relation(fields: [orderMessageId], references: [id], onDelete: Cascade)
+
+  status     String
+  rawPayload Json?
+  note       String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  @@index([orderMessageId, createdAt])
+}
 
 model Fbo {
   id           String @id @default(cuid())
@@ -255,7 +331,15 @@ model Preorder {
   fraisLivraisonFcfa Int     @default(0)
   totalFcfa          Int     @default(0)
 
-  whatsappMessage String?
+  whatsappMessage       String?   @db.Text
+  lastWhatsappMessageId String?
+  lastWhatsappStatus    String?
+  lastWhatsappStatusAt  DateTime?
+
+  paymentLinkClickedAt  DateTime?
+  paymentLinkClickCount Int       @default(0)
+
+  messages OrderMessage[]
 
   factureReference  String?
   factureWhatsappTo String?
