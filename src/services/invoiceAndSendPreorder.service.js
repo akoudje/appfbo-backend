@@ -9,7 +9,7 @@ const {
 const prisma = new PrismaClient();
 
 const whatsappService = require("./whatsapp.service");
-const { createPaydunyaPayment } = require("../paydunya.service");
+const { createPaydunyaPayment } = require("./paydunya.service");
 
 /**
  * Génère une référence de préfacture lisible
