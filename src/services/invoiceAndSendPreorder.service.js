@@ -8,7 +8,7 @@ const {
 
 const prisma = new PrismaClient();
 
-const whatsappService = require("../whatsapp.service");
+const whatsappService = require("./whatsapp.service");
 const { createPaydunyaPayment } = require("../paydunya.service");
 
 /**
