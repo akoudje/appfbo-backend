@@ -6,17 +6,19 @@
 // 4) submit : validation finale qui fige les totaux, génère le message WhatsApp, change le statut en SUBMITTED
 
 const prisma = require("../prisma");
-const { computePreorderTotals } = require("../services/pricing.service");
-const {
-  buildPreorderWhatsAppMessage,
-  buildWhatsAppLink,
-} = require("../services/whatsapp.service");
-const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
-
 const {
   computePreorderTotals,
   computeCatalogProductsForPreorder,
 } = require("../services/pricing.service");
+
+const {
+  buildPreorderWhatsAppMessage,
+  buildWhatsAppLink,
+} = require("../services/whatsapp.service");
+
+const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
+
+
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
