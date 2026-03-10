@@ -47,19 +47,38 @@ async function createDraft(req, res) {
     }
 
     const normalizedNumeroFbo = normalizeNumeroFbo(numeroFbo);
+    const normalizedNomComplet = String(nomComplet).trim();
+    const normalizedPointDeVente = String(pointDeVente).trim();
+
+    const normalizedGrade = String(grade || "")
+      .trim()
+      .toUpperCase();
+
+    const normalizedPaymentMode = paymentMode
+      ? String(paymentMode).trim().toUpperCase()
+      : null;
+
+    let normalizedDeliveryMode = deliveryMode
+      ? String(deliveryMode).trim().toUpperCase()
+      : null;
+
+    // ✅ Règle métier : paiement espèces => retrait obligatoire
+    if (normalizedPaymentMode === "ESPECES") {
+      normalizedDeliveryMode = "RETRAIT_SITE_FLP";
+    }
 
     const fbo = await prisma.fbo.upsert({
       where: { numeroFbo: normalizedNumeroFbo },
       update: {
-        nomComplet: String(nomComplet).trim(),
-        grade,
-        pointDeVente: String(pointDeVente).trim(),
+        nomComplet: normalizedNomComplet,
+        grade: normalizedGrade,
+        pointDeVente: normalizedPointDeVente,
       },
       create: {
         numeroFbo: normalizedNumeroFbo,
-        nomComplet: String(nomComplet).trim(),
-        grade,
-        pointDeVente: String(pointDeVente).trim(),
+        nomComplet: normalizedNomComplet,
+        grade: normalizedGrade,
+        pointDeVente: normalizedPointDeVente,
       },
     });
 
@@ -71,8 +90,8 @@ async function createDraft(req, res) {
           fboNomComplet: fbo.nomComplet,
           fboGrade: fbo.grade,
           pointDeVente: fbo.pointDeVente,
-          paymentMode,
-          deliveryMode,
+          paymentMode: normalizedPaymentMode,
+          deliveryMode: normalizedDeliveryMode,
           status: "DRAFT",
         }),
       });
@@ -85,8 +104,8 @@ async function createDraft(req, res) {
           meta: {
             fboId: fbo.id,
             numeroFbo: fbo.numeroFbo,
-            paymentMode,
-            deliveryMode,
+            paymentMode: normalizedPaymentMode,
+            deliveryMode: normalizedDeliveryMode,
           },
         },
       });
