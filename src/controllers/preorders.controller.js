@@ -13,6 +13,11 @@ const {
 } = require("../services/whatsapp.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 
+const {
+  computePreorderTotals,
+  computeCatalogProductsForPreorder,
+} = require("../services/pricing.service");
+
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
 function isNonEmptyString(v) {
@@ -116,6 +121,26 @@ async function createDraft(req, res) {
     return res.json({ preorderId: preorder.id, status: preorder.status });
   } catch (e) {
     return res.status(500).json({ error: e.message || "Erreur createDraft" });
+  }
+}
+// ETAPE 3: get catalog (affiche le catalogue avec les prix catalogue et les remises potentielles selon le grade FBO)
+async function getCatalog(req, res) {
+  const preorderId = req.params.id;
+  const countryId = req.country.id;
+
+  try {
+    const items = await computeCatalogProductsForPreorder(preorderId, countryId);
+
+    return res.json({
+      preorderId,
+      items,
+    });
+  } catch (e) {
+    if (String(e.message) === "PREORDER_NOT_FOUND") {
+      return res.status(404).json({ error: "Preorder not found" });
+    }
+
+    return res.status(500).json({ error: e.message || "Erreur getCatalog" });
   }
 }
 
@@ -426,6 +451,7 @@ async function submit(req, res) {
 
 module.exports = {
   createDraft,
+  getCatalog,
   setItems,
   getSummary,
   submit,

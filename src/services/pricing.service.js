@@ -161,8 +161,62 @@ async function computePreorderTotals(preorderId, countryId) {
   };
 }
 
+async function computeCatalogProductsForPreorder(preorderId, countryId) {
+  const preorder = await prisma.preorder.findFirst({
+    where: {
+      id: preorderId,
+      ...(countryId ? { countryId } : {}),
+    },
+    select: {
+      id: true,
+      countryId: true,
+      fboGrade: true,
+    },
+  });
+
+  if (!preorder) {
+    throw new Error("PREORDER_NOT_FOUND");
+  }
+
+  const discountPercent = await getDiscountPercentByGrade(
+    preorder.fboGrade,
+    preorder.countryId
+  );
+
+  const products = await prisma.product.findMany({
+    where: {
+      countryId: preorder.countryId,
+      actif: true,
+    },
+    orderBy: { nom: "asc" },
+  });
+
+  return products.map((product) => {
+    const prixBaseFcfa = Number(product.prixBaseFcfa || 0);
+    const prixFinalFcfa = applyDiscount(prixBaseFcfa, discountPercent);
+
+    return {
+      id: product.id,
+      sku: product.sku,
+      nom: product.nom,
+      imageUrl: product.imageUrl || null,
+      category: product.category,
+      details: product.details || null,
+      stockQty: Number(product.stockQty || 0),
+
+      prixBaseFcfa,
+      discountPercent,
+      prixFinalFcfa,
+
+      cc: Number(product.cc || 0),
+      poidsKg: Number(product.poidsKg || 0),
+    };
+  });
+}
+
 module.exports = {
-  computePreorderTotals,
+  computePreorderTotals,  
+  computeCatalogProductsForPreorder,
   getDiscountPercentByGrade,
   computeDeliveryFeeFcfa,
   applyDiscount,
