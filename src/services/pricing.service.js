@@ -1,4 +1,5 @@
-// src/services/pricing.service.js
+// pricing.service.js
+// Service de calcul des prix et totaux pour les précommandes, en tenant compte des remises liées au grade FBO, des frais de livraison selon le poids, et des détails produits.
 
 const prisma = require("../prisma");
 
@@ -10,7 +11,6 @@ function toInt(n) {
   return Math.round(Number(n || 0));
 }
 
-// Règle simple de livraison (MVP)
 function computeDeliveryFeeFcfa({ deliveryMode, totalPoidsKg }) {
   if (deliveryMode !== "LIVRAISON") return 0;
 
@@ -19,6 +19,14 @@ function computeDeliveryFeeFcfa({ deliveryMode, totalPoidsKg }) {
   if (w <= 3) return 2000;
   if (w <= 5) return 3000;
   return 5000;
+}
+
+function applyDiscount(prixBaseFcfa, discountPercent) {
+  const p = Number(prixBaseFcfa || 0);
+  const d = Number(discountPercent || 0);
+
+  const discounted = Math.round(p * (1 - d / 100));
+  return Math.max(discounted, 0);
 }
 
 async function getDiscountPercentByGrade(grade, countryId) {
@@ -37,15 +45,7 @@ async function getDiscountPercentByGrade(grade, countryId) {
   return row ? Number(row.discountPercent) : 0;
 }
 
-function applyDiscount(prixBaseFcfa, discountPercent) {
-  const p = Number(prixBaseFcfa || 0);
-  const d = Number(discountPercent || 0);
-
-  const discounted = Math.round(p * (1 - d / 100));
-  return Math.max(discounted, 0);
-}
-
-async function computePreorderTotals(preorderId, countryId) {
+async function getPreorderPricingContext(preorderId, countryId) {
   const preorder = await prisma.preorder.findFirst({
     where: {
       id: preorderId,
@@ -77,87 +77,46 @@ async function computePreorderTotals(preorderId, countryId) {
     preorder.countryId
   );
 
-  let totalCc = 0;
-  let totalPoids = 0;
-  let totalProduitsFcfa = 0;
-
-  const computedItems = [];
-
-  for (const it of preorder.items) {
-    if (!it.product) {
-      throw new Error("PRODUCT_NOT_FOUND");
-    }
-
-    if (it.product.countryId !== preorder.countryId) {
-      throw new Error("PRODUCT_COUNTRY_MISMATCH");
-    }
-
-    if (!it.product.actif) {
-      throw new Error("PRODUCT_INACTIVE");
-    }
-
-    const qty = Math.max(0, Number(it.qty || 0));
-    if (qty <= 0) continue;
-
-    const prixCatalogueFcfa = Number(it.product.prixBaseFcfa || 0);
-    const ccUnitaire = Number(it.product.cc || 0);
-    const poidsUnitaireKg = Number(it.product.poidsKg || 0);
-    const prixUnitaireFcfa = applyDiscount(
-      prixCatalogueFcfa,
-      discountPercent
-    );
-
-    const lineCc = ccUnitaire * qty;
-    const linePoids = poidsUnitaireKg * qty;
-    const lineFcfa = prixUnitaireFcfa * qty;
-
-    totalCc += lineCc;
-    totalPoids += linePoids;
-    totalProduitsFcfa += lineFcfa;
-
-    computedItems.push({
-      productId: it.productId,
-      qty,
-
-      productSkuSnapshot: it.product.sku || null,
-      productNameSnapshot: it.product.nom || null,
-
-      prixCatalogueFcfa,
-      discountPercent,
-      prixUnitaireFcfa,
-
-      ccUnitaire: round3(ccUnitaire),
-      poidsUnitaireKg: round3(poidsUnitaireKg),
-
-      lineTotalFcfa: toInt(lineFcfa),
-      lineTotalCc: round3(lineCc),
-      lineTotalPoids: round3(linePoids),
-
-      nom: it.product.nom,
-      sku: it.product.sku,
-      imageUrl: it.product.imageUrl || null,
-      stockQty: Number(it.product.stockQty || 0),
-    });
-  }
-
-  const fraisLivraisonFcfa = computeDeliveryFeeFcfa({
-    deliveryMode: preorder.deliveryMode,
-    totalPoidsKg: totalPoids,
-  });
-
-  const totalFcfa = totalProduitsFcfa + fraisLivraisonFcfa;
-
   return {
     preorder,
     discountPercent,
-    items: computedItems,
-    totals: {
-      totalCc: round3(totalCc),
-      totalPoidsKg: round3(totalPoids),
-      totalProduitsFcfa: toInt(totalProduitsFcfa),
-      fraisLivraisonFcfa: toInt(fraisLivraisonFcfa),
-      totalFcfa: toInt(totalFcfa),
-    },
+  };
+}
+
+function computeLineFromProduct(product, qty, discountPercent) {
+  if (!product) {
+    throw new Error("PRODUCT_NOT_FOUND");
+  }
+
+  if (!product.actif) {
+    throw new Error("PRODUCT_INACTIVE");
+  }
+
+  const safeQty = Math.max(0, Number(qty || 0));
+  if (safeQty <= 0) return null;
+
+  const prixCatalogueFcfa = Number(product.prixBaseFcfa || 0);
+  const ccUnitaire = Number(product.cc || 0);
+  const poidsUnitaireKg = Number(product.poidsKg || 0);
+  const prixUnitaireFcfa = applyDiscount(prixCatalogueFcfa, discountPercent);
+
+  const lineTotalFcfa = prixUnitaireFcfa * safeQty;
+  const lineTotalCc = ccUnitaire * safeQty;
+  const lineTotalPoids = poidsUnitaireKg * safeQty;
+
+  return {
+    qty: safeQty,
+
+    prixCatalogueFcfa,
+    discountPercent,
+    prixUnitaireFcfa,
+
+    ccUnitaire: round3(ccUnitaire),
+    poidsUnitaireKg: round3(poidsUnitaireKg),
+
+    lineTotalFcfa: toInt(lineTotalFcfa),
+    lineTotalCc: round3(lineTotalCc),
+    lineTotalPoids: round3(lineTotalPoids),
   };
 }
 
@@ -214,10 +173,88 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
   });
 }
 
+async function computePreorderTotals(preorderId, countryId) {
+  const { preorder, discountPercent } = await getPreorderPricingContext(
+    preorderId,
+    countryId
+  );
+
+  let totalCc = 0;
+  let totalPoids = 0;
+  let totalProduitsFcfa = 0;
+
+  const computedItems = [];
+
+  for (const it of preorder.items) {
+    if (!it.product) {
+      throw new Error("PRODUCT_NOT_FOUND");
+    }
+
+    if (it.product.countryId !== preorder.countryId) {
+      throw new Error("PRODUCT_COUNTRY_MISMATCH");
+    }
+
+    const line = computeLineFromProduct(it.product, it.qty, discountPercent);
+    if (!line) continue;
+
+    totalCc += line.lineTotalCc;
+    totalPoids += line.lineTotalPoids;
+    totalProduitsFcfa += line.lineTotalFcfa;
+
+    computedItems.push({
+      productId: it.productId,
+      qty: line.qty,
+
+      productSkuSnapshot: it.product.sku || null,
+      productNameSnapshot: it.product.nom || null,
+
+      prixCatalogueFcfa: line.prixCatalogueFcfa,
+      discountPercent: line.discountPercent,
+      prixUnitaireFcfa: line.prixUnitaireFcfa,
+
+      ccUnitaire: line.ccUnitaire,
+      poidsUnitaireKg: line.poidsUnitaireKg,
+
+      lineTotalFcfa: line.lineTotalFcfa,
+      lineTotalCc: line.lineTotalCc,
+      lineTotalPoids: line.lineTotalPoids,
+
+      nom: it.product.nom,
+      sku: it.product.sku,
+      imageUrl: it.product.imageUrl || null,
+      stockQty: Number(it.product.stockQty || 0),
+      category: it.product.category,
+      details: it.product.details || null,
+    });
+  }
+
+  const fraisLivraisonFcfa = computeDeliveryFeeFcfa({
+    deliveryMode: preorder.deliveryMode,
+    totalPoidsKg: totalPoids,
+  });
+
+  const totalFcfa = totalProduitsFcfa + fraisLivraisonFcfa;
+
+  return {
+    preorder,
+    discountPercent,
+    items: computedItems,
+    totals: {
+      totalCc: round3(totalCc),
+      totalPoidsKg: round3(totalPoids),
+      totalProduitsFcfa: toInt(totalProduitsFcfa),
+      fraisLivraisonFcfa: toInt(fraisLivraisonFcfa),
+      totalFcfa: toInt(totalFcfa),
+    },
+  };
+}
+
 module.exports = {
-  computePreorderTotals,  
+  computePreorderTotals,
   computeCatalogProductsForPreorder,
   getDiscountPercentByGrade,
+  getPreorderPricingContext,
   computeDeliveryFeeFcfa,
+  computeLineFromProduct,
   applyDiscount,
 };
