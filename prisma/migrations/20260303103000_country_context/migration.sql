@@ -22,14 +22,14 @@ CREATE TABLE IF NOT EXISTS "CountrySettings" (
     CONSTRAINT "CountrySettings_pkey" PRIMARY KEY ("id")
 );
 
--- Create default country CI (safe if already present)
+-- Create default country CIV (safe if already present)
 INSERT INTO "Country" ("id", "code", "name", "currencyCode", "actif", "createdAt", "updatedAt")
-SELECT 'country_ci_default', 'CI', 'Cote d''Ivoire', 'XOF', true, NOW(), NOW()
+SELECT 'country_ci_default', 'CIV', 'Cote d''Ivoire', 'XOF', true, NOW(), NOW()
 WHERE NOT EXISTS (
-  SELECT 1 FROM "Country" WHERE "code" = 'CI'
+  SELECT 1 FROM "Country" WHERE "code" = 'CIV'
 );
 
--- Create default settings for CI
+-- Create default settings for CIV
 INSERT INTO "CountrySettings" ("id", "countryId", "minCartFcfa", "createdAt", "updatedAt")
 SELECT
   'country_settings_ci_default',
@@ -38,7 +38,7 @@ SELECT
   NOW(),
   NOW()
 FROM "Country" c
-WHERE c."code" = 'CI'
+WHERE c."code" = 'CIV'
 AND NOT EXISTS (
   SELECT 1 FROM "CountrySettings" cs WHERE cs."countryId" = c."id"
 );
@@ -48,21 +48,21 @@ ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "countryId" TEXT;
 ALTER TABLE "Preorder" ADD COLUMN IF NOT EXISTS "countryId" TEXT;
 ALTER TABLE "GradeDiscount" ADD COLUMN IF NOT EXISTS "countryId" TEXT;
 
--- Backfill with CI country
+-- Backfill with CIV country
 UPDATE "Product"
 SET "countryId" = c."id"
 FROM "Country" c
-WHERE c."code" = 'CI' AND "Product"."countryId" IS NULL;
+WHERE c."code" = 'CIV' AND "Product"."countryId" IS NULL;
 
 UPDATE "Preorder"
 SET "countryId" = c."id"
 FROM "Country" c
-WHERE c."code" = 'CI' AND "Preorder"."countryId" IS NULL;
+WHERE c."code" = 'CIV' AND "Preorder"."countryId" IS NULL;
 
 UPDATE "GradeDiscount"
 SET "countryId" = c."id"
 FROM "Country" c
-WHERE c."code" = 'CI' AND "GradeDiscount"."countryId" IS NULL;
+WHERE c."code" = 'CIV' AND "GradeDiscount"."countryId" IS NULL;
 
 -- Enforce non-null after backfill
 ALTER TABLE "Product" ALTER COLUMN "countryId" SET NOT NULL;

@@ -12,14 +12,14 @@ function readIntEnv(name, fallback) {
 }
 
 async function main() {
-  const defaultCode = String(process.env.DEFAULT_COUNTRY_CODE || "CI").trim().toUpperCase();
+  const defaultCode = String(process.env.DEFAULT_COUNTRY_CODE || "CIV").trim().toUpperCase();
   const minCartFcfa = readIntEnv("DEFAULT_MIN_CART_FCFA", 10000);
   const countriesToSeed = [
-    { code: "CI", name: "Cote d'Ivoire", currencyCode: "XOF" },
-    { code: "BF", name: "Burkina Faso", currencyCode: "XOF" },
-    { code: "TG", name: "Togo", currencyCode: "XOF" }, 
-    { code: "BJ", name: "Benin", currencyCode: "XOF" },
-    { code: "NE", name: "Niger", currencyCode: "XOF" },
+    { code: "CIV", name: "Cote d'Ivoire", currencyCode: "XOF" },
+    { code: "BFA", name: "Burkina Faso", currencyCode: "XOF" },
+    { code: "TGO", name: "Togo", currencyCode: "XOF" }, 
+    { code: "BEN", name: "Benin", currencyCode: "XOF" },
+    { code: "NER", name: "Niger", currencyCode: "XOF" },
   ];
 
   if (!countriesToSeed.some((c) => c.code === defaultCode)) {

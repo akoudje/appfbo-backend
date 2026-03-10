@@ -1,6 +1,6 @@
 const prisma = require("../prisma");
 
-const FALLBACK_COUNTRY_CODE = String(process.env.DEFAULT_COUNTRY_CODE || "CI")
+const FALLBACK_COUNTRY_CODE = String(process.env.DEFAULT_COUNTRY_CODE || "CIV")
   .trim()
   .toUpperCase();
 

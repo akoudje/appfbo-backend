@@ -2,6 +2,18 @@
 const axios = require("axios");
 
 const CINETPAY_URL = "https://api-checkout.cinetpay.com/v2/payment";
+const CINETPAY_COUNTRY_ALPHA2_BY_ALPHA3 = {
+  CIV: "CI",
+  BFA: "BF",
+  TGO: "TG",
+  BEN: "BJ",
+  NER: "NE",
+};
+
+function toCinetPayCountryCode(inputCode) {
+  const normalized = String(inputCode || "").trim().toUpperCase();
+  return CINETPAY_COUNTRY_ALPHA2_BY_ALPHA3[normalized] || normalized || "CI";
+}
 
 async function initCinetPayPayment({
   transactionId,
@@ -11,9 +23,11 @@ async function initCinetPayPayment({
   customerSurname,
   customerEmail,
   customerPhone,
-  countryCode = "CI",
+  countryCode = "CIV",
   metadata = "",
 }) {
+  const cinetpayCountryCode = toCinetPayCountryCode(countryCode);
+
   const payload = {
     apikey: process.env.CINETPAY_APIKEY,
     site_id: process.env.CINETPAY_SITE_ID,
@@ -32,8 +46,8 @@ async function initCinetPayPayment({
     customer_phone_number: customerPhone || "+225000000000",
     customer_address: "N/A",
     customer_city: "N/A",
-    customer_country: countryCode,
-    customer_state: countryCode,
+    customer_country: cinetpayCountryCode,
+    customer_state: cinetpayCountryCode,
     customer_zip_code: "00000",
 
     metadata,

@@ -21,7 +21,7 @@ function normalizePhone(phone) {
 function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   const lines = [];
 
-  lines.push(`- PRÉCOMMANDE FLP CI -`);
+  lines.push(`- PRÉCOMMANDE FLP CIV -`);
   lines.push(`Précommande N° : ${preorder?.id || "-"}`);
   lines.push(`FBO : ${preorder?.fboNumero || "-"}`);
   lines.push(`Nom : ${preorder?.fboNomComplet || "-"}`);
