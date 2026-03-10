@@ -19,7 +19,8 @@ router.post("/draft", createDraft);
 router.post("/", createDraft);
 
 // ✅ Étape 1.5 : obtenir les produits du catalogue pour une précommande donnée et les prix en fonction du grade du client FBO
-router.get("/preorders/:id/catalog", getCatalog);
+//router.get("/preorders/:id/catalog", getCatalog);
+router.get("/:id/catalog", getCatalog);
 
 // ✅ Étape 2 : items
 router.put("/:id/items", setItems);
