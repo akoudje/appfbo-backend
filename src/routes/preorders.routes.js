@@ -4,6 +4,7 @@ const router = require("express").Router();
 const {
   createDraft,
   setItems,
+  getCatalog,
   getSummary,
   submit,
 } = require("../controllers/preorders.controller");
