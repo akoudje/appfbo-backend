@@ -1,3 +1,6 @@
+// src/auth/permissions.js
+// Définition des rôles d'administrateurs et de leurs permissions associées, utilisées pour contrôler l'accès aux différentes fonctionnalités de l'admin.
+
 const AdminRole = {
   SUPER_ADMIN: "SUPER_ADMIN",
   TECH_ADMIN: "TECH_ADMIN",
@@ -36,6 +39,7 @@ const ROLE_PERMISSIONS = Object.freeze({
     Permission.PRODUCT_READ,
     Permission.PRODUCT_WRITE,
     Permission.DISCOUNT_READ,
+    Permission.DISCOUNT_WRITE, // AJOUT
     Permission.PREORDER_READ,
     Permission.PREORDER_UPDATE_STATUS,
     Permission.PAYMENT_VALIDATE,
@@ -46,6 +50,7 @@ const ROLE_PERMISSIONS = Object.freeze({
     Permission.COUNTRY_READ,
     Permission.PRODUCT_READ,
     Permission.DISCOUNT_READ,
+    Permission.DISCOUNT_WRITE, // AJOUT
     Permission.PREORDER_READ,
     Permission.PREORDER_UPDATE_STATUS,
     Permission.INVOICE_CREATE,

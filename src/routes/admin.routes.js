@@ -11,6 +11,11 @@ const {
 } = require("../middlewares/rbac");
 
 const {
+  getGradeDiscounts,
+  upsertGradeDiscounts,
+} = require("../controllers/gradeDiscounts.controller");
+
+const {
   // orders
   listOrders,
   getOrderById,
@@ -118,6 +123,20 @@ router.post(
   "/products/:id/image",
   requirePermission(Permission.PRODUCT_WRITE),
   uploadProductImage
+);
+
+// grade discounts
+
+router.get(
+  "/grade-discounts",
+  requirePermission(Permission.DISCOUNT_READ),
+  getGradeDiscounts
+);
+
+router.put(
+  "/grade-discounts",
+  requirePermission(Permission.DISCOUNT_WRITE),
+  upsertGradeDiscounts
 );
 
 /**
