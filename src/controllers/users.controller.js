@@ -55,17 +55,12 @@ function sanitizeUser(user) {
  */
 async function listUsers(req, res) {
   try {
-    const {
-      q,
-      role,
-      actif,
-      countryCode,
-    } = req.query;
+    const { q, role, actif, countryCode } = req.query;
 
     const page = Math.max(1, parseIntSafe(req.query.page, 1));
     const pageSize = Math.min(
       100,
-      Math.max(10, parseIntSafe(req.query.pageSize, 20))
+      Math.max(10, parseIntSafe(req.query.pageSize, 20)),
     );
     const skip = (page - 1) * pageSize;
 
@@ -94,9 +89,12 @@ async function listUsers(req, res) {
         return res.status(404).json({ message: "Pays introuvable" });
       }
       where.countryId = country.id;
-    } else if (req.countryId) {
-      // comportement par défaut cohérent avec ton scope pays
-      where.countryId = req.countryId;
+    } else if (
+      req.user?.role !== "SUPER_ADMIN" &&
+      req.user?.role !== "TECH_ADMIN" &&
+      req.country?.id
+    ) {
+      where.countryId = req.country.id;
     }
 
     const [totalCount, users] = await Promise.all([
@@ -176,10 +174,14 @@ async function createUser(req, res) {
       countryCode,
     } = req.body || {};
 
-    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedEmail = String(email || "")
+      .trim()
+      .toLowerCase();
     const normalizedPassword = String(password || "");
     const normalizedFullName = fullName ? String(fullName).trim() : null;
-    const normalizedRole = String(role || "").trim().toUpperCase();
+    const normalizedRole = String(role || "")
+      .trim()
+      .toUpperCase();
 
     if (!normalizedEmail) {
       return res.status(400).json({ message: "email requis" });
@@ -249,14 +251,8 @@ async function createUser(req, res) {
 async function updateUser(req, res) {
   try {
     const { id } = req.params;
-    const {
-      email,
-      password,
-      fullName,
-      role,
-      actif,
-      countryCode,
-    } = req.body || {};
+    const { email, password, fullName, role, actif, countryCode } =
+      req.body || {};
 
     const existing = await prisma.adminUser.findUnique({
       where: { id },
@@ -270,7 +266,9 @@ async function updateUser(req, res) {
     const data = {};
 
     if (email !== undefined) {
-      const normalizedEmail = String(email || "").trim().toLowerCase();
+      const normalizedEmail = String(email || "")
+        .trim()
+        .toLowerCase();
       if (!normalizedEmail) {
         return res.status(400).json({ message: "email invalide" });
       }
@@ -282,7 +280,9 @@ async function updateUser(req, res) {
     }
 
     if (role !== undefined) {
-      const normalizedRole = String(role || "").trim().toUpperCase();
+      const normalizedRole = String(role || "")
+        .trim()
+        .toUpperCase();
       if (!normalizedRole) {
         return res.status(400).json({ message: "role invalide" });
       }
@@ -379,7 +379,9 @@ async function updateUserStatus(req, res) {
     return res.json(sanitizeUser(updated));
   } catch (e) {
     console.error("updateUserStatus error:", e);
-    return res.status(500).json({ message: "Erreur serveur (updateUserStatus)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (updateUserStatus)" });
   }
 }
 

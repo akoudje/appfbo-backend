@@ -1,7 +1,7 @@
 // src/middlewares/rbac.js
-// RBAC (Role-Based Access Control) middleware for Express.js
-// This middleware provides functions to enforce authentication, role-based access, permission checks, and country scope restrictions.
-// It allows parsing user information from custom headers for testing or integration purposes, and can be used in routes to protect resources based on user roles and permissions.
+// Middleware RBAC (contrôle d'accès basé sur les rôles) pour Express.js
+// Ce middleware fournit des fonctions permettant d'appliquer l'authentification, l'accès basé sur les rôles, les vérifications d'autorisation et les restrictions géographiques.
+// Il permet d'analyser les informations utilisateur à partir d'en-têtes personnalisés à des fins de test ou d'intégration, et peut être utilisé dans les routes pour protéger les ressources en fonction des rôles et des autorisations des utilisateurs.
 
 const jwt = require("jsonwebtoken");
 const { AdminRole, hasPermission } = require("../auth/permissions");
@@ -54,7 +54,10 @@ function parseUserFromHeaders(req) {
 
   const permissionsRaw = req.header("X-Admin-Permissions");
   const permissions = permissionsRaw
-    ? String(permissionsRaw).split(",").map((x) => x.trim()).filter(Boolean)
+    ? String(permissionsRaw)
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
     : undefined;
 
   return {
@@ -89,7 +92,8 @@ function requireRole(...roles) {
   return (req, res, next) => {
     const role = req.user?.role;
     if (!role) return res.status(401).json({ message: "Unauthorized" });
-    if (!allowed.has(role)) return res.status(403).json({ message: "Forbidden: role not allowed" });
+    if (!allowed.has(role))
+      return res.status(403).json({ message: "Forbidden: role not allowed" });
     return next();
   };
 }
@@ -105,7 +109,9 @@ function requirePermission(permission) {
       : false;
 
     if (!allowedByRole && !allowedByUserList) {
-      return res.status(403).json({ message: `Forbidden: missing permission ${permission}` });
+      return res
+        .status(403)
+        .json({ message: `Forbidden: missing permission ${permission}` });
     }
     return next();
   };
@@ -114,14 +120,27 @@ function requirePermission(permission) {
 function requireCountryScope(req, res, next) {
   const user = req.user;
   if (!user?.role) return res.status(401).json({ message: "Unauthorized" });
-  if (!req.country?.id) return res.status(400).json({ message: "Country required" });
+  if (!req.country?.id)
+    return res.status(400).json({ message: "Country required" });
 
-  if (user.role === AdminRole.SUPER_ADMIN) return next();
+  const globalRoles = new Set([AdminRole.SUPER_ADMIN, AdminRole.TECH_ADMIN]);
+
+  if (globalRoles.has(user.role)) {
+    return next();
+  }
 
   if (!user.countryId || user.countryId !== req.country.id) {
-    return res.status(403).json({ message: "Forbidden: country scope mismatch" });
+    return res
+      .status(403)
+      .json({ message: "Forbidden: country scope mismatch" });
   }
+
   return next();
 }
 
-module.exports = { requireAuth, requireRole, requirePermission, requireCountryScope };
+module.exports = {
+  requireAuth,
+  requireRole,
+  requirePermission,
+  requireCountryScope,
+};
