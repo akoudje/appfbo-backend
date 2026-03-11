@@ -16,6 +16,14 @@ const {
 } = require("../controllers/gradeDiscounts.controller");
 
 const {
+  listUsers,
+  getUserById,
+  createUser,
+  updateUser,
+  updateUserStatus,
+} = require("../controllers/users.controller");
+
+const {
   // orders
   listOrders,
   getOrderById,
@@ -138,6 +146,41 @@ router.put(
   requirePermission(Permission.DISCOUNT_WRITE),
   upsertGradeDiscounts
 );
+
+
+/**
+ * USERS
+ */
+router.get(
+  "/users",
+  requirePermission(Permission.COUNTRY_READ),
+  listUsers
+);
+
+router.get(
+  "/users/:id",
+  requirePermission(Permission.COUNTRY_READ),
+  getUserById
+);
+
+router.post(
+  "/users",
+  requirePermission(Permission.COUNTRY_WRITE),
+  createUser
+);
+
+router.put(
+  "/users/:id",
+  requirePermission(Permission.COUNTRY_WRITE),
+  updateUser
+);
+
+router.patch(
+  "/users/:id/status",
+  requirePermission(Permission.COUNTRY_WRITE),
+  updateUserStatus
+);
+
 
 /**
  * COUNTRY SETTINGS
