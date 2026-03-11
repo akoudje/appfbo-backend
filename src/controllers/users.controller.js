@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const prisma = require("../prisma");
 
 const SALT_ROUNDS = 10;
+const GLOBAL_ROLES = new Set(["SUPER_ADMIN", "TECH_ADMIN"]);
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
@@ -18,6 +19,10 @@ function normalizeBool(value) {
     if (v === "false") return false;
   }
   return null;
+}
+
+function isGlobalRole(role) {
+  return GLOBAL_ROLES.has(String(role || "").trim().toUpperCase());
 }
 
 async function resolveCountryIdFromCode(countryCode) {
@@ -89,11 +94,7 @@ async function listUsers(req, res) {
         return res.status(404).json({ message: "Pays introuvable" });
       }
       where.countryId = country.id;
-    } else if (
-      req.user?.role !== "SUPER_ADMIN" &&
-      req.user?.role !== "TECH_ADMIN" &&
-      req.country?.id
-    ) {
+    } else if (!isGlobalRole(req.user?.role) && req.country?.id) {
       where.countryId = req.country.id;
     }
 
@@ -103,7 +104,7 @@ async function listUsers(req, res) {
         where,
         skip,
         take: pageSize,
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }],
         include: {
           country: {
             select: {
@@ -153,6 +154,14 @@ async function getUserById(req, res) {
       return res.status(404).json({ message: "Utilisateur introuvable" });
     }
 
+    if (
+      !isGlobalRole(req.user?.role) &&
+      req.country?.id &&
+      user.countryId !== req.country.id
+    ) {
+      return res.status(403).json({ message: "Forbidden: country scope mismatch" });
+    }
+
     return res.json(sanitizeUser(user));
   } catch (e) {
     console.error("getUserById error:", e);
@@ -174,14 +183,10 @@ async function createUser(req, res) {
       countryCode,
     } = req.body || {};
 
-    const normalizedEmail = String(email || "")
-      .trim()
-      .toLowerCase();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
     const normalizedPassword = String(password || "");
     const normalizedFullName = fullName ? String(fullName).trim() : null;
-    const normalizedRole = String(role || "")
-      .trim()
-      .toUpperCase();
+    const normalizedRole = String(role || "").trim().toUpperCase();
 
     if (!normalizedEmail) {
       return res.status(400).json({ message: "email requis" });
@@ -201,7 +206,7 @@ async function createUser(req, res) {
       return res.status(400).json({ message: "role requis" });
     }
 
-    let resolvedCountryId = req.countryId || null;
+    let resolvedCountryId = null;
 
     if (countryCode && String(countryCode).trim()) {
       const country = await resolveCountryIdFromCode(countryCode);
@@ -209,6 +214,8 @@ async function createUser(req, res) {
         return res.status(404).json({ message: "Pays introuvable" });
       }
       resolvedCountryId = country.id;
+    } else if (!isGlobalRole(req.user?.role) && req.country?.id) {
+      resolvedCountryId = req.country.id;
     }
 
     const hashedPassword = await bcrypt.hash(normalizedPassword, SALT_ROUNDS);
@@ -251,24 +258,33 @@ async function createUser(req, res) {
 async function updateUser(req, res) {
   try {
     const { id } = req.params;
-    const { email, password, fullName, role, actif, countryCode } =
-      req.body || {};
+    const { email, password, fullName, role, actif, countryCode } = req.body || {};
 
     const existing = await prisma.adminUser.findUnique({
       where: { id },
-      select: { id: true },
+      include: {
+        country: {
+          select: { id: true, code: true, name: true },
+        },
+      },
     });
 
     if (!existing) {
       return res.status(404).json({ message: "Utilisateur introuvable" });
     }
 
+    if (
+      !isGlobalRole(req.user?.role) &&
+      req.country?.id &&
+      existing.countryId !== req.country.id
+    ) {
+      return res.status(403).json({ message: "Forbidden: country scope mismatch" });
+    }
+
     const data = {};
 
     if (email !== undefined) {
-      const normalizedEmail = String(email || "")
-        .trim()
-        .toLowerCase();
+      const normalizedEmail = String(email || "").trim().toLowerCase();
       if (!normalizedEmail) {
         return res.status(400).json({ message: "email invalide" });
       }
@@ -280,9 +296,7 @@ async function updateUser(req, res) {
     }
 
     if (role !== undefined) {
-      const normalizedRole = String(role || "")
-        .trim()
-        .toUpperCase();
+      const normalizedRole = String(role || "").trim().toUpperCase();
       if (!normalizedRole) {
         return res.status(400).json({ message: "role invalide" });
       }
@@ -355,11 +369,29 @@ async function updateUserStatus(req, res) {
 
     const existing = await prisma.adminUser.findUnique({
       where: { id },
-      select: { id: true },
+      include: {
+        country: {
+          select: { id: true, code: true, name: true },
+        },
+      },
     });
 
     if (!existing) {
       return res.status(404).json({ message: "Utilisateur introuvable" });
+    }
+
+    if (
+      !isGlobalRole(req.user?.role) &&
+      req.country?.id &&
+      existing.countryId !== req.country.id
+    ) {
+      return res.status(403).json({ message: "Forbidden: country scope mismatch" });
+    }
+
+    if (req.user?.id === id && actif === false) {
+      return res.status(400).json({
+        message: "Vous ne pouvez pas désactiver votre propre compte.",
+      });
     }
 
     const updated = await prisma.adminUser.update({
