@@ -1,5 +1,10 @@
 // prisma/schema.prisma
-// MVP Précommande FOREVER — React + Express + Postgres + Prisma
+// APP Précommande FOREVER — version révisée
+// Cible: React + Express + Postgres + Prisma
+// Inclut:
+// - moteur de paiement multi-provider
+// - répartition/assignation des précommandes aux facturiers
+// - workflow commande modernisé
 
 generator client {
   provider = "prisma-client-js"
@@ -10,11 +15,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// -------------------------------------------------------------------------------
+//
+// -----------------------------------------------------------------------------
 // ENUMS
-// -------------------------------------------------------------------------------
-
-// WHATSAPP----------------------------------
+// -----------------------------------------------------------------------------
+//
 
 enum OrderMessageChannel {
   WHATSAPP
@@ -51,22 +56,93 @@ enum DeliveryMode {
   LIVRAISON
 }
 
-enum PaymentMode {
+enum PaymentProvider {
   WAVE
   ORANGE_MONEY
-  ESPECES
-  OTHER
+  MTN_MOMO
+  MOOV_MONEY
+  MANUAL
+}
+
+enum PaymentMethodType {
+  MOBILE_MONEY
+  CASH
+  BANK_TRANSFER
+  CARD
+  MANUAL_PROOF
+}
+
+enum PaymentStatus {
+  INITIATED
+  PENDING_CUSTOMER_ACTION
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentAttemptStatus {
+  CREATED
+  PROVIDER_SESSION_CREATED
+  REDIRECT_READY
+  PENDING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+enum OrderPaymentStatus {
+  UNPAID
+  PAYMENT_PENDING
+  PAID
+  PARTIALLY_PAID
+  REFUNDED
+}
+
+enum ProviderAccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
 }
 
 enum PreorderStatus {
   DRAFT
   SUBMITTED
   INVOICED
-  PAYMENT_PROOF_RECEIVED
+  PAYMENT_PENDING
   PAID
   READY
   FULFILLED
   CANCELLED
+}
+
+enum BillingWorkStatus {
+  NONE
+  QUEUED
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_CUSTOMER_DATA
+  WAITING_PAYMENT
+  COMPLETED
+  RELEASED
+  ESCALATED
+}
+
+enum BillingPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
 }
 
 enum ProductCategory {
@@ -98,13 +174,25 @@ enum PreorderLogAction {
   SET_ITEMS
   REPRICE
   SUBMIT
+
+  ENQUEUE_BILLING
+  ASSIGN_INVOICER
+  RELEASE_INVOICER
+  START_BILLING
+  ESCALATE_BILLING
+  WAIT_CUSTOMER_DATA
+
   INVOICE
-  RECEIVE_PAYMENT_PROOF
-  VERIFY_PAYMENT
-  MARK_PAID
+  GENERATE_PAYMENT
+  PAYMENT_PENDING
+  RECEIVE_MANUAL_PAYMENT_PROOF
+  VALIDATE_MANUAL_PAYMENT
+  PAYMENT_CONFIRMED
+
   PREPARE
   FULFILL
   CANCEL
+
   STOCK_DEBIT
   STOCK_CREDIT
 }
@@ -120,9 +208,11 @@ enum StockMovementReason {
   MANUAL_ADJUSTMENT
 }
 
-// ------------------------------------------------------------------------------------
+//
+// -----------------------------------------------------------------------------
 // MODELS
-// ---------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//
 
 model OrderMessage {
   id String @id @default(cuid())
@@ -164,7 +254,8 @@ model OrderMessage {
 }
 
 model OrderMessageEvent {
-  id             String       @id @default(cuid())
+  id String @id @default(cuid())
+
   orderMessageId String
   orderMessage   OrderMessage @relation(fields: [orderMessageId], references: [id], onDelete: Cascade)
 
@@ -202,21 +293,30 @@ model Country {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  settings       CountrySettings?
-  products       Product[]
-  preorders      Preorder[]
-  gradeDiscounts GradeDiscount[]
-  adminUsers     AdminUser[]
-  fboCountries   FboCountry[]
+  settings                CountrySettings?
+  products                Product[]
+  preorders               Preorder[]
+  gradeDiscounts          GradeDiscount[]
+  adminUsers              AdminUser[]
+  fboCountries            FboCountry[]
+  payments                Payment[]
+  paymentProviderAccounts PaymentProviderAccount[]
+  paymentProviderRules    PaymentProviderRule[]
 }
 
 model CountrySettings {
-  id          String   @id @default(cuid())
-  countryId   String   @unique
-  country     Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
-  minCartFcfa Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String  @id @default(cuid())
+  countryId String  @unique
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  minCartFcfa Int @default(0)
+
+  // Paramètres opérationnels facturation
+  maxActiveBillingPerInvoicer Int @default(5)
+  billingClaimTimeoutMin      Int @default(15)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model AdminUser {
@@ -230,13 +330,16 @@ model AdminUser {
   countryId String?
   country   Country? @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
-  invoicedPreorders        Preorder[]      @relation("PreorderInvoicedBy")
-  proofReceivedPreorders   Preorder[]      @relation("PreorderProofReceivedBy")
-  paymentVerifiedPreorders Preorder[]      @relation("PreorderPaymentVerifiedBy")
-  preparedPreorders        Preorder[]      @relation("PreorderPreparedBy")
-  fulfilledPreorders       Preorder[]      @relation("PreorderFulfilledBy")
-  cancelledPreorders       Preorder[]      @relation("PreorderCancelledBy")
-  stockMovements           StockMovement[]
+  // Précommandes / workflow
+  assignedBillingPreorders        Preorder[] @relation("PreorderAssignedInvoicer")
+  invoicedPreorders               Preorder[] @relation("PreorderInvoicedBy")
+  manualPaymentValidatedPreorders Preorder[] @relation("PreorderManualPaymentValidatedBy")
+  preparedPreorders               Preorder[] @relation("PreorderPreparedBy")
+  fulfilledPreorders              Preorder[] @relation("PreorderFulfilledBy")
+  cancelledPreorders              Preorder[] @relation("PreorderCancelledBy")
+
+  stockMovements StockMovement[]
+  preorderLogs   PreorderLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -263,10 +366,11 @@ model FboCountry {
 }
 
 model Product {
-  id        String  @id @default(cuid())
-  sku       String  @unique
-  nom       String
-  imageUrl  String?
+  id       String  @id @default(cuid())
+  sku      String  @unique
+  nom      String
+  imageUrl String?
+
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
@@ -293,10 +397,12 @@ model Product {
 }
 
 model GradeDiscount {
-  id        String  @id @default(cuid())
+  id String @id @default(cuid())
+
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
-  grade     Grade
+
+  grade Grade
 
   discountPercent Decimal @db.Decimal(5, 2)
 
@@ -308,8 +414,11 @@ model GradeDiscount {
 }
 
 model Preorder {
-  id     String         @id @default(cuid())
-  status PreorderStatus @default(DRAFT)
+  id String @id @default(cuid())
+
+  // Workflow global commande
+  status        PreorderStatus     @default(DRAFT)
+  paymentStatus OrderPaymentStatus @default(UNPAID)
 
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
@@ -317,20 +426,75 @@ model Preorder {
   fboId String
   fbo   Fbo    @relation(fields: [fboId], references: [id], onDelete: Restrict)
 
+  // Snapshot FBO
   fboNumero     String
   fboNomComplet String
   fboGrade      Grade
   pointDeVente  String
 
-  paymentMode  PaymentMode?
+  // Livraison
   deliveryMode DeliveryMode?
 
+  // Totaux
   totalCc            Decimal @default(0.000) @db.Decimal(12, 3)
   totalPoidsKg       Decimal @default(0.000) @db.Decimal(12, 3)
   totalProduitsFcfa  Int     @default(0)
   fraisLivraisonFcfa Int     @default(0)
   totalFcfa          Int     @default(0)
 
+  // File / répartition facturiers
+  billingWorkStatus     BillingWorkStatus @default(NONE)
+  billingPriority       BillingPriority   @default(NORMAL)
+  billingQueueEnteredAt DateTime?
+  assignedAt            DateTime?
+  billingStartedAt      DateTime?
+  billingLastActivityAt DateTime?
+  billingCompletedAt    DateTime?
+  billingReleasedAt     DateTime?
+  billingEscalatedAt    DateTime?
+  billingSlaDeadlineAt  DateTime?
+
+  assignedInvoicerId String?
+  assignedInvoicer   AdminUser? @relation("PreorderAssignedInvoicer", fields: [assignedInvoicerId], references: [id], onDelete: SetNull)
+
+  // Facturation
+  factureReference  String?
+  factureWhatsappTo String?
+  invoicedAt        DateTime?
+  invoicedById      String?
+  invoicedByAdmin   AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
+
+  // Paiement manuel (cas spécifique)
+  manualPaymentReference     String?
+  manualPaymentProofUrl      String?
+  manualPaymentProofNote     String?    @db.Text
+  manualPaymentReceivedAt    DateTime?
+  manualPaymentValidatedAt   DateTime?
+  manualPaymentValidatedById String?
+  manualPaymentValidatedBy   AdminUser? @relation("PreorderManualPaymentValidatedBy", fields: [manualPaymentValidatedById], references: [id], onDelete: SetNull)
+
+  // Paiement global
+  paymentProvider PaymentProvider?
+  paidAt          DateTime?
+
+  // Paiement actif (facilite les écrans)
+  activePaymentId String?
+  activePayment   Payment? @relation("ActivePayment", fields: [activePaymentId], references: [id], onDelete: SetNull)
+
+  // Préparation / fulfillment
+  preparedAt  DateTime?
+  fulfilledAt DateTime?
+  cancelledAt DateTime?
+
+  preparedById  String?
+  fulfilledById String?
+  cancelledById String?
+
+  preparedByAdmin  AdminUser? @relation("PreorderPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
+  fulfilledByAdmin AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
+  cancelledByAdmin AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  // Divers
   whatsappMessage       String?   @db.Text
   lastWhatsappMessageId String?
   lastWhatsappStatus    String?
@@ -339,54 +503,14 @@ model Preorder {
   paymentLinkClickedAt  DateTime?
   paymentLinkClickCount Int       @default(0)
 
-  messages OrderMessage[]
-
-  factureReference  String?
-  factureWhatsappTo String?
-
-  paymentLink String?
-
-  paymentProofUrl  String?
-  paymentRef       String?
-  paymentProofNote String? @db.Text
-
   internalNote String? @db.Text
-
-  invoicedAt        DateTime?
-  proofReceivedAt   DateTime?
-  paymentVerifiedAt DateTime?
-  paidAt            DateTime?
-  preparedAt        DateTime?
-  fulfilledAt       DateTime?
-  cancelledAt       DateTime?
-
-  stockDeductedAt DateTime?
-  stockRestoredAt DateTime?
-
-  invoicedBy        String?
-  proofReceivedBy   String?
-  paymentVerifiedBy String?
-  preparedBy        String?
-  fulfilledBy       String?
-  cancelledBy       String?
-
-  invoicedById        String?
-  proofReceivedById   String?
-  paymentVerifiedById String?
-  preparedById        String?
-  fulfilledById       String?
-  cancelledById       String?
-
-  invoicedByAdmin        AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
-  proofReceivedByAdmin   AdminUser? @relation("PreorderProofReceivedBy", fields: [proofReceivedById], references: [id], onDelete: SetNull)
-  paymentVerifiedByAdmin AdminUser? @relation("PreorderPaymentVerifiedBy", fields: [paymentVerifiedById], references: [id], onDelete: SetNull)
-  preparedByAdmin        AdminUser? @relation("PreorderPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
-  fulfilledByAdmin       AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
-  cancelledByAdmin       AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
 
   deliveryTracking String?
   packingNote      String? @db.Text
   cancelReason     String? @db.Text
+
+  stockDeductedAt DateTime?
+  stockRestoredAt DateTime?
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -394,19 +518,25 @@ model Preorder {
 
   items          PreorderItem[]
   logs           PreorderLog[]
+  messages       OrderMessage[]
+  payments       Payment[]       @relation("PreorderPayments")
   stockMovements StockMovement[]
 
   @@index([status, createdAt])
   @@index([countryId, status, createdAt])
+  @@index([paymentStatus, createdAt])
   @@index([fboId])
   @@index([pointDeVente])
+  @@index([billingWorkStatus, billingPriority, billingQueueEnteredAt])
+  @@index([assignedInvoicerId, billingWorkStatus])
+  @@index([billingSlaDeadlineAt])
   @@index([invoicedById])
-  @@index([proofReceivedById])
-  @@index([paymentVerifiedById])
+  @@index([manualPaymentValidatedById])
   @@index([preparedById])
   @@index([fulfilledById])
   @@index([cancelledById])
   @@index([factureReference])
+  @@index([activePaymentId])
 }
 
 model PreorderItem {
@@ -442,7 +572,8 @@ model PreorderItem {
 }
 
 model PreorderLog {
-  id         String   @id @default(cuid())
+  id String @id @default(cuid())
+
   preorderId String
   preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
@@ -450,9 +581,13 @@ model PreorderLog {
   note   String?           @db.Text
   meta   Json?
 
+  actorAdminId String?
+  actorAdmin   AdminUser? @relation(fields: [actorAdminId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
 
   @@index([preorderId, createdAt])
+  @@index([actorAdminId])
 }
 
 model StockMovement {
@@ -481,4 +616,185 @@ model StockMovement {
   @@index([preorderId])
   @@index([reason, createdAt])
   @@index([createdById])
+}
+
+//
+// -----------------------------------------------------------------------------
+// PAIEMENTS
+// -----------------------------------------------------------------------------
+//
+
+model Payment {
+  id String @id @default(cuid())
+
+  preorderId String
+  preorder   Preorder @relation("PreorderPayments", fields: [preorderId], references: [id], onDelete: Cascade)
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  provider   PaymentProvider
+  methodType PaymentMethodType
+  status     PaymentStatus     @default(INITIATED)
+
+  amountExpectedFcfa Int
+  amountPaidFcfa     Int    @default(0)
+  currencyCode       String @default("XOF") @db.VarChar(3)
+
+  providerAccountId String?
+  providerAccount   PaymentProviderAccount? @relation(fields: [providerAccountId], references: [id], onDelete: SetNull)
+
+  lastAttemptId String?
+
+  providerReference String?
+  providerTxnId     String?
+  clientReference   String?
+
+  initiatedAt DateTime  @default(now())
+  paidAt      DateTime?
+  failedAt    DateTime?
+  cancelledAt DateTime?
+  expiredAt   DateTime?
+  refundedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attempts           PaymentAttempt[]
+  refunds            PaymentRefund[]
+  activeForPreorders Preorder[]       @relation("ActivePayment")
+
+  @@unique([provider, providerTxnId])
+  @@unique([provider, clientReference])
+  @@index([preorderId])
+  @@index([countryId, provider, status])
+  @@index([providerAccountId])
+  @@index([lastAttemptId])
+}
+
+model PaymentAttempt {
+  id String @id @default(cuid())
+
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  provider PaymentProvider
+  status   PaymentAttemptStatus @default(CREATED)
+
+  providerSessionId     String?
+  providerTransactionId String?
+
+  checkoutUrl       String?
+  deepLink          String?
+  providerLaunchUrl String?
+  qrPayload         String?
+
+  requestPayloadJson    Json?
+  responsePayloadJson   Json?
+  normalizedPayloadJson Json?
+
+  failureCode    String?
+  failureMessage String? @db.Text
+
+  expiresAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerTransactionId])
+  @@index([paymentId, createdAt])
+  @@index([provider, providerSessionId])
+}
+
+model PaymentProviderAccount {
+  id String @id @default(cuid())
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  provider PaymentProvider
+  label    String
+  status   ProviderAccountStatus @default(ACTIVE)
+
+  merchantIdentifier String?
+  apiBaseUrl         String? @default("https://api.wave.com")
+  configEncrypted    String  @db.Text
+
+  supportsCheckout Boolean @default(true)
+  supportsWebhook  Boolean @default(true)
+  supportsRefund   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments Payment[]
+  rules    PaymentProviderRule[]
+
+  @@index([countryId, provider, status])
+}
+
+model PaymentProviderRule {
+  id String @id @default(cuid())
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  methodType PaymentMethodType
+  provider   PaymentProvider
+
+  providerAccountId String?
+  providerAccount   PaymentProviderAccount? @relation(fields: [providerAccountId], references: [id], onDelete: SetNull)
+
+  priority  Int     @default(100)
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, methodType, isActive, priority])
+  @@index([providerAccountId])
+}
+
+model PaymentWebhookEvent {
+  id String @id @default(cuid())
+
+  provider        PaymentProvider
+  providerEventId String?
+  eventType       String?
+
+  signatureValid   Boolean                 @default(false)
+  processingStatus WebhookProcessingStatus @default(RECEIVED)
+
+  requestHeadersJson Json?
+  payloadJson        Json
+  errorMessage       String? @db.Text
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@unique([provider, providerEventId])
+  @@index([provider, processingStatus, receivedAt])
+}
+
+model PaymentRefund {
+  id String @id @default(cuid())
+
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  provider PaymentProvider
+
+  amountFcfa        Int
+  currencyCode      String  @default("XOF") @db.VarChar(3)
+  providerRefundRef String?
+
+  status PaymentStatus @default(PROCESSING)
+  reason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentId])
 }

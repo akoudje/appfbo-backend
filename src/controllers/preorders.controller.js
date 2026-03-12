@@ -5,6 +5,7 @@
 // 3) getSummary : récapitulatif de la précommande avant validation (calcul des totaux, message WhatsApp, etc.)
 // 4) submit : validation finale qui fige les totaux, génère le message WhatsApp, change le statut en SUBMITTED
 
+
 const prisma = require("../prisma");
 const {
   computePreorderTotals,
@@ -18,8 +19,6 @@ const {
 
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 
-
-
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
 function isNonEmptyString(v) {
@@ -30,7 +29,6 @@ function normalizeNumeroFbo(v) {
   return String(v || "").trim();
 }
 
-// ETAPE 1: créer draft
 async function createDraft(req, res) {
   try {
     const {
@@ -38,7 +36,6 @@ async function createDraft(req, res) {
       nomComplet,
       grade,
       pointDeVente,
-      paymentMode = null,
       deliveryMode = null,
     } = req.body || {};
 
@@ -57,22 +54,11 @@ async function createDraft(req, res) {
     const normalizedNomComplet = String(nomComplet).trim();
     const normalizedPointDeVente = String(pointDeVente).trim();
 
-    const normalizedGrade = String(grade || "")
-      .trim()
-      .toUpperCase();
+    const normalizedGrade = String(grade || "").trim().toUpperCase();
 
-    const normalizedPaymentMode = paymentMode
-      ? String(paymentMode).trim().toUpperCase()
-      : null;
-
-    let normalizedDeliveryMode = deliveryMode
+    const normalizedDeliveryMode = deliveryMode
       ? String(deliveryMode).trim().toUpperCase()
       : null;
-
-    // ✅ Règle métier : paiement espèces => retrait obligatoire
-    if (normalizedPaymentMode === "ESPECES") {
-      normalizedDeliveryMode = "RETRAIT_SITE_FLP";
-    }
 
     const fbo = await prisma.fbo.upsert({
       where: { numeroFbo: normalizedNumeroFbo },
@@ -97,9 +83,10 @@ async function createDraft(req, res) {
           fboNomComplet: fbo.nomComplet,
           fboGrade: fbo.grade,
           pointDeVente: fbo.pointDeVente,
-          paymentMode: normalizedPaymentMode,
           deliveryMode: normalizedDeliveryMode,
           status: "DRAFT",
+          billingWorkStatus: "NONE",
+          paymentStatus: "UNPAID",
         }),
       });
 
@@ -111,7 +98,6 @@ async function createDraft(req, res) {
           meta: {
             fboId: fbo.id,
             numeroFbo: fbo.numeroFbo,
-            paymentMode: normalizedPaymentMode,
             deliveryMode: normalizedDeliveryMode,
           },
         },
@@ -125,7 +111,7 @@ async function createDraft(req, res) {
     return res.status(500).json({ error: e.message || "Erreur createDraft" });
   }
 }
-// ETAPE 3: get catalog (affiche le catalogue avec les prix catalogue et les remises potentielles selon le grade FBO)
+
 async function getCatalog(req, res) {
   const preorderId = req.params.id;
   const countryId = req.country.id;
@@ -146,7 +132,6 @@ async function getCatalog(req, res) {
   }
 }
 
-// ETAPE 2: set items (remplace le panier)
 async function setItems(req, res) {
   try {
     const preorderId = req.params.id;
@@ -229,9 +214,7 @@ async function setItems(req, res) {
         where: { id: preorderId },
         data: {
           totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
-          totalPoidsKg: String(
-            Number(summary.totals.totalPoidsKg || 0).toFixed(3),
-          ),
+          totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
@@ -261,7 +244,6 @@ async function setItems(req, res) {
   }
 }
 
-// ETAPE 3: summary (récap avant validation)
 async function getSummary(req, res) {
   const preorderId = req.params.id;
   const countryId = req.country.id;
@@ -282,11 +264,9 @@ async function getSummary(req, res) {
     }
 
     if (
-      [
-        "PRODUCT_COUNTRY_MISMATCH",
-        "PRODUCT_NOT_FOUND",
-        "PRODUCT_INACTIVE",
-      ].includes(String(e.message))
+      ["PRODUCT_COUNTRY_MISMATCH", "PRODUCT_NOT_FOUND", "PRODUCT_INACTIVE"].includes(
+        String(e.message),
+      )
     ) {
       return res.status(400).json({
         error: "Un ou plusieurs produits du panier sont invalides.",
@@ -297,8 +277,6 @@ async function getSummary(req, res) {
   }
 }
 
-// SUBMIT: fige lignes + totaux + message WhatsApp + statut SUBMITTED
-// IMPORTANT: NE DECREMENTE PAS LE STOCK ICI
 async function submit(req, res) {
   const preorderId = req.params.id;
   const { whatsappTo } = req.body || {};
@@ -322,35 +300,21 @@ async function submit(req, res) {
     }
 
     if (!preorder.items || preorder.items.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Panier vide. Ajoute au moins 1 article." });
-    }
-
-    if (!preorder.paymentMode) {
-      return res
-        .status(400)
-        .json({ error: "Le mode de paiement est obligatoire." });
+      return res.status(400).json({ error: "Panier vide. Ajoute au moins 1 article." });
     }
 
     if (!preorder.deliveryMode) {
-      return res
-        .status(400)
-        .json({ error: "Le mode de livraison est obligatoire." });
+      return res.status(400).json({ error: "Le mode de livraison est obligatoire." });
     }
 
     if (!isNonEmptyString(preorder.fboNumero) || !preorder.fboGrade) {
-      return res
-        .status(400)
-        .json({ error: "Les informations FBO sont incomplètes." });
+      return res.status(400).json({ error: "Les informations FBO sont incomplètes." });
     }
 
     const summary = await computePreorderTotals(preorderId, countryId);
 
     if (!summary.items || summary.items.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Panier vide. Ajoute au moins 1 article." });
+      return res.status(400).json({ error: "Panier vide. Ajoute au moins 1 article." });
     }
 
     const minCartFcfa = preorder.country?.settings?.minCartFcfa || 0;
@@ -359,6 +323,10 @@ async function submit(req, res) {
         error: `Montant minimum non atteint. Minimum requis: ${minCartFcfa} FCFA.`,
       });
     }
+
+    const timeoutMin = preorder.country?.settings?.billingClaimTimeoutMin || 15;
+    const now = new Date();
+    const sla = new Date(now.getTime() + timeoutMin * 60 * 1000);
 
     const message = buildPreorderWhatsAppMessage({
       preorder: summary.preorder,
@@ -384,23 +352,14 @@ async function submit(req, res) {
           data: {
             productSkuSnapshot: it.sku || null,
             productNameSnapshot: it.nom || null,
-
             prixCatalogueFcfa:
-              it.prixCatalogueFcfa != null
-                ? it.prixCatalogueFcfa
-                : it.prixUnitaireFcfa,
-
+              it.prixCatalogueFcfa != null ? it.prixCatalogueFcfa : it.prixUnitaireFcfa,
             discountPercent: String(
-              Number(
-                it.discountPercent != null ? it.discountPercent : 0,
-              ).toFixed(2),
+              Number(it.discountPercent != null ? it.discountPercent : 0).toFixed(2),
             ),
-
             prixUnitaireFcfa: it.prixUnitaireFcfa,
-
             ccUnitaire: String(Number(it.ccUnitaire || 0).toFixed(3)),
             poidsUnitaireKg: String(Number(it.poidsUnitaireKg || 0).toFixed(3)),
-
             lineTotalFcfa: it.lineTotalFcfa,
             lineTotalCc: String(Number(it.lineTotalCc || 0).toFixed(3)),
             lineTotalPoids: String(Number(it.lineTotalPoids || 0).toFixed(3)),
@@ -412,16 +371,18 @@ async function submit(req, res) {
         where: { id: preorderId },
         data: {
           status: "SUBMITTED",
+          paymentStatus: "UNPAID",
+          billingWorkStatus: "QUEUED",
+          billingQueueEnteredAt: now,
+          billingSlaDeadlineAt: sla,
           totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
-          totalPoidsKg: String(
-            Number(summary.totals.totalPoidsKg || 0).toFixed(3),
-          ),
+          totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
           whatsappMessage: message,
           factureWhatsappTo: chosen,
-          submittedAt: new Date(),
+          submittedAt: now,
         },
       });
 
@@ -437,11 +398,24 @@ async function submit(req, res) {
           },
         },
       });
+
+      await tx.preorderLog.create({
+        data: {
+          preorderId,
+          action: "ENQUEUE_BILLING",
+          note: "Précommande ajoutée à la file de facturation",
+          meta: {
+            billingWorkStatus: "QUEUED",
+            billingSlaDeadlineAt: sla.toISOString(),
+          },
+        },
+      });
     });
 
     return res.json({
       preorderId,
       status: "SUBMITTED",
+      billingWorkStatus: "QUEUED",
       totals: summary.totals,
       whatsappMessage: message,
       billing: links,

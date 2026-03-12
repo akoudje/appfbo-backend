@@ -1,15 +1,18 @@
 // src/controllers/admin.controller.js (CommonJS)
+// Contrôleurs admin — version alignée sur le nouveau schéma
+// - workflow commande modernisé
+// - paiement manuel compatible nouveau modèle
+// - répartition facturiers / lecture des nouveaux champs
+// - webhook PayDunya désactivé (migration vers moteur paiement générique)
 
 const { ProductCategory } = require("@prisma/client");
 const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
 const prisma = require("../prisma");
 
-// const { buildPaymentWhatsAppMessage } = require("../services/whatsapp.service");
-
 const {
   invoiceAndSendPreorder,
-} = require("../services/invoiceAndSendPreorder.service");
+} = require("../services/orders/invoiceAndSendPreorder.service");
 
 const {
   scopeWhere,
@@ -77,7 +80,6 @@ function parseEnumSafe(input, enumObj, fallback) {
 
   const raw = String(input).trim();
 
-  // si déjà exact
   const values = new Set(Object.values(enumObj));
   if (values.has(raw)) return raw;
 
@@ -111,9 +113,9 @@ const upload = multer({
 
 const ALLOWED = {
   DRAFT: ["CANCELLED"],
-  SUBMITTED: ["INVOICED", "PAID", "CANCELLED"], // PAID via cash
-  INVOICED: ["PAYMENT_PROOF_RECEIVED", "PAID", "CANCELLED"], // PAID via cash
-  PAYMENT_PROOF_RECEIVED: ["PAID", "CANCELLED"],
+  SUBMITTED: ["INVOICED", "CANCELLED"],
+  INVOICED: ["PAYMENT_PENDING", "PAID", "CANCELLED"],
+  PAYMENT_PENDING: ["PAID", "CANCELLED"],
   PAID: ["READY", "CANCELLED"],
   READY: ["FULFILLED", "CANCELLED"],
   FULFILLED: [],
@@ -129,19 +131,20 @@ function assertTransition(from, to) {
   }
 }
 
-async function addLogTx(tx, preorderId, action, note, meta) {
+async function addLogTx(tx, preorderId, action, note, meta, actorAdminId = null) {
   await tx.preorderLog.create({
     data: {
       preorderId,
       action,
       note: note || null,
       meta: meta || undefined,
+      actorAdminId: actorAdminId || null,
     },
   });
 }
 
 function actorLabel(req) {
-  return req.user?.email || req.user?.id || req.user?.role || "admin";
+  return req.user?.fullName || req.user?.email || req.user?.id || req.user?.role || "admin";
 }
 
 /**
@@ -156,6 +159,10 @@ async function listOrders(req, res) {
       dateTo,
       sort = "createdAt",
       dir = "desc",
+      paymentStatus,
+      billingWorkStatus,
+      assignedOnly,
+      invoicerId,
     } = req.query;
 
     const page = Math.max(1, parseIntSafe(req.query.page, 1));
@@ -173,6 +180,16 @@ async function listOrders(req, res) {
     }
 
     if (status) where.status = status;
+    if (paymentStatus) where.paymentStatus = paymentStatus;
+    if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
+
+    if (String(assignedOnly) === "true") {
+      where.assignedInvoicerId = { not: null };
+    }
+
+    if (invoicerId && String(invoicerId).trim()) {
+      where.assignedInvoicerId = String(invoicerId).trim();
+    }
 
     if (q && String(q).trim()) {
       const qs = String(q).trim();
@@ -206,15 +223,29 @@ async function listOrders(req, res) {
         select: {
           id: true,
           status: true,
+          paymentStatus: true,
+          paymentProvider: true,
           totalFcfa: true,
           fboGrade: true,
           fboNumero: true,
           fboNomComplet: true,
           pointDeVente: true,
-          paymentMode: true,
           deliveryMode: true,
           factureReference: true,
+          billingWorkStatus: true,
+          billingPriority: true,
+          billingQueueEnteredAt: true,
+          assignedAt: true,
+          billingSlaDeadlineAt: true,
           createdAt: true,
+          assignedInvoicerId: true,
+          assignedInvoicer: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+            },
+          },
           _count: { select: { items: true } },
         },
       }),
@@ -251,12 +282,67 @@ async function getOrderById(req, res) {
             orderBy: { createdAt: "asc" },
           },
           fbo: true,
-          logs: { orderBy: { createdAt: "desc" } },
+          assignedInvoicer: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          invoicedByAdmin: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          manualPaymentValidatedBy: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          preparedByAdmin: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          fulfilledByAdmin: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          cancelledByAdmin: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          activePayment: {
+            include: {
+              attempts: {
+                orderBy: { createdAt: "desc" },
+              },
+              refunds: {
+                orderBy: { createdAt: "desc" },
+              },
+            },
+          },
+          payments: {
+            include: {
+              attempts: {
+                orderBy: { createdAt: "desc" },
+              },
+              refunds: {
+                orderBy: { createdAt: "desc" },
+              },
+            },
+            orderBy: { createdAt: "desc" },
+          },
+          logs: {
+            orderBy: { createdAt: "desc" },
+            include: {
+              actorAdmin: {
+                select: { id: true, fullName: true, email: true, role: true },
+              },
+            },
+          },
           stockMovements: {
             orderBy: { createdAt: "desc" },
             include: {
               product: { select: { id: true, sku: true, nom: true } },
+              createdByAdmin: {
+                select: { id: true, fullName: true, email: true, role: true },
+              },
             },
+          },
+          messages: {
+            include: {
+              events: { orderBy: { createdAt: "desc" } },
+            },
+            orderBy: { createdAt: "desc" },
           },
         },
       },
@@ -275,7 +361,7 @@ async function getOrderById(req, res) {
 
 /**
  * PATCH /api/admin/orders/:id/status
- * Déconseillé en prod métier. Garde-le seulement si nécessaire en interne.
+ * Désactivé au profit des endpoints métier
  */
 async function updateOrderStatus(req, res) {
   return res.status(400).json({
@@ -286,20 +372,14 @@ async function updateOrderStatus(req, res) {
 
 /**
  * POST /api/admin/orders/:id/invoice
- * SUBMITTED -> INVOICED + création OrderMessage + tentative d'envoi WhatsApp
+ * SUBMITTED -> INVOICED
  */
 async function invoiceOrder(req, res) {
   try {
     const { id } = req.params;
     const { factureReference, whatsappTo, note } = req.body || {};
 
-    const actorName =
-      req.user?.fullName ||
-      req.user?.email ||
-      req.user?.id ||
-      req.user?.role ||
-      "admin";
-
+    const actorName = actorLabel(req);
     const actorAdminId = req.user?.id || null;
 
     const result = await invoiceAndSendPreorder({
@@ -338,217 +418,9 @@ async function invoiceOrder(req, res) {
 }
 
 /**
- * POST /api/admin/orders/:id/proof
- * INVOICED -> PAYMENT_PROOF_RECEIVED
+ * POST /api/admin/orders/:id/manual-payment-pending
+ * INVOICED -> PAYMENT_PENDING
  */
-async function markPaymentProof(req, res) {
-  try {
-    const { id } = req.params;
-    const { paymentProofUrl, paymentRef, note } = req.body || {};
-
-    const order = await prisma.preorder.findFirst({
-      where: scopeWhere(req, { id }),
-    });
-
-    if (!order) {
-      return res.status(404).json({ message: "Commande introuvable" });
-    }
-
-    if (order.paymentMode === "ESPECES") {
-      return res.status(400).json({
-        message:
-          "Preuve de paiement non applicable au mode ESPECES. Utiliser /pay.",
-      });
-    }
-
-    if (
-      ["PAYMENT_PROOF_RECEIVED", "PAID", "READY", "FULFILLED"].includes(
-        order.status,
-      )
-    ) {
-      return res.json({
-        ok: true,
-        alreadyDone: true,
-        status: order.status,
-        order,
-      });
-    }
-
-    assertTransition(order.status, "PAYMENT_PROOF_RECEIVED");
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const saved = await tx.preorder.update({
-        where: { id: order.id },
-        data: {
-          status: "PAYMENT_PROOF_RECEIVED",
-          paymentProofUrl: paymentProofUrl
-            ? String(paymentProofUrl).trim()
-            : order.paymentProofUrl,
-          paymentRef: paymentRef ? String(paymentRef).trim() : order.paymentRef,
-          paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
-          proofReceivedAt: order.proofReceivedAt || new Date(),
-          proofReceivedBy: order.proofReceivedBy || actorLabel(req),
-          proofReceivedById: order.proofReceivedById || req.user?.id || null,
-        },
-      });
-
-      await addLogTx(tx, id, "RECEIVE_PAYMENT_PROOF", note || "Preuve reçue", {
-        fromStatus: order.status,
-        toStatus: "PAYMENT_PROOF_RECEIVED",
-        paymentRef: saved.paymentRef,
-      });
-
-      return saved;
-    });
-
-    return res.json(updated);
-  } catch (e) {
-    console.error("markPaymentProof error:", e);
-    return res
-      .status(e.statusCode || 500)
-      .json({ message: e.message || "Erreur serveur (markPaymentProof)" });
-  }
-}
-
-/**
- * POST /api/admin/orders/:id/verify-payment
- * PAYMENT_PROOF_RECEIVED -> PAID
- */
-async function verifyPayment(req, res) {
-  try {
-    const { id } = req.params;
-    const { note } = req.body || {};
-
-    const order = await prisma.preorder.findFirst({
-      where: scopeWhere(req, { id }),
-    });
-
-    if (!order) {
-      return res.status(404).json({ message: "Commande introuvable" });
-    }
-
-    if (order.paymentMode === "ESPECES") {
-      return res.status(400).json({
-        message:
-          "Validation électronique non applicable à ESPECES. Utiliser /pay.",
-      });
-    }
-
-    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
-      return res.json({
-        ok: true,
-        alreadyDone: true,
-        status: order.status,
-        order,
-      });
-    }
-
-    assertTransition(order.status, "PAID");
-
-    const now = new Date();
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const saved = await tx.preorder.update({
-        where: { id: order.id },
-        data: {
-          status: "PAID",
-          paymentVerifiedAt: order.paymentVerifiedAt || now,
-          paidAt: order.paidAt || now,
-          paymentProofNote: note ? String(note).trim() : order.paymentProofNote,
-          paymentVerifiedBy: order.paymentVerifiedBy || actorLabel(req),
-          paymentVerifiedById:
-            order.paymentVerifiedById || req.user?.id || null,
-        },
-      });
-
-      await addLogTx(tx, id, "VERIFY_PAYMENT", note || "Paiement vérifié", {
-        fromStatus: order.status,
-        toStatus: "PAID",
-      });
-
-      return saved;
-    });
-
-    return res.json(updated);
-  } catch (e) {
-    console.error("verifyPayment error:", e);
-    return res
-      .status(e.statusCode || 500)
-      .json({ message: e.message || "Erreur serveur (verifyPayment)" });
-  }
-}
-
-/**
- * POST /api/admin/orders/:id/pay
- * Encaissement ESPECES (SUBMITTED|INVOICED -> PAID)
- */
-async function payOrder(req, res) {
-  try {
-    const { id } = req.params;
-    const { note } = req.body || {};
-
-    const order = await prisma.preorder.findFirst({
-      where: scopeWhere(req, { id }),
-    });
-
-    if (!order) {
-      return res.status(404).json({ message: "Commande introuvable" });
-    }
-
-    if (order.paymentMode !== "ESPECES") {
-      return res.status(400).json({
-        message:
-          "Paiement direct autorisé uniquement pour ESPECES. Utiliser /verify-payment pour les paiements électroniques.",
-      });
-    }
-
-    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
-      return res.json({
-        ok: true,
-        alreadyDone: true,
-        status: order.status,
-        order,
-      });
-    }
-
-    const allowedFrom = ["SUBMITTED", "INVOICED"];
-    if (!allowedFrom.includes(order.status)) {
-      return res.status(400).json({
-        message: `Transition invalide ${order.status} -> PAID (espèces)`,
-      });
-    }
-
-    const now = new Date();
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const saved = await tx.preorder.update({
-        where: { id: order.id },
-        data: {
-          status: "PAID",
-          paymentVerifiedAt: order.paymentVerifiedAt || now,
-          paidAt: order.paidAt || now,
-          paymentVerifiedBy: order.paymentVerifiedBy || actorLabel(req),
-          paymentVerifiedById:
-            order.paymentVerifiedById || req.user?.id || null,
-          internalNote: note ? String(note).trim() : order.internalNote,
-        },
-      });
-
-      await addLogTx(tx, id, "MARK_PAID", note || "Paiement espèces encaissé", {
-        fromStatus: order.status,
-        toStatus: "PAID",
-        paymentMode: order.paymentMode,
-      });
-
-      return saved;
-    });
-
-    return res.json(updated);
-  } catch (e) {
-    console.error("payOrder error:", e);
-    return res.status(500).json({ message: "Erreur serveur (payOrder)" });
-  }
-}
 
 /**
  * POST /api/admin/orders/:id/prepare
@@ -660,17 +532,23 @@ async function prepareOrder(req, res) {
           packingNote: packingNote
             ? String(packingNote).trim()
             : order.packingNote,
-          preparedBy: order.preparedBy || actorLabel(req),
           preparedById: order.preparedById || req.user?.id || null,
           stockDeductedAt: order.stockDeductedAt || now,
         },
       });
 
-      await addLogTx(tx, id, "PREPARE", packingNote || "Colis prêt", {
-        fromStatus: order.status,
-        toStatus: "READY",
-        stockDeducted: true,
-      });
+      await addLogTx(
+        tx,
+        id,
+        "PREPARE",
+        packingNote || "Colis prêt",
+        {
+          fromStatus: order.status,
+          toStatus: "READY",
+          stockDeducted: true,
+        },
+        req.user?.id || null,
+      );
 
       return saved;
     });
@@ -722,16 +600,22 @@ async function fulfillOrder(req, res) {
             ? String(deliveryTracking).trim()
             : order.deliveryTracking,
           internalNote: note ? String(note).trim() : order.internalNote,
-          fulfilledBy: order.fulfilledBy || actorLabel(req),
           fulfilledById: order.fulfilledById || req.user?.id || null,
         },
       });
 
-      await addLogTx(tx, id, "FULFILL", note || "Commande clôturée", {
-        fromStatus: order.status,
-        toStatus: "FULFILLED",
-        deliveryTracking: saved.deliveryTracking,
-      });
+      await addLogTx(
+        tx,
+        id,
+        "FULFILL",
+        note || "Commande clôturée",
+        {
+          fromStatus: order.status,
+          toStatus: "FULFILLED",
+          deliveryTracking: saved.deliveryTracking,
+        },
+        req.user?.id || null,
+      );
 
       return saved;
     });
@@ -779,9 +663,10 @@ async function listOrderMessages(req, res) {
     });
   }
 }
+
 /**
  * POST /api/admin/orders/:id/cancel
- * DRAFT|SUBMITTED|INVOICED|PAYMENT_PROOF_RECEIVED|PAID|READY -> CANCELLED
+ * DRAFT|SUBMITTED|INVOICED|PAYMENT_PENDING|PAID|READY -> CANCELLED
  * Si stock déjà sorti, rollback stock
  */
 async function cancelOrder(req, res) {
@@ -860,7 +745,6 @@ async function cancelOrder(req, res) {
           status: "CANCELLED",
           cancelledAt: order.cancelledAt || now,
           cancelReason,
-          cancelledBy: order.cancelledBy || actorLabel(req),
           cancelledById: order.cancelledById || req.user?.id || null,
           stockRestoredAt:
             mustRollbackStock && !order.stockRestoredAt
@@ -869,11 +753,18 @@ async function cancelOrder(req, res) {
         },
       });
 
-      await addLogTx(tx, id, "CANCEL", cancelReason, {
-        fromStatus: order.status,
-        toStatus: "CANCELLED",
-        stockRollback: mustRollbackStock,
-      });
+      await addLogTx(
+        tx,
+        id,
+        "CANCEL",
+        cancelReason,
+        {
+          fromStatus: order.status,
+          toStatus: "CANCELLED",
+          stockRollback: mustRollbackStock,
+        },
+        req.user?.id || null,
+      );
 
       return saved;
     });
@@ -887,84 +778,273 @@ async function cancelOrder(req, res) {
   }
 }
 
-/* ======================================================================================================
-  PAYDUNYA WEBHOOK
-  Point d'entrée pour les notifications de PayDunya (paiement réussi, échec, etc.)
-  PayDunya enverra une requête POST à ce endpoint avec un token d'identification de paiement.
-  Nous vérifions le paiement via l'API PayDunya et mettons à jour la commande en conséquence.
- ======================================================================================================= */
+/* ===================================================================
+PAYMMENTS 
+========================================================================*/
 
-async function paydunyaWebhook(req, res) {
+async function markManualPaymentPending(req, res) {
   try {
-    console.log("PAYDUNYA WEBHOOK BODY:", req.body);
-    console.log("PAYDUNYA WEBHOOK QUERY:", req.query);
-
-    const token =
-      req.body?.token ||
-      req.body?.invoice_token ||
-      req.query?.token ||
-      req.body?.data?.token ||
-      req.body?.data?.invoice?.token;
-
-    const paydunyaStatus = req.body?.status || req.body?.data?.status || null;
-
-    console.log("PAYDUNYA TOKEN DETECTED:", token);
-    console.log("PAYDUNYA STATUS DETECTED:", paydunyaStatus);
-
-    if (!token) {
-      return res.status(200).json({ ok: true });
-    }
+    const { id } = req.params;
+    const { manualPaymentProofUrl, manualPaymentReference, note } = req.body || {};
 
     const order = await prisma.preorder.findFirst({
-      where: { paymentRef: String(token) },
+      where: scopeWhere(req, { id }),
     });
 
     if (!order) {
-      return res.status(200).json({ ok: true });
+      return res.status(404).json({ message: "Commande introuvable" });
     }
 
-    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
-      return res.status(200).json({ ok: true, alreadyDone: true });
-    }
-
-    if (String(paydunyaStatus).toLowerCase() !== "completed") {
-      return res.status(200).json({
+    if (["PAYMENT_PENDING", "PAID", "READY", "FULFILLED"].includes(order.status)) {
+      return res.json({
         ok: true,
-        pending: true,
-        status: paydunyaStatus,
+        alreadyDone: true,
+        status: order.status,
+        order,
       });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.preorder.update({
+    assertTransition(order.status, "PAYMENT_PENDING");
+
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
         where: { id: order.id },
         data: {
-          status: "PAID",
-          paidAt: order.paidAt || new Date(),
-          paymentVerifiedAt: order.paymentVerifiedAt || new Date(),
-          paymentVerifiedBy: order.paymentVerifiedBy || "PAYDUNYA_WEBHOOK",
+          status: "PAYMENT_PENDING",
+          paymentStatus: "PAYMENT_PENDING",
+          paymentProvider: "MANUAL",
+          manualPaymentProofUrl: manualPaymentProofUrl
+            ? String(manualPaymentProofUrl).trim()
+            : order.manualPaymentProofUrl,
+          manualPaymentReference: manualPaymentReference
+            ? String(manualPaymentReference).trim()
+            : order.manualPaymentReference,
+          manualPaymentProofNote: note
+            ? String(note).trim()
+            : order.manualPaymentProofNote,
+          manualPaymentReceivedAt: order.manualPaymentReceivedAt || now,
+          billingWorkStatus: "WAITING_PAYMENT",
+          billingLastActivityAt: now,
         },
       });
 
       await addLogTx(
         tx,
-        order.id,
-        "VERIFY_PAYMENT",
-        "Paiement confirmé automatiquement par PayDunya",
+        id,
+        "RECEIVE_MANUAL_PAYMENT_PROOF",
+        note || "Preuve manuelle enregistrée",
+        {
+          fromStatus: order.status,
+          toStatus: "PAYMENT_PENDING",
+          manualPaymentReference: saved.manualPaymentReference,
+        },
+        req.user?.id || null,
+      );
+
+      return saved;
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("markManualPaymentPending error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (markManualPaymentPending)" });
+  }
+}
+
+/**
+ * POST /api/admin/orders/:id/validate-manual-payment
+ * PAYMENT_PENDING -> PAID
+ */
+async function validateManualPayment(req, res) {
+  try {
+    const { id } = req.params;
+    const { note } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
+
+    assertTransition(order.status, "PAID");
+
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "PAID",
+          paymentStatus: "PAID",
+          paymentProvider: order.paymentProvider || "MANUAL",
+          manualPaymentValidatedAt: order.manualPaymentValidatedAt || now,
+          manualPaymentValidatedById:
+            order.manualPaymentValidatedById || req.user?.id || null,
+          paidAt: order.paidAt || now,
+          billingWorkStatus: "COMPLETED",
+          billingCompletedAt: order.billingCompletedAt || now,
+          billingLastActivityAt: now,
+          internalNote: note ? String(note).trim() : order.internalNote,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        id,
+        "VALIDATE_MANUAL_PAYMENT",
+        note || "Paiement manuel validé",
         {
           fromStatus: order.status,
           toStatus: "PAID",
-          paymentRef: token,
-          paydunyaStatus,
         },
+        req.user?.id || null,
       );
+
+      await addLogTx(
+        tx,
+        id,
+        "PAYMENT_CONFIRMED",
+        "Paiement confirmé",
+        {
+          paymentProvider: saved.paymentProvider,
+          paymentStatus: saved.paymentStatus,
+        },
+        req.user?.id || null,
+      );
+
+      return saved;
     });
 
-    return res.status(200).json({ ok: true });
+    return res.json(updated);
   } catch (e) {
-    console.error("paydunyaWebhook error:", e);
-    return res.status(200).json({ ok: true });
+    console.error("validateManualPayment error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (validateManualPayment)" });
   }
+}
+
+/**
+ * POST /api/admin/orders/:id/pay
+ * Encaissement manuel / cash simplifié
+ * SUBMITTED|INVOICED|PAYMENT_PENDING -> PAID
+ */
+async function markCashPayment(req, res) {
+  try {
+    const { id } = req.params;
+    const { note, reference } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (["PAID", "READY", "FULFILLED"].includes(order.status)) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
+
+    const allowedFrom = ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"];
+    if (!allowedFrom.includes(order.status)) {
+      return res.status(400).json({
+        message: `Transition invalide ${order.status} -> PAID (manuel/cash)`,
+      });
+    }
+
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "PAID",
+          paymentStatus: "PAID",
+          paymentProvider: "MANUAL",
+          manualPaymentReference: reference
+            ? String(reference).trim()
+            : order.manualPaymentReference,
+          manualPaymentValidatedAt: order.manualPaymentValidatedAt || now,
+          manualPaymentValidatedById:
+            order.manualPaymentValidatedById || req.user?.id || null,
+          paidAt: order.paidAt || now,
+          billingWorkStatus: "COMPLETED",
+          billingCompletedAt: order.billingCompletedAt || now,
+          billingLastActivityAt: now,
+          internalNote: note ? String(note).trim() : order.internalNote,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        id,
+        "VALIDATE_MANUAL_PAYMENT",
+        note || "Paiement manuel encaissé",
+        {
+          fromStatus: order.status,
+          toStatus: "PAID",
+          paymentProvider: "MANUAL",
+          manualPaymentReference: saved.manualPaymentReference,
+        },
+        req.user?.id || null,
+      );
+
+      await addLogTx(
+        tx,
+        id,
+        "PAYMENT_CONFIRMED",
+        "Paiement confirmé",
+        {
+          paymentProvider: "MANUAL",
+          paymentStatus: "PAID",
+        },
+        req.user?.id || null,
+      );
+
+      return saved;
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("markCashPayment error:", e);
+    return res.status(500).json({ message: "Erreur serveur (markCashPayment)" });
+  }
+}
+
+
+/* ===================================================================
+   PAYDUNYA WEBHOOK (désactivé)
+   =================================================================== */
+
+async function paydunyaWebhook(req, res) {
+  console.warn("paydunyaWebhook called but disabled after payment refactor.");
+  return res.status(200).json({
+    ok: true,
+    ignored: true,
+    message:
+      "Webhook PayDunya désactivé. Utiliser le nouveau moteur de paiement.",
+  });
 }
 
 /* ===================================================================
@@ -976,7 +1056,7 @@ async function paydunyaWebhook(req, res) {
  */
 async function getStats(req, res) {
   try {
-    const countryId = req.countryId;
+    const countryId = req.countryId || req.country?.id;
     const { date, dateFrom, dateTo } = req.query;
 
     let from = null;
@@ -1063,6 +1143,8 @@ async function getCountrySettings(req, res) {
         id: true,
         countryId: true,
         minCartFcfa: true,
+        maxActiveBillingPerInvoicer: true,
+        billingClaimTimeoutMin: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -1083,21 +1165,64 @@ async function getCountrySettings(req, res) {
 async function updateCountrySettings(req, res) {
   try {
     const countryId = pickCountryId(req);
-    const { minCartFcfa } = req.body || {};
-    const parsed = Number.parseInt(minCartFcfa, 10);
+    const {
+      minCartFcfa,
+      maxActiveBillingPerInvoicer,
+      billingClaimTimeoutMin,
+    } = req.body || {};
 
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      return res.status(400).json({ message: "minCartFcfa invalide" });
+    const data = {};
+
+    if (minCartFcfa !== undefined) {
+      const parsed = Number.parseInt(minCartFcfa, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({ message: "minCartFcfa invalide" });
+      }
+      data.minCartFcfa = parsed;
+    }
+
+    if (maxActiveBillingPerInvoicer !== undefined) {
+      const parsed = Number.parseInt(maxActiveBillingPerInvoicer, 10);
+      if (!Number.isFinite(parsed) || parsed < 1) {
+        return res.status(400).json({
+          message: "maxActiveBillingPerInvoicer invalide",
+        });
+      }
+      data.maxActiveBillingPerInvoicer = parsed;
+    }
+
+    if (billingClaimTimeoutMin !== undefined) {
+      const parsed = Number.parseInt(billingClaimTimeoutMin, 10);
+      if (!Number.isFinite(parsed) || parsed < 1) {
+        return res.status(400).json({
+          message: "billingClaimTimeoutMin invalide",
+        });
+      }
+      data.billingClaimTimeoutMin = parsed;
     }
 
     const updated = await prisma.countrySettings.upsert({
       where: { countryId },
-      update: { minCartFcfa: parsed },
-      create: { countryId, minCartFcfa: parsed },
+      update: data,
+      create: {
+        countryId,
+        minCartFcfa:
+          data.minCartFcfa !== undefined ? data.minCartFcfa : 10000,
+        maxActiveBillingPerInvoicer:
+          data.maxActiveBillingPerInvoicer !== undefined
+            ? data.maxActiveBillingPerInvoicer
+            : 5,
+        billingClaimTimeoutMin:
+          data.billingClaimTimeoutMin !== undefined
+            ? data.billingClaimTimeoutMin
+            : 15,
+      },
       select: {
         id: true,
         countryId: true,
         minCartFcfa: true,
+        maxActiveBillingPerInvoicer: true,
+        billingClaimTimeoutMin: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -1163,7 +1288,6 @@ async function createProduct(req, res) {
         poidsKg: String(poidsKg),
         actif: Boolean(actif),
         imageUrl: imageUrl ? String(imageUrl).trim() : null,
-
         category: cat,
         details: det || null,
         stockQty: stock,
@@ -1177,11 +1301,9 @@ async function createProduct(req, res) {
         poidsKg: true,
         actif: true,
         imageUrl: true,
-
         category: true,
         details: true,
         stockQty: true,
-
         createdAt: true,
         updatedAt: true,
       },
@@ -1245,11 +1367,9 @@ async function listProducts(req, res) {
         poidsKg: true,
         actif: true,
         imageUrl: true,
-
         category: true,
         details: true,
         stockQty: true,
-
         createdAt: true,
         updatedAt: true,
       },
@@ -1286,11 +1406,9 @@ async function getProductById(req, res) {
           poidsKg: true,
           actif: true,
           imageUrl: true,
-
           category: true,
           details: true,
           stockQty: true,
-
           createdAt: true,
           updatedAt: true,
         },
@@ -1339,7 +1457,6 @@ async function updateProduct(req, res) {
         : {}),
       ...(cc !== undefined ? { cc: String(cc) } : {}),
       ...(poidsKg !== undefined ? { poidsKg: String(poidsKg) } : {}),
-
       ...(category !== undefined
         ? {
             category: parseEnumSafe(
@@ -1392,11 +1509,9 @@ async function updateProduct(req, res) {
         poidsKg: true,
         actif: true,
         imageUrl: true,
-
         category: true,
         details: true,
         stockQty: true,
-
         updatedAt: true,
       },
     });
@@ -1529,7 +1644,6 @@ async function importProductsCsv(req, res) {
               poidsKg: String(p.poidsKg),
               actif: p.actif,
               imageUrl: p.imageUrl,
-
               category: p.category,
               details: p.details,
               stockQty: p.stockQty,
@@ -1547,7 +1661,6 @@ async function importProductsCsv(req, res) {
               poidsKg: String(p.poidsKg),
               actif: p.actif,
               imageUrl: p.imageUrl,
-
               category: p.category,
               details: p.details,
               stockQty: p.stockQty,
@@ -1661,9 +1774,17 @@ module.exports = {
   getOrderById,
   updateOrderStatus,
   invoiceOrder,
-  markPaymentProof,
-  verifyPayment,
-  payOrder,
+
+  // nouveau naming
+  markManualPaymentPending,
+  validateManualPayment,
+  markCashPayment,
+
+  // alias de compatibilité éventuels avec les anciennes routes
+  markPaymentProof: markManualPaymentPending,
+  verifyPayment: validateManualPayment,
+  payOrder: markCashPayment,
+
   prepareOrder,
   fulfillOrder,
   cancelOrder,
