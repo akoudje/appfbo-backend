@@ -417,10 +417,7 @@ async function invoiceOrder(req, res) {
   }
 }
 
-/**
- * POST /api/admin/orders/:id/manual-payment-pending
- * INVOICED -> PAYMENT_PENDING
- */
+
 
 /**
  * POST /api/admin/orders/:id/prepare
@@ -778,10 +775,14 @@ async function cancelOrder(req, res) {
   }
 }
 
-/* ===================================================================
-PAYMMENTS 
-========================================================================*/
+/* =================================================================
+ PAIEMENTS
+ ====================================================================*/
 
+/**
+ * POST /api/admin/orders/:id/manual-payment-pending
+ * INVOICED -> PAYMENT_PENDING
+ */
 async function markManualPaymentPending(req, res) {
   try {
     const { id } = req.params;
@@ -1031,7 +1032,6 @@ async function markCashPayment(req, res) {
     return res.status(500).json({ message: "Erreur serveur (markCashPayment)" });
   }
 }
-
 
 /* ===================================================================
    PAYDUNYA WEBHOOK (désactivé)

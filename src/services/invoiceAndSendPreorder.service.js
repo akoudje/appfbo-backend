@@ -1,15 +1,15 @@
 // src/services/orders/invoiceAndSendPreorder.service.js
+//
+// Version réécrite pour le nouveau schéma :
+// - plus de PaymentMode
+// - plus de paymentLink / paymentRef sur Preorder
+// - plus d'appel direct à PayDunya
+// - facturation = SUBMITTED -> INVOICED
+// - met la commande en attente de paiement côté file facturier
+// - conserve OrderMessage pour l'envoi WhatsApp
 
-const {
-  PrismaClient,
-  PreorderLogAction,
-  PaymentMode,
-} = require("@prisma/client");
-
-const prisma = new PrismaClient();
-
+const prisma = require("../../prisma");
 const whatsappService = require("./whatsapp.service");
-const { createPaydunyaPayment } = require("./paydunya.service");
 
 /**
  * Génère une référence de préfacture lisible
@@ -23,38 +23,6 @@ function generateInvoiceRef(preorder) {
     .toUpperCase();
 
   return `PF-${year}-${shortId}`;
-}
-
-/**
- * Détermine si le mode de paiement est espèces
- */
-function isCashPayment(paymentMode) {
-  return paymentMode === PaymentMode.ESPECES;
-}
-
-/**
- * Crée un vrai lien PayDunya + token de paiement
- */
-async function createPaymentLinkForPreorder(preorder, invoiceRef, whatsappTo) {
-  const payment = await createPaydunyaPayment({
-    orderId: preorder.id,
-    amount: preorder.totalFcfa,
-    description: `Précommande ${preorder.fboNumero} - ${preorder.totalFcfa} FCFA`,
-    customerName: preorder.fboNomComplet,
-    customerPhone: whatsappTo || undefined,
-    customData: {
-      preorderId: preorder.id,
-      fboNumero: preorder.fboNumero,
-      countryId: preorder.countryId,
-      invoiceRef,
-    },
-  });
-
-  return {
-    paymentLink: payment.paymentUrl,
-    paymentRef: payment.token,
-    raw: payment.raw,
-  };
 }
 
 /**
@@ -75,15 +43,48 @@ function resolveWhatsappTo(preorder, whatsappToInput) {
 /**
  * Crée un log métier standard dans PreorderLog
  */
-async function createPreorderLog(tx, { preorderId, action, note, meta }) {
+async function createPreorderLog(tx, { preorderId, action, note, meta, actorAdminId }) {
   await tx.preorderLog.create({
     data: {
       preorderId,
       action,
       note: note || null,
       meta: meta || null,
+      actorAdminId: actorAdminId || null,
     },
   });
+}
+
+/**
+ * Construit le message WhatsApp de facturation.
+ * On garde la compatibilité avec le service existant en envoyant
+ * paymentLink = null tant que le moteur de paiement n'est pas branché.
+ */
+function buildInvoiceMessage({ preorder, invoiceRef, note }) {
+  if (typeof whatsappService.buildInvoiceWhatsAppMessage === "function") {
+    return whatsappService.buildInvoiceWhatsAppMessage({
+      customerName: preorder.fboNomComplet || preorder.fbo?.nomComplet || "",
+      fboNumero: preorder.fboNumero,
+      invoiceRef,
+      totalFcfa: preorder.totalFcfa,
+      paymentLink: null,
+      paymentMode: null,
+      note: note || "",
+    });
+  }
+
+  return [
+    `Bonjour ${preorder.fboNomComplet || ""},`,
+    "",
+    `Votre précommande FOREVER a été facturée.`,
+    `Référence facture : ${invoiceRef}`,
+    `Montant : ${preorder.totalFcfa} FCFA`,
+    note ? `Note : ${note}` : null,
+    "",
+    "Merci.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /**
@@ -100,11 +101,6 @@ async function invoiceAndSendPreorder({
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
   }
-
-  const appBaseUrl =
-    process.env.APP_BASE_URL ||
-    process.env.FRONTEND_URL ||
-    "http://localhost:5173";
 
   return prisma.$transaction(async (tx) => {
     const preorder = await tx.preorder.findUnique({
@@ -133,23 +129,8 @@ async function invoiceAndSendPreorder({
       generateInvoiceRef(preorder);
 
     const whatsappTo = resolveWhatsappTo(preorder, whatsappToInput);
-    const cash = isCashPayment(preorder.paymentMode);
-
-    let paymentLinkTarget = null;
-    let paymentRef = null;
-
-    if (!cash) {
-      const payment = await createPaymentLinkForPreorder(
-        preorder,
-        invoiceRef,
-        whatsappTo
-      );
-
-      paymentLinkTarget = payment.paymentLink;
-      paymentRef = payment.paymentRef;
-    }
-
-    const messagePurpose = cash ? "INVOICE" : "PAYMENT_LINK";
+    const messagePurpose = "INVOICE";
+    const now = new Date();
 
     const createdMessage = await tx.orderMessage.create({
       data: {
@@ -158,24 +139,15 @@ async function invoiceAndSendPreorder({
         status: "QUEUED",
         toPhone: whatsappTo,
         provider: "SIMULATED",
-        paymentLinkTarget,
+        paymentLinkTarget: null,
+        paymentLinkTracked: null,
         createdBy: actorName,
       },
     });
 
-    // Conservé pour une future évolution de tracking, mais non utilisé dans le message FBO
-    const trackedPaymentLink = !cash
-      ? `${appBaseUrl}/pay/o/${preorder.id}/${createdMessage.id}`
-      : null;
-
-    // ✅ Le message envoyé au FBO contient le vrai lien PayDunya
-    const whatsappMessage = whatsappService.buildInvoiceWhatsAppMessage({
-      customerName: preorder.fboNomComplet || preorder.fbo?.nomComplet,
-      fboNumero: preorder.fboNumero,
+    const whatsappMessage = buildInvoiceMessage({
+      preorder,
       invoiceRef,
-      totalFcfa: preorder.totalFcfa,
-      paymentLink: paymentLinkTarget,
-      paymentMode: preorder.paymentMode,
       note: invoiceNote,
     });
 
@@ -183,7 +155,6 @@ async function invoiceAndSendPreorder({
       where: { id: createdMessage.id },
       data: {
         body: whatsappMessage,
-        paymentLinkTracked: trackedPaymentLink,
       },
     });
 
@@ -197,18 +168,28 @@ async function invoiceAndSendPreorder({
     };
 
     if (whatsappTo) {
-      sendResult = await whatsappService.sendTextMessage({
-        to: whatsappTo,
-        body: whatsappMessage,
-        metadata: {
-          preorderId: preorder.id,
-          orderMessageId: createdMessage.id,
-          purpose: messagePurpose,
-        },
-      });
+      if (typeof whatsappService.sendTextMessage === "function") {
+        sendResult = await whatsappService.sendTextMessage({
+          to: whatsappTo,
+          body: whatsappMessage,
+          metadata: {
+            preorderId: preorder.id,
+            orderMessageId: createdMessage.id,
+            purpose: messagePurpose,
+          },
+        });
+      } else {
+        sendResult = {
+          accepted: true,
+          provider: "SIMULATED",
+          providerMessageId: `sim_${createdMessage.id}`,
+          rawPayload: null,
+          errorCode: null,
+          errorMessage: null,
+        };
+      }
     }
 
-    const now = new Date();
     const finalMessageStatus = sendResult.accepted ? "SENT" : "FAILED";
 
     const savedMessage = await tx.orderMessage.update({
@@ -242,12 +223,18 @@ async function invoiceAndSendPreorder({
         status: "INVOICED",
         factureReference: invoiceRef,
         factureWhatsappTo: whatsappTo,
-        paymentLink: paymentLinkTarget,
-        paymentRef: paymentRef,
         whatsappMessage: whatsappMessage,
         invoicedAt: now,
-        invoicedBy: actorName,
-        invoicedById: actorAdminId || null,
+        invoicedById: actorAdminId || preorder.invoicedById || null,
+
+        // file facturier
+        assignedInvoicerId: preorder.assignedInvoicerId || actorAdminId || null,
+        assignedAt: preorder.assignedAt || (actorAdminId ? now : preorder.assignedAt),
+        billingStartedAt: preorder.billingStartedAt || now,
+        billingLastActivityAt: now,
+        billingWorkStatus: "WAITING_PAYMENT",
+
+        // suivi message
         lastWhatsappMessageId: savedMessage.id,
         lastWhatsappStatus: finalMessageStatus,
         lastWhatsappStatusAt: now,
@@ -256,7 +243,7 @@ async function invoiceAndSendPreorder({
 
     await createPreorderLog(tx, {
       preorderId: preorder.id,
-      action: PreorderLogAction.INVOICE,
+      action: "INVOICE",
       note: sendResult.accepted
         ? "Précommande facturée et message WhatsApp envoyé."
         : "Précommande facturée, mais envoi WhatsApp en échec.",
@@ -266,12 +253,9 @@ async function invoiceAndSendPreorder({
         messageId: savedMessage.id,
         messagePurpose,
         messageStatus: finalMessageStatus,
-        paymentLinkTarget,
-        paymentLinkTracked: trackedPaymentLink,
-        paymentRef,
-        paymentMode: preorder.paymentMode,
         actorName,
       },
+      actorAdminId,
     });
 
     return {
@@ -279,9 +263,9 @@ async function invoiceAndSendPreorder({
       billingMessage: savedMessage,
       whatsappStatus: finalMessageStatus,
       whatsappTo,
-      paymentLinkTarget,
-      trackedPaymentLink,
-      paymentRef,
+      paymentLinkTarget: null,
+      trackedPaymentLink: null,
+      paymentRef: null,
     };
   });
 }

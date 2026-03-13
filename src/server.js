@@ -1,7 +1,6 @@
 // src/server.js
 // Point d'entrée de l'API Express, configuration des middlewares globaux, CORS, et montage des routes
 
-
 require("dotenv").config();
 
 const express = require("express");
@@ -12,9 +11,7 @@ const adminRoutes = require("./routes/admin.routes.js");
 const adminAuthRoutes = require("./routes/adminAuth.routes");
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
-
 const paymentsRoutes = require("./routes/payments.routes");
-
 
 const app = express();
 
@@ -22,27 +19,16 @@ const app = express();
    CORS
    ========================================================= */
 
-const allowlist = new Set([
-  "https://appfbo-frontend.vercel.app",
-  "https://appfbo-admin.vercel.app",
-]);
-
-// Preview Vercel (branches)
-const vercelPreviewRegex =
-  /^https:\/\/appfbo-admin-git-.*-junior-akoudjes-projects\.vercel\.app$/;
-
-// Local dev
-const localhostRegex = /^http:\/\/localhost:\d+$/;
-
 const corsOptions = {
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // curl, healthchecks
+    if (!origin) return cb(null, true);
 
     try {
       const { hostname, protocol } = new URL(origin);
-      if (protocol !== "https:" && protocol !== "http:") return cb(new Error("Bad origin"));
+      if (protocol !== "https:" && protocol !== "http:") {
+        return cb(new Error("Bad origin"));
+      }
 
-      // PROD allowlist
       if (
         origin === "https://appfbo-frontend.vercel.app" ||
         origin === "https://appfbo-admin.vercel.app"
@@ -50,16 +36,14 @@ const corsOptions = {
         return cb(null, true);
       }
 
-      // Localhost
       if (hostname === "localhost" || hostname === "127.0.0.1") {
         return cb(null, true);
       }
 
-      // ✅ Vercel previews (tous les sous-domaines de ton projet)
-      // ex: appfbo-admin-git-xxxx-junior-akoudjes-projects.vercel.app
       if (
         hostname.endsWith(".vercel.app") &&
-        (hostname.startsWith("appfbo-admin") || hostname.startsWith("appfbo-frontend"))
+        (hostname.startsWith("appfbo-admin") ||
+          hostname.startsWith("appfbo-frontend"))
       ) {
         return cb(null, true);
       }
@@ -77,12 +61,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-/**
- * IMPORTANT:
- * - Ne pas utiliser app.options("*", ...) ni app.options("/*", ...)
- * - Utiliser une RegExp pour éviter path-to-regexp crash
- */
 app.options(/.*/, cors(corsOptions));
 
 /* =========================================================
@@ -103,8 +81,8 @@ app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
 
 /* =========================================================
-    Routes de paiement (webhooks, etc)
-    ============================================================*/
+   Routes de paiement (webhooks, etc.)
+   ========================================================= */
 app.use("/api/payments", paymentsRoutes);
 
 /* =========================================================
