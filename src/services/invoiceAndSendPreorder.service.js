@@ -8,7 +8,7 @@
 // - met la commande en attente de paiement côté file facturier
 // - conserve OrderMessage pour l'envoi WhatsApp
 
-const prisma = require("../../prisma");
+const prisma = require("../prisma");
 const whatsappService = require("./whatsapp.service");
 
 /**
