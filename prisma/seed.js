@@ -1,7 +1,8 @@
 // backend/prisma/seed.js
-// This script seeds the database with initial country data and related settings.
+// Seed de la base : pays + paramètres + remises + super admin
 
-const { PrismaClient } = require("@prisma/client");
+const { PrismaClient, AdminRole } = require("@prisma/client");
+const bcrypt = require("bcryptjs");
 
 const prisma = new PrismaClient();
 
@@ -9,6 +10,35 @@ function readIntEnv(name, fallback) {
   const raw = process.env[name];
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+async function seedSuperAdmin(defaultCountryId) {
+  const email = process.env.SEED_SUPER_ADMIN_EMAIL || "admin@forverver.ci";
+  const passwordRaw = process.env.SEED_SUPER_ADMIN_PASSWORD || "Test1234!";
+
+  const existing = await prisma.adminUser.findUnique({
+    where: { email },
+  });
+
+  if (existing) {
+    console.log("Super admin already exists:", email);
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(passwordRaw, 10);
+
+  await prisma.adminUser.create({
+    data: {
+      email,
+      password: passwordHash,
+      fullName: "Super Admin",
+      role: AdminRole.SUPER_ADMIN,
+      actif: true,
+      countryId: defaultCountryId,
+    },
+  });
+
+  console.log("Super admin created:", email);
 }
 
 async function main() {
@@ -43,6 +73,8 @@ async function main() {
     });
   }
 
+  let defaultCountryId = null;
+
   for (const entry of countriesToSeed) {
     const country = await prisma.country.upsert({
       where: { code: entry.code },
@@ -59,6 +91,10 @@ async function main() {
       },
     });
 
+    if (entry.code === defaultCode) {
+      defaultCountryId = country.id;
+    }
+
     await prisma.countrySettings.upsert({
       where: { countryId: country.id },
       update: {
@@ -74,86 +110,43 @@ async function main() {
       },
     });
 
-    // Ajout des remises par grade
-    await prisma.gradeDiscount.upsert({
-      where: {
-        countryId_grade: {
-          countryId: country.id,
-          grade: "CLIENT_PRIVILEGIE",
-        },
-      },
-      update: { discountPercent: "5.00" },
-      create: {
-        countryId: country.id,
-        grade: "CLIENT_PRIVILEGIE",
-        discountPercent: "5.00",
-      },
-    });
+    const gradeDiscounts = [
+      ["CLIENT_PRIVILEGIE", "5.00"],
+      ["ANIMATEUR_ADJOINT", "30.00"],
+      ["ANIMATEUR", "38.00"],
+      ["MANAGER_ADJOINT", "43.00"],
+      ["MANAGER", "48.00"],
+    ];
 
-    await prisma.gradeDiscount.upsert({
-      where: {
-        countryId_grade: {
-          countryId: country.id,
-          grade: "ANIMATEUR_ADJOINT",
+    for (const [grade, discount] of gradeDiscounts) {
+      await prisma.gradeDiscount.upsert({
+        where: {
+          countryId_grade: {
+            countryId: country.id,
+            grade,
+          },
         },
-      },
-      update: { discountPercent: "30.00" },
-      create: {
-        countryId: country.id,
-        grade: "ANIMATEUR_ADJOINT",
-        discountPercent: "30.00",
-      },
-    });
-
-    await prisma.gradeDiscount.upsert({
-      where: {
-        countryId_grade: {
-          countryId: country.id,
-          grade: "ANIMATEUR",
+        update: {
+          discountPercent: discount,
         },
-      },
-      update: { discountPercent: "38.00" },
-      create: {
-        countryId: country.id,
-        grade: "ANIMATEUR",
-        discountPercent: "38.00",
-      },
-    });
-
-    await prisma.gradeDiscount.upsert({
-      where: {
-        countryId_grade: {
+        create: {
           countryId: country.id,
-          grade: "MANAGER_ADJOINT",
+          grade,
+          discountPercent: discount,
         },
-      },
-      update: { discountPercent: "40.00" },
-      create: {
-        countryId: country.id,
-        grade: "MANAGER_ADJOINT",
-        discountPercent: "40.00",
-      },
-    });
-
-    await prisma.gradeDiscount.upsert({
-      where: {
-        countryId_grade: {
-          countryId: country.id,
-          grade: "MANAGER",
-        },
-      },
-      update: { discountPercent: "43.00" },
-      create: {
-        countryId: country.id,
-        grade: "MANAGER",
-        discountPercent: "43.00",
-      },
-    });
+      });
+    }
   }
 
   console.log(
-    `Seed complete for countries: ${countriesToSeed.map((c) => c.code).join(", ")}`,
+    `Seed complete for countries: ${countriesToSeed
+      .map((c) => c.code)
+      .join(", ")}`,
   );
+
+  if (defaultCountryId) {
+    await seedSuperAdmin(defaultCountryId);
+  }
 }
 
 main()
