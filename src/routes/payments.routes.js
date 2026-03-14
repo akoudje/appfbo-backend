@@ -1,10 +1,16 @@
 // src/routes/payments.routes.js
 
 const express = require("express");
-const { paydunyaWebhook } = require("../controllers/admin.controller");
-
 const router = express.Router();
 
-router.post("/paydunya/webhook", paydunyaWebhook);
+const paymentsController = require("../payments/payments.controller");
+const { requireAuth } = require("../middlewares/rbac");
+
+// Admin protégé
+router.post("/wave/initiate", requireAuth, paymentsController.initiateWavePayment);
+router.get("/wave/:orderId/status", requireAuth, paymentsController.syncWavePaymentStatus);
+
+// Provider webhook
+router.post("/wave/webhook", paymentsController.waveWebhook);
 
 module.exports = router;
