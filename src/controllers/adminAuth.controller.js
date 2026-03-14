@@ -1,14 +1,15 @@
 // src/controllers/adminAuth.controller.js (CommonJS)
+// Controller pour l'authentification des admins, avec les fonctions de login, récupération du profil courant, et seed d'un super admin. Utilise bcrypt pour le hash des mots de passe et JWT pour la génération de tokens d'authentification. Les fonctions sont exportées pour être utilisées dans les routes correspondantes.
 
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
+const { getRolePermissions } = require("../auth/permissions");
 
 function signAdminToken(admin) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET missing");
 
-  // 7 jours (tu peux changer)
   const expiresIn = process.env.JWT_EXPIRES_IN || "7d";
 
   return jwt.sign(
@@ -29,6 +30,7 @@ function sanitizeAdmin(admin) {
     email: admin.email,
     fullName: admin.fullName || null,
     role: admin.role,
+    permissions: getRolePermissions(admin.role),
     actif: admin.actif,
     countryId: admin.countryId || null,
     createdAt: admin.createdAt,

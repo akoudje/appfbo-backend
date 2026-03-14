@@ -1,4 +1,4 @@
-// src/server.js
+// backend/src/server.js
 // Point d'entrée de l'API Express, configuration des middlewares globaux, CORS, et montage des routes
 
 require("dotenv").config();
@@ -9,9 +9,11 @@ const path = require("path");
 
 const adminRoutes = require("./routes/admin.routes.js");
 const adminAuthRoutes = require("./routes/adminAuth.routes");
+
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
 const paymentsRoutes = require("./routes/payments.routes");
+
 
 const app = express();
 
