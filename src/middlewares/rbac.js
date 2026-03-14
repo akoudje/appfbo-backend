@@ -4,7 +4,7 @@
 // Il permet d'analyser les informations utilisateur à partir d'en-têtes personnalisés à des fins de test ou d'intégration, et peut être utilisé dans les routes pour protéger les ressources en fonction des rôles et des autorisations des utilisateurs.
 
 const jwt = require("jsonwebtoken");
-const { AdminRole, hasPermission } = require("../../auth/permissions");
+const { AdminRole, hasPermission } = require("../auth/permissions");
 
 function parseJsonHeader(raw) {
   if (!raw) return null;
