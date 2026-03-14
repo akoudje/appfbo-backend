@@ -2,7 +2,7 @@
 // Routes d'administration (protégées par auth + RBAC)
 
 const express = require("express");
-const { Permission } = require("../auth/permissions");
+const { Permission } = require("../../../admin-app/src/auth/permissions.js");
 const { resolveCountry } = require("../middlewares/resolveCountry");
 const {
   requireAuth,

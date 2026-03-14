@@ -4,7 +4,7 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
-const { getRolePermissions } = require("../auth/permissions");
+const { getRolePermissions } = require("../../../admin-app/src/auth/permissions");
 
 function signAdminToken(admin) {
   const secret = process.env.JWT_SECRET;
