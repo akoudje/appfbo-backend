@@ -1,6 +1,11 @@
 // src/payments/payments.service.js
-// Service de gestion des paiements, incluant l'initiation de paiements via Wave, la synchronisation de leur statut et le traitement des webhooks. Ce service utilise Prisma pour interagir avec la base de données et un orchestrateur de paiement pour gérer les interactions avec les fournisseurs de paiement.
+// Service de gestion des paiements, incluant l'initiation de paiements via Wave, 
+// la synchronisation de leur statut et le traitement des webhooks. 
+// Ce service utilise Prisma pour interagir avec la base de données et un orchestrateur de paiement pour gérer les interactions 
+// avec les fournisseurs de paiement.
 
+// Service métier des paiements : création Payment / PaymentAttempt,
+// synchro statut provider, mise à jour de Preorder, traitement webhook.
 
 const prisma = require("../prisma");
 const paymentOrchestrator = require("./payment-orchestrator.service");
@@ -96,7 +101,10 @@ async function initiateWavePayment({
   const result = await prisma.$transaction(async (tx) => {
     let payment = preorder.activePayment;
 
-    if (!payment || payment.status === "FAILED" || payment.status === "EXPIRED" || payment.status === "CANCELLED") {
+    if (
+      !payment ||
+      ["FAILED", "EXPIRED", "CANCELLED"].includes(payment.status)
+    ) {
       payment = await tx.payment.create({
         data: {
           preorderId: preorder.id,
@@ -140,7 +148,9 @@ async function initiateWavePayment({
       data: {
         paymentId: payment.id,
         provider: "WAVE",
-        status: providerResponse.checkoutUrl ? "REDIRECT_READY" : "PROVIDER_SESSION_CREATED",
+        status: providerResponse.checkoutUrl
+          ? "REDIRECT_READY"
+          : "PROVIDER_SESSION_CREATED",
         providerSessionId: providerResponse.providerSessionId,
         providerTransactionId: providerResponse.providerTransactionId,
         checkoutUrl: providerResponse.checkoutUrl,
@@ -183,8 +193,25 @@ async function initiateWavePayment({
         billingLastActivityAt: now,
       },
       include: {
-        activePayment: true,
+        activePayment: {
+          include: {
+            attempts: {
+              orderBy: { createdAt: "desc" },
+            },
+            refunds: {
+              orderBy: { createdAt: "desc" },
+            },
+          },
+        },
         payments: {
+          include: {
+            attempts: {
+              orderBy: { createdAt: "desc" },
+            },
+            refunds: {
+              orderBy: { createdAt: "desc" },
+            },
+          },
           orderBy: { createdAt: "desc" },
           take: 5,
         },
@@ -283,7 +310,8 @@ async function syncWavePaymentStatus({
         data: {
           status: mapped.attemptStatus,
           providerTransactionId:
-            providerStatus.providerTransactionId || lastAttempt.providerTransactionId,
+            providerStatus.providerTransactionId ||
+            lastAttempt.providerTransactionId,
           responsePayloadJson: providerStatus.raw,
           normalizedPayloadJson: {
             providerSessionId: providerStatus.providerSessionId,
@@ -293,22 +321,24 @@ async function syncWavePaymentStatus({
             completedAt: providerStatus.completedAt,
           },
           completedAt: mapped.isFinal ? now : lastAttempt.completedAt,
-          failureCode:
-            mapped.markExpired ? "WAVE_EXPIRED" :
-            mapped.markCancelled ? "WAVE_CANCELLED" :
-            null,
-          failureMessage:
-            mapped.markExpired ? "Session Wave expirée" :
-            mapped.markCancelled ? "Paiement Wave annulé" :
-            null,
+          failureCode: mapped.markExpired
+            ? "WAVE_EXPIRED"
+            : mapped.markCancelled
+              ? "WAVE_CANCELLED"
+              : null,
+          failureMessage: mapped.markExpired
+            ? "Session Wave expirée"
+            : mapped.markCancelled
+              ? "Paiement Wave annulé"
+              : null,
         },
       });
     }
 
     const paymentData = {
       status: mapped.paymentStatus,
-      providerTxnId: providerStatus.providerTransactionId || payment.providerTxnId,
-      updatedAt: now,
+      providerTxnId:
+        providerStatus.providerTransactionId || payment.providerTxnId,
     };
 
     if (mapped.markOrderPaid) {
@@ -436,7 +466,6 @@ async function handleWaveWebhook({ req }) {
       },
     });
   } catch (e) {
-    // doublon providerEventId ou autre : on n’explose pas le webhook
     return {
       ok: true,
       received: true,
@@ -445,7 +474,6 @@ async function handleWaveWebhook({ req }) {
   }
 
   try {
-    // Tentative de retrouver clientReference / preorderId depuis le body
     const possibleClientReference =
       parsed.body?.data?.client_reference ||
       parsed.body?.client_reference ||
@@ -458,7 +486,6 @@ async function handleWaveWebhook({ req }) {
       });
 
       if (preorder) {
-        // On déclenche une reconciliation simple
         await syncWavePaymentStatus({
           req: {
             ...req,

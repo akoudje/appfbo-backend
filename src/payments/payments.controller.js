@@ -1,7 +1,10 @@
-// src/payments/payments.service.js
-// Controller de l'API pour les paiements, exposant des endpoints pour initier un paiement Wave, synchroniser le statut d'un paiement Wave et recevoir les webhooks de Wave. Ce controller valide les entrées, appelle les méthodes du service de paiement correspondant et gère les réponses HTTP.
+// src/payments/payments.controllerjs
+// Controller de l'API pour les paiements, exposant des endpoints pour initier un paiement Wave, 
+// synchroniser le statut d'un paiement Wave et recevoir les webhooks de Wave. Ce controller valide les entrées, 
+// appelle les méthodes du service de paiement correspondant et gère les réponses HTTP.
 
-
+// Controller HTTP des paiements : validation des entrées, réponses HTTP,
+// délégation vers payments.service.js
 
 const paymentsService = require("./payments.service");
 
@@ -32,6 +35,10 @@ async function syncWavePaymentStatus(req, res) {
   try {
     const { orderId } = req.params;
 
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId requis" });
+    }
+
     const result = await paymentsService.syncWavePaymentStatus({
       req,
       preorderId: orderId,
@@ -52,6 +59,8 @@ async function waveWebhook(req, res) {
     return res.status(200).json(result);
   } catch (e) {
     console.error("waveWebhook error:", e);
+
+    // Ack 200 pour éviter les retry agressifs provider côté webhook
     return res.status(200).json({
       ok: true,
       ignored: true,
