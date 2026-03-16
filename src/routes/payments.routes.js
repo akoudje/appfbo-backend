@@ -19,6 +19,13 @@ router.get(
   paymentsController.syncWavePaymentStatus
 );
 
+// ✅ simulation dev/test
+router.post(
+  "/wave/:orderId/simulate",
+  requireAuth,
+  paymentsController.simulateWaveStatus
+);
+
 // Provider webhook
 router.post(
   "/wave/webhook",

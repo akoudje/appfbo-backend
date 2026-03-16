@@ -1,12 +1,6 @@
 // src/payments/payments.service.js
-// Service de gestion des paiements, incluant l'initiation de paiements via Wave, 
-// la synchronisation de leur statut et le traitement des webhooks. 
-// Ce service utilise Prisma pour interagir avec la base de données et un orchestrateur de paiement pour gérer les interactions 
-// avec les fournisseurs de paiement.
 
-// Service métier des paiements : création Payment / PaymentAttempt,
-// synchro statut provider, mise à jour de Preorder, traitement webhook.
-
+const crypto = require("crypto");
 const prisma = require("../prisma");
 const paymentOrchestrator = require("./payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("./payment-status.mapper");
@@ -55,6 +49,222 @@ async function resolveWaveProviderAccount(countryId) {
   }
 
   return account;
+}
+
+function buildSyntheticWebhookId(parsed) {
+  if (parsed.providerEventId) return parsed.providerEventId;
+  const base = JSON.stringify(parsed.body || {});
+  const hash = crypto.createHash("sha256").update(base).digest("hex");
+  return `hash:${hash}`;
+}
+
+async function resolvePreorderFromWebhookPayload(parsed) {
+  const body = parsed.body || {};
+
+  const clientReference =
+    body?.data?.client_reference ||
+    body?.client_reference ||
+    body?.checkout_session?.client_reference ||
+    null;
+
+  if (clientReference) {
+    const preorder = await prisma.preorder.findUnique({
+      where: { id: clientReference },
+    });
+    if (preorder) return preorder;
+  }
+
+  const providerSessionId =
+    body?.data?.id ||
+    body?.id ||
+    body?.checkout_session?.id ||
+    null;
+
+  if (providerSessionId) {
+    const attempt = await prisma.paymentAttempt.findFirst({
+      where: {
+        provider: "WAVE",
+        providerSessionId,
+      },
+      include: {
+        payment: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (attempt?.payment?.preorderId) {
+      return prisma.preorder.findUnique({
+        where: { id: attempt.payment.preorderId },
+      });
+    }
+  }
+
+  const providerTransactionId =
+    body?.data?.transaction_id ||
+    body?.transaction_id ||
+    body?.checkout_session?.transaction_id ||
+    null;
+
+  if (providerTransactionId) {
+    const attempt = await prisma.paymentAttempt.findFirst({
+      where: {
+        provider: "WAVE",
+        providerTransactionId,
+      },
+      include: {
+        payment: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (attempt?.payment?.preorderId) {
+      return prisma.preorder.findUnique({
+        where: { id: attempt.payment.preorderId },
+      });
+    }
+  }
+
+  return null;
+}
+
+async function applyWaveMappedStateTx({
+  tx,
+  preorder,
+  payment,
+  lastAttempt,
+  providerStatusRaw,
+  mapped,
+  actorAdminId = null,
+}) {
+  const now = new Date();
+
+  let updatedAttempt = null;
+
+  if (lastAttempt) {
+    updatedAttempt = await tx.paymentAttempt.update({
+      where: { id: lastAttempt.id },
+      data: {
+        status: mapped.attemptStatus,
+        responsePayloadJson: providerStatusRaw,
+        normalizedPayloadJson: {
+          checkoutStatus: providerStatusRaw?.checkout_status || null,
+          paymentStatus: providerStatusRaw?.payment_status || null,
+          transactionId: providerStatusRaw?.transaction_id || null,
+          whenCompleted: providerStatusRaw?.when_completed || null,
+        },
+        completedAt: mapped.isFinal ? now : lastAttempt.completedAt,
+        failureCode: mapped.markExpired
+          ? "WAVE_EXPIRED"
+          : mapped.markCancelled
+            ? "WAVE_CANCELLED"
+            : mapped.markFailed
+              ? "WAVE_FAILED"
+              : null,
+        failureMessage: mapped.markExpired
+          ? "Session Wave expirée"
+          : mapped.markCancelled
+            ? "Paiement Wave annulé"
+            : mapped.markFailed
+              ? "Paiement Wave échoué"
+              : null,
+      },
+    });
+  }
+
+  const paymentData = {
+    status: mapped.paymentStatus,
+    providerTxnId: providerStatusRaw?.transaction_id || payment.providerTxnId,
+  };
+
+  if (mapped.markOrderPaid) {
+    paymentData.amountPaidFcfa = payment.amountExpectedFcfa;
+    paymentData.paidAt = payment.paidAt || now;
+  }
+
+  if (mapped.markExpired) {
+    paymentData.expiredAt = payment.expiredAt || now;
+  }
+
+  if (mapped.markCancelled) {
+    paymentData.cancelledAt = payment.cancelledAt || now;
+  }
+
+  if (mapped.markFailed) {
+    paymentData.failedAt = payment.failedAt || now;
+  }
+
+  const updatedPayment = await tx.payment.update({
+    where: { id: payment.id },
+    data: paymentData,
+  });
+
+  const preorderData = {
+    paymentStatus: mapped.orderPaymentStatus,
+    billingLastActivityAt: now,
+  };
+
+  if (mapped.markOrderPaid) {
+    preorderData.status = "PAID";
+    preorderData.paidAt = preorder.paidAt || now;
+    preorderData.billingWorkStatus = "DONE";
+    preorderData.billingCompletedAt = preorder.billingCompletedAt || now;
+    preorderData.paymentProvider = "WAVE";
+  }
+
+  const updatedPreorder = await tx.preorder.update({
+    where: { id: preorder.id },
+    data: preorderData,
+    include: {
+      activePayment: {
+        include: {
+          attempts: { orderBy: { createdAt: "desc" } },
+          refunds: { orderBy: { createdAt: "desc" } },
+        },
+      },
+      payments: {
+        include: {
+          attempts: { orderBy: { createdAt: "desc" } },
+          refunds: { orderBy: { createdAt: "desc" } },
+        },
+        orderBy: { createdAt: "desc" },
+      },
+    },
+  });
+
+  await addLogTx(
+    tx,
+    preorder.id,
+    "WAVE_PAYMENT_SYNC",
+    "Synchronisation statut Wave",
+    {
+      paymentId: updatedPayment.id,
+      paymentAttemptId: updatedAttempt?.id || null,
+      mapped,
+      providerStatus: providerStatusRaw,
+    },
+    actorAdminId
+  );
+
+  if (mapped.markOrderPaid) {
+    await addLogTx(
+      tx,
+      preorder.id,
+      "PAYMENT_CONFIRMED",
+      "Paiement confirmé via Wave",
+      {
+        paymentProvider: "WAVE",
+        paymentStatus: "PAID",
+        paymentId: updatedPayment.id,
+      },
+      actorAdminId
+    );
+  }
+
+  return {
+    payment: updatedPayment,
+    paymentAttempt: updatedAttempt,
+    preorder: updatedPreorder,
+  };
 }
 
 async function initiateWavePayment({
@@ -125,9 +335,7 @@ async function initiateWavePayment({
 
       await tx.preorder.update({
         where: { id: preorder.id },
-        data: {
-          activePaymentId: payment.id,
-        },
+        data: { activePaymentId: payment.id },
       });
     } else {
       payment = await tx.payment.update({
@@ -176,9 +384,7 @@ async function initiateWavePayment({
 
     const updatedPayment = await tx.payment.update({
       where: { id: payment.id },
-      data: {
-        lastAttemptId: attempt.id,
-      },
+      data: { lastAttemptId: attempt.id },
     });
 
     const updatedPreorder = await tx.preorder.update({
@@ -195,22 +401,14 @@ async function initiateWavePayment({
       include: {
         activePayment: {
           include: {
-            attempts: {
-              orderBy: { createdAt: "desc" },
-            },
-            refunds: {
-              orderBy: { createdAt: "desc" },
-            },
+            attempts: { orderBy: { createdAt: "desc" } },
+            refunds: { orderBy: { createdAt: "desc" } },
           },
         },
         payments: {
           include: {
-            attempts: {
-              orderBy: { createdAt: "desc" },
-            },
-            refunds: {
-              orderBy: { createdAt: "desc" },
-            },
+            attempts: { orderBy: { createdAt: "desc" } },
+            refunds: { orderBy: { createdAt: "desc" } },
           },
           orderBy: { createdAt: "desc" },
           take: 5,
@@ -248,10 +446,7 @@ async function initiateWavePayment({
   };
 }
 
-async function syncWavePaymentStatus({
-  req,
-  preorderId,
-}) {
+async function syncWavePaymentStatus({ req, preorderId }) {
   const preorder = await prisma.preorder.findFirst({
     where: scopeWhere(req, { id: preorderId }),
     include: {
@@ -299,145 +494,17 @@ async function syncWavePaymentStatus({
   });
 
   const mapped = mapWaveSessionToInternal(providerStatus.raw);
-  const now = new Date();
 
   const result = await prisma.$transaction(async (tx) => {
-    let updatedAttempt = null;
-
-    if (lastAttempt) {
-      updatedAttempt = await tx.paymentAttempt.update({
-        where: { id: lastAttempt.id },
-        data: {
-          status: mapped.attemptStatus,
-          providerTransactionId:
-            providerStatus.providerTransactionId ||
-            lastAttempt.providerTransactionId,
-          responsePayloadJson: providerStatus.raw,
-          normalizedPayloadJson: {
-            providerSessionId: providerStatus.providerSessionId,
-            providerTransactionId: providerStatus.providerTransactionId,
-            checkoutStatus: providerStatus.checkoutStatus,
-            paymentStatus: providerStatus.paymentStatus,
-            completedAt: providerStatus.completedAt,
-          },
-          completedAt: mapped.isFinal ? now : lastAttempt.completedAt,
-          failureCode: mapped.markExpired
-            ? "WAVE_EXPIRED"
-            : mapped.markCancelled
-              ? "WAVE_CANCELLED"
-              : null,
-          failureMessage: mapped.markExpired
-            ? "Session Wave expirée"
-            : mapped.markCancelled
-              ? "Paiement Wave annulé"
-              : null,
-        },
-      });
-    }
-
-    const paymentData = {
-      status: mapped.paymentStatus,
-      providerTxnId:
-        providerStatus.providerTransactionId || payment.providerTxnId,
-    };
-
-    if (mapped.markOrderPaid) {
-      paymentData.amountPaidFcfa = payment.amountExpectedFcfa;
-      paymentData.paidAt = payment.paidAt || now;
-    }
-
-    if (mapped.markExpired) {
-      paymentData.expiredAt = payment.expiredAt || now;
-    }
-
-    if (mapped.markCancelled) {
-      paymentData.cancelledAt = payment.cancelledAt || now;
-    }
-
-    if (mapped.markFailed) {
-      paymentData.failedAt = payment.failedAt || now;
-    }
-
-    const updatedPayment = await tx.payment.update({
-      where: { id: payment.id },
-      data: paymentData,
-    });
-
-    const preorderData = {
-      paymentStatus: mapped.orderPaymentStatus,
-      billingLastActivityAt: now,
-    };
-
-    if (mapped.markOrderPaid) {
-      preorderData.status = "PAID";
-      preorderData.paidAt = preorder.paidAt || now;
-      preorderData.billingWorkStatus = "DONE";
-      preorderData.billingCompletedAt = preorder.billingCompletedAt || now;
-      preorderData.paymentProvider = "WAVE";
-    }
-
-    const updatedPreorder = await tx.preorder.update({
-      where: { id: preorder.id },
-      data: preorderData,
-      include: {
-        activePayment: {
-          include: {
-            attempts: {
-              orderBy: { createdAt: "desc" },
-            },
-            refunds: {
-              orderBy: { createdAt: "desc" },
-            },
-          },
-        },
-        payments: {
-          include: {
-            attempts: {
-              orderBy: { createdAt: "desc" },
-            },
-            refunds: {
-              orderBy: { createdAt: "desc" },
-            },
-          },
-          orderBy: { createdAt: "desc" },
-        },
-      },
-    });
-
-    await addLogTx(
+    return applyWaveMappedStateTx({
       tx,
-      preorder.id,
-      "WAVE_PAYMENT_SYNC",
-      "Synchronisation statut Wave",
-      {
-        paymentId: updatedPayment.id,
-        paymentAttemptId: updatedAttempt?.id || null,
-        mapped,
-        providerStatus: providerStatus.raw,
-      },
-      req.user?.id || null
-    );
-
-    if (mapped.markOrderPaid) {
-      await addLogTx(
-        tx,
-        preorder.id,
-        "PAYMENT_CONFIRMED",
-        "Paiement confirmé via Wave",
-        {
-          paymentProvider: "WAVE",
-          paymentStatus: "PAID",
-          paymentId: updatedPayment.id,
-        },
-        req.user?.id || null
-      );
-    }
-
-    return {
-      payment: updatedPayment,
-      paymentAttempt: updatedAttempt,
-      preorder: updatedPreorder,
-    };
+      preorder,
+      payment,
+      lastAttempt,
+      providerStatusRaw: providerStatus.raw,
+      mapped,
+      actorAdminId: req.user?.id || null,
+    });
   });
 
   return {
@@ -448,8 +515,107 @@ async function syncWavePaymentStatus({
   };
 }
 
+// ✅ simulation locale sans vraie API Wave
+async function simulateWaveStatus({ req, preorderId, scenario }) {
+  if (String(process.env.ENABLE_WAVE_SIMULATION || "false") !== "true") {
+    const err = new Error("Simulation Wave désactivée");
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const allowed = new Set(["processing", "succeeded", "expired", "cancelled"]);
+  const normalizedScenario = String(scenario || "").trim().toLowerCase();
+
+  if (!allowed.has(normalizedScenario)) {
+    const err = new Error(
+      "scenario invalide. Valeurs autorisées: processing, succeeded, expired, cancelled"
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const preorder = await prisma.preorder.findFirst({
+    where: scopeWhere(req, { id: preorderId }),
+    include: {
+      activePayment: {
+        include: {
+          attempts: {
+            orderBy: { createdAt: "desc" },
+          },
+        },
+      },
+    },
+  });
+
+  if (!preorder) {
+    const err = new Error("Commande introuvable");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const payment = preorder.activePayment;
+  if (!payment || payment.provider !== "WAVE") {
+    const err = new Error("Aucun paiement Wave actif trouvé pour cette commande");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const lastAttempt = payment.attempts?.[0];
+  if (!lastAttempt) {
+    const err = new Error("Aucune tentative Wave trouvée");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const fakeSession = {
+    id: lastAttempt.providerSessionId || payment.providerReference,
+    transaction_id:
+      lastAttempt.providerTransactionId || payment.providerTxnId || null,
+    client_reference: preorder.id,
+    checkout_status:
+      normalizedScenario === "succeeded"
+        ? "complete"
+        : normalizedScenario === "expired"
+          ? "expired"
+          : "open",
+    payment_status:
+      normalizedScenario === "succeeded"
+        ? "succeeded"
+        : normalizedScenario === "cancelled"
+          ? "cancelled"
+          : "processing",
+    wave_launch_url: lastAttempt.providerLaunchUrl || lastAttempt.checkoutUrl || null,
+    when_completed:
+      normalizedScenario === "succeeded" ? new Date().toISOString() : null,
+  };
+
+  const mapped = mapWaveSessionToInternal(fakeSession);
+
+  const result = await prisma.$transaction(async (tx) => {
+    return applyWaveMappedStateTx({
+      tx,
+      preorder,
+      payment,
+      lastAttempt,
+      providerStatusRaw: fakeSession,
+      mapped,
+      actorAdminId: req.user?.id || null,
+    });
+  });
+
+  return {
+    ok: true,
+    simulated: true,
+    scenario: normalizedScenario,
+    ...result,
+    mapped,
+    providerStatus: fakeSession,
+  };
+}
+
 async function handleWaveWebhook({ req }) {
   const parsed = await paymentOrchestrator.parseWebhook("WAVE", { req });
+  const syntheticEventId = buildSyntheticWebhookId(parsed);
 
   let event = null;
 
@@ -457,7 +623,7 @@ async function handleWaveWebhook({ req }) {
     event = await prisma.paymentWebhookEvent.create({
       data: {
         provider: "WAVE",
-        providerEventId: parsed.providerEventId || null,
+        providerEventId: syntheticEventId,
         eventType: parsed.eventType || null,
         signatureValid: Boolean(parsed.signatureValid),
         processingStatus: "RECEIVED",
@@ -474,27 +640,18 @@ async function handleWaveWebhook({ req }) {
   }
 
   try {
-    const possibleClientReference =
-      parsed.body?.data?.client_reference ||
-      parsed.body?.client_reference ||
-      parsed.body?.checkout_session?.client_reference ||
-      null;
+    const preorder = await resolvePreorderFromWebhookPayload(parsed);
 
-    if (possibleClientReference) {
-      const preorder = await prisma.preorder.findUnique({
-        where: { id: possibleClientReference },
+    if (preorder) {
+      await syncWavePaymentStatus({
+        req: {
+          ...req,
+          user: null,
+          countryId: preorder.countryId,
+          country: { id: preorder.countryId },
+        },
+        preorderId: preorder.id,
       });
-
-      if (preorder) {
-        await syncWavePaymentStatus({
-          req: {
-            ...req,
-            countryId: preorder.countryId,
-            country: { id: preorder.countryId },
-          },
-          preorderId: preorder.id,
-        });
-      }
     }
 
     await prisma.paymentWebhookEvent.update({
@@ -532,5 +689,6 @@ async function handleWaveWebhook({ req }) {
 module.exports = {
   initiateWavePayment,
   syncWavePaymentStatus,
+  simulateWaveStatus,
   handleWaveWebhook,
 };

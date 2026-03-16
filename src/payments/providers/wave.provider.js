@@ -1,5 +1,4 @@
 // src/payments/providers/wave.provider.js
-// Implémentation du fournisseur de paiement Wave, étendant la classe de base et utilisant l'API de Wave pour créer des sessions de paiement, récupérer leur statut et traiter les webhooks. La classe gère également la validation de configuration et la construction des requêtes HTTP vers l'API de Wave.
 
 const crypto = require("crypto");
 const BasePaymentProvider = require("./base.provider");
@@ -10,6 +9,8 @@ class WaveProvider extends BasePaymentProvider {
     this.baseUrl = process.env.WAVE_API_BASE_URL || "https://api.wave.com";
     this.apiKey = process.env.WAVE_API_KEY || "";
     this.signingSecret = process.env.WAVE_API_SIGNING_SECRET || "";
+    this.webhookSignatureHeader =
+      process.env.WAVE_WEBHOOK_SIGNATURE_HEADER || "wave-signature";
   }
 
   get code() {
@@ -139,11 +140,52 @@ class WaveProvider extends BasePaymentProvider {
     };
   }
 
+  verifyWebhookSignature(req) {
+    if (!this.signingSecret) return false;
+
+    const rawBody = req.rawBody || "";
+    if (!rawBody) return false;
+
+    const signatureHeader =
+      req.headers[this.webhookSignatureHeader] ||
+      req.headers[this.webhookSignatureHeader.toLowerCase()] ||
+      null;
+
+    if (!signatureHeader) return false;
+
+    // Format attendu configurable type: t=...,v1=...
+    const parts = String(signatureHeader)
+      .split(",")
+      .map((x) => x.trim());
+
+    const timestampPart = parts.find((x) => x.startsWith("t="));
+    const signaturePart = parts.find((x) => x.startsWith("v1="));
+
+    if (!timestampPart || !signaturePart) return false;
+
+    const timestamp = timestampPart.slice(2);
+    const receivedSignature = signaturePart.slice(3);
+
+    const payload = `${timestamp}${rawBody}`;
+    const expectedSignature = crypto
+      .createHmac("sha256", this.signingSecret)
+      .update(payload)
+      .digest("hex");
+
+    try {
+      return crypto.timingSafeEqual(
+        Buffer.from(receivedSignature, "hex"),
+        Buffer.from(expectedSignature, "hex")
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async parseWebhook({ req }) {
-    // V1 : on stocke le payload brut. La validation de signature pourra être renforcée après.
     return {
       provider: this.code,
-      signatureValid: false,
+      signatureValid: this.verifyWebhookSignature(req),
       providerEventId:
         req.body?.id ||
         req.body?.event_id ||
