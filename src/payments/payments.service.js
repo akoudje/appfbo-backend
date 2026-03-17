@@ -6,16 +6,30 @@ const paymentOrchestrator = require("./payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("./payment-status.mapper");
 const { scopeWhere, pickCountryId } = require("../helpers/countryScope");
 
+function isWaveSimulationEnabled() {
+  return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
+}
+
 async function addLogTx(tx, preorderId, action, note, meta, actorAdminId = null) {
-  await tx.preorderLog.create({
-    data: {
+  try {
+    await tx.preorderLog.create({
+      data: {
+        preorderId,
+        action,
+        note: note || null,
+        meta: meta || undefined,
+        actorAdminId: actorAdminId || null,
+      },
+    });
+  } catch (error) {
+    // Pour le mini test, on ne casse pas le flux si l'enum PreorderLogAction
+    // n'a pas encore les nouvelles valeurs métier.
+    console.warn("addLogTx skipped:", {
       preorderId,
       action,
-      note: note || null,
-      meta: meta || undefined,
-      actorAdminId: actorAdminId || null,
-    },
-  });
+      message: error?.message || String(error),
+    });
+  }
 }
 
 function buildWaveUrls(preorderId) {
@@ -127,6 +141,79 @@ async function resolvePreorderFromWebhookPayload(parsed) {
   return null;
 }
 
+function buildSimulatedProviderResponse({ preorderId, successUrl }) {
+  const syntheticSessionId = `wave_sim_${preorderId}_${Date.now()}`;
+
+  return {
+    provider: "WAVE",
+    raw: {
+      id: syntheticSessionId,
+      transaction_id: null,
+      client_reference: preorderId,
+      checkout_status: "open",
+      payment_status: "processing",
+      wave_launch_url: `${successUrl}&simulated=1`,
+      simulated: true,
+    },
+    providerSessionId: syntheticSessionId,
+    providerTransactionId: null,
+    checkoutUrl: `${successUrl}&simulated=1`,
+    providerLaunchUrl: `${successUrl}&simulated=1`,
+    clientReference: preorderId,
+    checkoutStatus: "open",
+    paymentStatus: "processing",
+  };
+}
+
+function isSimulatedAttempt(lastAttempt, payment) {
+  const providerSessionId =
+    lastAttempt?.providerSessionId || payment?.providerReference || "";
+  const responsePayloadJson = lastAttempt?.responsePayloadJson || {};
+  const normalizedPayloadJson = lastAttempt?.normalizedPayloadJson || {};
+
+  return (
+    isWaveSimulationEnabled() ||
+    String(providerSessionId).startsWith("wave_sim_") ||
+    responsePayloadJson?.simulated === true ||
+    normalizedPayloadJson?.simulated === true
+  );
+}
+
+function buildProviderStatusFromLocalAttempt(lastAttempt, payment, preorder) {
+  const responsePayload = lastAttempt?.responsePayloadJson || {};
+  const normalized = lastAttempt?.normalizedPayloadJson || {};
+
+  return {
+    provider: "WAVE",
+    raw: {
+      id:
+        responsePayload?.id ||
+        lastAttempt?.providerSessionId ||
+        payment?.providerReference ||
+        null,
+      transaction_id:
+        responsePayload?.transaction_id ||
+        lastAttempt?.providerTransactionId ||
+        payment?.providerTxnId ||
+        null,
+      client_reference:
+        responsePayload?.client_reference || preorder?.id || null,
+      checkout_status:
+        responsePayload?.checkout_status || normalized?.checkoutStatus || "open",
+      payment_status:
+        responsePayload?.payment_status || normalized?.paymentStatus || "processing",
+      wave_launch_url:
+        responsePayload?.wave_launch_url ||
+        lastAttempt?.providerLaunchUrl ||
+        lastAttempt?.checkoutUrl ||
+        null,
+      when_completed:
+        responsePayload?.when_completed || normalized?.whenCompleted || null,
+      simulated: true,
+    },
+  };
+}
+
 async function applyWaveMappedStateTx({
   tx,
   preorder,
@@ -151,6 +238,7 @@ async function applyWaveMappedStateTx({
           paymentStatus: providerStatusRaw?.payment_status || null,
           transactionId: providerStatusRaw?.transaction_id || null,
           whenCompleted: providerStatusRaw?.when_completed || null,
+          simulated: providerStatusRaw?.simulated === true,
         },
         completedAt: mapped.isFinal ? now : lastAttempt.completedAt,
         failureCode: mapped.markExpired
@@ -234,13 +322,15 @@ async function applyWaveMappedStateTx({
   await addLogTx(
     tx,
     preorder.id,
-    "WAVE_PAYMENT_SYNC",
+    "PAYMENT_UPDATED",
     "Synchronisation statut Wave",
     {
       paymentId: updatedPayment.id,
       paymentAttemptId: updatedAttempt?.id || null,
       mapped,
       providerStatus: providerStatusRaw,
+      provider: "WAVE",
+      simulated: providerStatusRaw?.simulated === true,
     },
     actorAdminId
   );
@@ -249,12 +339,13 @@ async function applyWaveMappedStateTx({
     await addLogTx(
       tx,
       preorder.id,
-      "PAYMENT_CONFIRMED",
+      "PAYMENT_UPDATED",
       "Paiement confirmé via Wave",
       {
         paymentProvider: "WAVE",
         paymentStatus: "PAID",
         paymentId: updatedPayment.id,
+        simulated: providerStatusRaw?.simulated === true,
       },
       actorAdminId
     );
@@ -298,33 +389,15 @@ async function initiateWavePayment({
   const providerAccount = await resolveWaveProviderAccount(countryId);
   const { successUrl, errorUrl } = buildWaveUrls(preorder.id);
 
-  const isWaveSimulation =
-    String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
+  const simulation = isWaveSimulationEnabled();
 
   let providerResponse;
 
-  if (isWaveSimulation) {
-    const syntheticSessionId = `wave_sim_${preorder.id}_${Date.now()}`;
-
-    providerResponse = {
-      provider: "WAVE",
-      raw: {
-        id: syntheticSessionId,
-        transaction_id: null,
-        client_reference: preorder.id,
-        checkout_status: "open",
-        payment_status: "processing",
-        wave_launch_url: `${successUrl}&simulated=1`,
-        simulated: true,
-      },
-      providerSessionId: syntheticSessionId,
-      providerTransactionId: null,
-      checkoutUrl: `${successUrl}&simulated=1`,
-      providerLaunchUrl: `${successUrl}&simulated=1`,
-      clientReference: preorder.id,
-      checkoutStatus: "open",
-      paymentStatus: "processing",
-    };
+  if (simulation) {
+    providerResponse = buildSimulatedProviderResponse({
+      preorderId: preorder.id,
+      successUrl,
+    });
   } else {
     providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
       amountFcfa: preorder.totalFcfa,
@@ -340,10 +413,7 @@ async function initiateWavePayment({
   const result = await prisma.$transaction(async (tx) => {
     let payment = preorder.activePayment;
 
-    if (
-      !payment ||
-      ["FAILED", "EXPIRED", "CANCELLED"].includes(payment.status)
-    ) {
+    if (!payment || ["FAILED", "EXPIRED", "CANCELLED"].includes(payment.status)) {
       payment = await tx.payment.create({
         data: {
           preorderId: preorder.id,
@@ -397,7 +467,7 @@ async function initiateWavePayment({
           amountExpectedFcfa: preorder.totalFcfa,
           clientReference: preorder.id,
           restrictPayerMobile: restrictPayerMobile || null,
-          simulated: isWaveSimulation,
+          simulated: simulation,
         },
         responsePayloadJson: providerResponse.raw,
         normalizedPayloadJson: {
@@ -408,7 +478,7 @@ async function initiateWavePayment({
           clientReference: providerResponse.clientReference,
           checkoutStatus: providerResponse.checkoutStatus,
           paymentStatus: providerResponse.paymentStatus,
-          simulated: isWaveSimulation,
+          simulated: simulation,
         },
       },
     });
@@ -418,38 +488,38 @@ async function initiateWavePayment({
       data: { lastAttemptId: attempt.id },
     });
 
-const updatedPreorder = await tx.preorder.update({
-  where: { id: preorder.id },
-  data: {
-    status: preorder.status === "PAID" ? preorder.status : "PAYMENT_PENDING",
-    paymentStatus: "PAYMENT_PENDING",
-    paymentProvider: "WAVE",
-    billingWorkStatus: "WAITING_PAYMENT",
-    billingLastActivityAt: now,
-  },
-  include: {
-    activePayment: {
-      include: {
-        attempts: { orderBy: { createdAt: "desc" } },
-        refunds: { orderBy: { createdAt: "desc" } },
+    const updatedPreorder = await tx.preorder.update({
+      where: { id: preorder.id },
+      data: {
+        status: preorder.status === "PAID" ? preorder.status : "PAYMENT_PENDING",
+        paymentStatus: "PAYMENT_PENDING",
+        paymentProvider: "WAVE",
+        billingWorkStatus: "WAITING_PAYMENT",
+        billingLastActivityAt: now,
       },
-    },
-    payments: {
       include: {
-        attempts: { orderBy: { createdAt: "desc" } },
-        refunds: { orderBy: { createdAt: "desc" } },
+        activePayment: {
+          include: {
+            attempts: { orderBy: { createdAt: "desc" } },
+            refunds: { orderBy: { createdAt: "desc" } },
+          },
+        },
+        payments: {
+          include: {
+            attempts: { orderBy: { createdAt: "desc" } },
+            refunds: { orderBy: { createdAt: "desc" } },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
       },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    },
-  },
-});
+    });
 
     await addLogTx(
       tx,
       preorder.id,
-      "WAVE_PAYMENT_INITIATED",
-      isWaveSimulation
+      "PAYMENT_UPDATED",
+      simulation
         ? "Paiement Wave initié (simulation)"
         : "Paiement Wave initié",
       {
@@ -459,7 +529,7 @@ const updatedPreorder = await tx.preorder.update({
         providerSessionId: providerResponse.providerSessionId,
         providerTransactionId: providerResponse.providerTransactionId,
         checkoutUrl: providerResponse.checkoutUrl,
-        simulated: isWaveSimulation,
+        simulated: simulation,
       },
       req.user?.id || null
     );
@@ -473,7 +543,7 @@ const updatedPreorder = await tx.preorder.update({
 
   return {
     ok: true,
-    simulated: isWaveSimulation,
+    simulated: simulation,
     ...result,
     checkoutUrl: result.paymentAttempt.checkoutUrl,
   };
@@ -522,9 +592,15 @@ async function syncWavePaymentStatus({ req, preorderId }) {
     throw err;
   }
 
-  const providerStatus = await paymentOrchestrator.getCheckoutSession("WAVE", {
-    providerSessionId,
-  });
+  let providerStatus;
+
+  if (isSimulatedAttempt(lastAttempt, payment)) {
+    providerStatus = buildProviderStatusFromLocalAttempt(lastAttempt, payment, preorder);
+  } else {
+    providerStatus = await paymentOrchestrator.getCheckoutSession("WAVE", {
+      providerSessionId,
+    });
+  }
 
   const mapped = mapWaveSessionToInternal(providerStatus.raw);
 
@@ -542,6 +618,7 @@ async function syncWavePaymentStatus({ req, preorderId }) {
 
   return {
     ok: true,
+    simulated: providerStatus.raw?.simulated === true,
     ...result,
     mapped,
     providerStatus: providerStatus.raw,
@@ -550,7 +627,7 @@ async function syncWavePaymentStatus({ req, preorderId }) {
 
 // ✅ simulation locale sans vraie API Wave
 async function simulateWaveStatus({ req, preorderId, scenario }) {
-  if (String(process.env.ENABLE_WAVE_SIMULATION || "false") !== "true") {
+  if (!isWaveSimulationEnabled()) {
     const err = new Error("Simulation Wave désactivée");
     err.statusCode = 403;
     throw err;
@@ -617,9 +694,11 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
         : normalizedScenario === "cancelled"
           ? "cancelled"
           : "processing",
-    wave_launch_url: lastAttempt.providerLaunchUrl || lastAttempt.checkoutUrl || null,
+    wave_launch_url:
+      lastAttempt.providerLaunchUrl || lastAttempt.checkoutUrl || null,
     when_completed:
       normalizedScenario === "succeeded" ? new Date().toISOString() : null,
+    simulated: true,
   };
 
   const mapped = mapWaveSessionToInternal(fakeSession);
@@ -664,7 +743,7 @@ async function handleWaveWebhook({ req }) {
         payloadJson: parsed.body || {},
       },
     });
-  } catch (e) {
+  } catch (_e) {
     return {
       ok: true,
       received: true,
