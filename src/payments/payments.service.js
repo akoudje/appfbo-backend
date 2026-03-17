@@ -6,14 +6,7 @@ const paymentOrchestrator = require("./payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("./payment-status.mapper");
 const { scopeWhere, pickCountryId } = require("../helpers/countryScope");
 
-async function addLogTx(
-  tx,
-  preorderId,
-  action,
-  note,
-  meta,
-  actorAdminId = null,
-) {
+async function addLogTx(tx, preorderId, action, note, meta, actorAdminId = null) {
   await tx.preorderLog.create({
     data: {
       preorderId,
@@ -82,7 +75,10 @@ async function resolvePreorderFromWebhookPayload(parsed) {
   }
 
   const providerSessionId =
-    body?.data?.id || body?.id || body?.checkout_session?.id || null;
+    body?.data?.id ||
+    body?.id ||
+    body?.checkout_session?.id ||
+    null;
 
   if (providerSessionId) {
     const attempt = await prisma.paymentAttempt.findFirst({
@@ -217,13 +213,7 @@ async function applyWaveMappedStateTx({
 
   const updatedPreorder = await tx.preorder.update({
     where: { id: preorder.id },
-    data: {
-      status: preorder.status === "PAID" ? preorder.status : "PAYMENT_PENDING",
-      paymentStatus: "PAYMENT_PENDING",
-      paymentProvider: "WAVE",
-      billingWorkStatus: "WAITING_PAYMENT",
-      billingLastActivityAt: now,
-    },
+    data: preorderData,
     include: {
       activePayment: {
         include: {
@@ -237,7 +227,6 @@ async function applyWaveMappedStateTx({
           refunds: { orderBy: { createdAt: "desc" } },
         },
         orderBy: { createdAt: "desc" },
-        take: 5,
       },
     },
   });
@@ -253,7 +242,7 @@ async function applyWaveMappedStateTx({
       mapped,
       providerStatus: providerStatusRaw,
     },
-    actorAdminId,
+    actorAdminId
   );
 
   if (mapped.markOrderPaid) {
@@ -267,7 +256,7 @@ async function applyWaveMappedStateTx({
         paymentStatus: "PAID",
         paymentId: updatedPayment.id,
       },
-      actorAdminId,
+      actorAdminId
     );
   }
 
@@ -278,7 +267,11 @@ async function applyWaveMappedStateTx({
   };
 }
 
-async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
+async function initiateWavePayment({
+  req,
+  preorderId,
+  restrictPayerMobile,
+}) {
   const countryId = pickCountryId(req);
 
   const preorder = await prisma.preorder.findFirst({
@@ -296,7 +289,7 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
 
   if (!["INVOICED", "PAYMENT_PENDING"].includes(preorder.status)) {
     const err = new Error(
-      `Impossible d'initier Wave depuis le statut ${preorder.status}`,
+      `Impossible d'initier Wave depuis le statut ${preorder.status}`
     );
     err.statusCode = 400;
     throw err;
@@ -425,35 +418,34 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
       data: { lastAttemptId: attempt.id },
     });
 
-    const updatedPreorder = await tx.preorder.update({
-      where: { id: preorder.id },
-      data: {
-        status:
-          preorder.status === "PAID" ? preorder.status : "PAYMENT_PENDING",
-        paymentStatus: "PAYMENT_PENDING",
-        paymentProvider: "WAVE",
-        paymentLink: providerResponse.checkoutUrl || preorder.paymentLink,
-        paymentRef: providerResponse.providerSessionId || preorder.paymentRef,
-        billingWorkStatus: "WAITING_PAYMENT",
-        billingLastActivityAt: now,
-      },
+const updatedPreorder = await tx.preorder.update({
+  where: { id: preorder.id },
+  data: {
+    status: preorder.status === "PAID" ? preorder.status : "PAYMENT_PENDING",
+    paymentStatus: "PAYMENT_PENDING",
+    paymentProvider: "WAVE",
+    paymentLink: providerResponse.checkoutUrl || preorder.paymentLink,
+    paymentRef: providerResponse.providerSessionId || preorder.paymentRef,
+    billingWorkStatus: "WAITING_PAYMENT",
+    billingLastActivityAt: now,
+  },
+  include: {
+    activePayment: {
       include: {
-        activePayment: {
-          include: {
-            attempts: { orderBy: { createdAt: "desc" } },
-            refunds: { orderBy: { createdAt: "desc" } },
-          },
-        },
-        payments: {
-          include: {
-            attempts: { orderBy: { createdAt: "desc" } },
-            refunds: { orderBy: { createdAt: "desc" } },
-          },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-        },
+        attempts: { orderBy: { createdAt: "desc" } },
+        refunds: { orderBy: { createdAt: "desc" } },
       },
-    });
+    },
+    payments: {
+      include: {
+        attempts: { orderBy: { createdAt: "desc" } },
+        refunds: { orderBy: { createdAt: "desc" } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    },
+  },
+});
 
     await addLogTx(
       tx,
@@ -471,7 +463,7 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
         checkoutUrl: providerResponse.checkoutUrl,
         simulated: isWaveSimulation,
       },
-      req.user?.id || null,
+      req.user?.id || null
     );
 
     return {
@@ -567,13 +559,11 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
   }
 
   const allowed = new Set(["processing", "succeeded", "expired", "cancelled"]);
-  const normalizedScenario = String(scenario || "")
-    .trim()
-    .toLowerCase();
+  const normalizedScenario = String(scenario || "").trim().toLowerCase();
 
   if (!allowed.has(normalizedScenario)) {
     const err = new Error(
-      "scenario invalide. Valeurs autorisées: processing, succeeded, expired, cancelled",
+      "scenario invalide. Valeurs autorisées: processing, succeeded, expired, cancelled"
     );
     err.statusCode = 400;
     throw err;
@@ -600,9 +590,7 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
 
   const payment = preorder.activePayment;
   if (!payment || payment.provider !== "WAVE") {
-    const err = new Error(
-      "Aucun paiement Wave actif trouvé pour cette commande",
-    );
+    const err = new Error("Aucun paiement Wave actif trouvé pour cette commande");
     err.statusCode = 400;
     throw err;
   }
@@ -631,8 +619,7 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
         : normalizedScenario === "cancelled"
           ? "cancelled"
           : "processing",
-    wave_launch_url:
-      lastAttempt.providerLaunchUrl || lastAttempt.checkoutUrl || null,
+    wave_launch_url: lastAttempt.providerLaunchUrl || lastAttempt.checkoutUrl || null,
     when_completed:
       normalizedScenario === "succeeded" ? new Date().toISOString() : null,
   };
