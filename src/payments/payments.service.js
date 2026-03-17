@@ -424,8 +424,6 @@ const updatedPreorder = await tx.preorder.update({
     status: preorder.status === "PAID" ? preorder.status : "PAYMENT_PENDING",
     paymentStatus: "PAYMENT_PENDING",
     paymentProvider: "WAVE",
-    paymentLink: providerResponse.checkoutUrl || preorder.paymentLink,
-    paymentRef: providerResponse.providerSessionId || preorder.paymentRef,
     billingWorkStatus: "WAITING_PAYMENT",
     billingLastActivityAt: now,
   },
