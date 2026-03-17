@@ -298,13 +298,42 @@ async function initiateWavePayment({
   const providerAccount = await resolveWaveProviderAccount(countryId);
   const { successUrl, errorUrl } = buildWaveUrls(preorder.id);
 
-  const providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
-    amountFcfa: preorder.totalFcfa,
-    successUrl,
-    errorUrl,
-    clientReference: preorder.id,
-    restrictPayerMobile,
-  });
+  const isWaveSimulation =
+    String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
+
+  let providerResponse;
+
+  if (isWaveSimulation) {
+    const syntheticSessionId = `wave_sim_${preorder.id}_${Date.now()}`;
+
+    providerResponse = {
+      provider: "WAVE",
+      raw: {
+        id: syntheticSessionId,
+        transaction_id: null,
+        client_reference: preorder.id,
+        checkout_status: "open",
+        payment_status: "processing",
+        wave_launch_url: `${successUrl}&simulated=1`,
+        simulated: true,
+      },
+      providerSessionId: syntheticSessionId,
+      providerTransactionId: null,
+      checkoutUrl: `${successUrl}&simulated=1`,
+      providerLaunchUrl: `${successUrl}&simulated=1`,
+      clientReference: preorder.id,
+      checkoutStatus: "open",
+      paymentStatus: "processing",
+    };
+  } else {
+    providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
+      amountFcfa: preorder.totalFcfa,
+      successUrl,
+      errorUrl,
+      clientReference: preorder.id,
+      restrictPayerMobile,
+    });
+  }
 
   const now = new Date();
 
@@ -368,6 +397,7 @@ async function initiateWavePayment({
           amountExpectedFcfa: preorder.totalFcfa,
           clientReference: preorder.id,
           restrictPayerMobile: restrictPayerMobile || null,
+          simulated: isWaveSimulation,
         },
         responsePayloadJson: providerResponse.raw,
         normalizedPayloadJson: {
@@ -378,6 +408,7 @@ async function initiateWavePayment({
           clientReference: providerResponse.clientReference,
           checkoutStatus: providerResponse.checkoutStatus,
           paymentStatus: providerResponse.paymentStatus,
+          simulated: isWaveSimulation,
         },
       },
     });
@@ -420,7 +451,9 @@ async function initiateWavePayment({
       tx,
       preorder.id,
       "WAVE_PAYMENT_INITIATED",
-      "Paiement Wave initié",
+      isWaveSimulation
+        ? "Paiement Wave initié (simulation)"
+        : "Paiement Wave initié",
       {
         paymentId: updatedPayment.id,
         paymentAttemptId: attempt.id,
@@ -428,6 +461,7 @@ async function initiateWavePayment({
         providerSessionId: providerResponse.providerSessionId,
         providerTransactionId: providerResponse.providerTransactionId,
         checkoutUrl: providerResponse.checkoutUrl,
+        simulated: isWaveSimulation,
       },
       req.user?.id || null
     );
@@ -441,6 +475,7 @@ async function initiateWavePayment({
 
   return {
     ok: true,
+    simulated: isWaveSimulation,
     ...result,
     checkoutUrl: result.paymentAttempt.checkoutUrl,
   };
