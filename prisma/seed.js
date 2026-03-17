@@ -1,5 +1,5 @@
 // backend/prisma/seed.js
-// Seed de la base : pays + paramètres + remises + super admin
+// Seed de la base : pays + paramètres + remises + super admin + provider Wave simulation
 
 const { PrismaClient, AdminRole } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
@@ -39,6 +39,43 @@ async function seedSuperAdmin(defaultCountryId) {
   });
 
   console.log("Super admin created:", email);
+}
+
+async function seedWaveProviderAccount(defaultCountryId) {
+  if (!defaultCountryId) return null;
+
+  const existing = await prisma.paymentProviderAccount.findFirst({
+    where: {
+      countryId: defaultCountryId,
+      provider: "WAVE",
+    },
+  });
+
+  if (existing) {
+    console.log("Wave provider account already exists for default country");
+    return existing;
+  }
+
+  const account = await prisma.paymentProviderAccount.create({
+    data: {
+      countryId: defaultCountryId,
+      provider: "WAVE",
+      label: "Wave CIV Simulation",
+      status: "ACTIVE",
+      merchantIdentifier: "wave-civ-sim",
+      apiBaseUrl: process.env.WAVE_API_BASE_URL || "https://api.wave.com",
+      configEncrypted: JSON.stringify({
+        mode: "simulation",
+        apiKeyPresent: !!process.env.WAVE_API_KEY,
+      }),
+      supportsCheckout: true,
+      supportsWebhook: true,
+      supportsRefund: false,
+    },
+  });
+
+  console.log("Wave provider account created for default country");
+  return account;
 }
 
 async function main() {
@@ -145,6 +182,7 @@ async function main() {
   );
 
   if (defaultCountryId) {
+    await seedWaveProviderAccount(defaultCountryId);
     await seedSuperAdmin(defaultCountryId);
   }
 }
