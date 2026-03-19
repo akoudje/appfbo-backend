@@ -1,5 +1,7 @@
 // src/payments/payment-orchestrator.service.js
-// Service d'orchestration des paiements, responsable de la gestion des différents fournisseurs de paiement (ex: Wave). Ce service agit comme une façade, permettant au reste de l'application d'interagir avec les fournisseurs de manière uniforme, sans se soucier des détails spécifiques à chaque fournisseur. Il gère l'initialisation des paiements, la récupération de leur statut et le traitement des webhooks en déléguant ces tâches aux classes de fournisseurs correspondantes.
+// Service d'orchestration des paiements, responsable de la gestion des différents fournisseurs de paiement (ex: Wave). 
+// Ce service agit comme une façade, permettant au reste de l'application d'interagir avec les fournisseurs de manière uniforme, sans se soucier des détails spécifiques à chaque fournisseur. 
+// Il gère l'initialisation des paiements, la récupération de leur statut et le traitement des webhooks en déléguant ces tâches aux classes de fournisseurs correspondantes.
 
 
 const WaveProvider = require("./providers/wave.provider");

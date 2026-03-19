@@ -1,4 +1,8 @@
-// src/payments/payments.controller.js
+// backend/src/payments/payments.controller.js
+// ce controller gère les endpoints liés aux paiements, en particulier pour le fournisseur Wave. 
+// Il reçoit les requêtes HTTP, valide les données d'entrée, et délègue la logique métier au service de paiement (payments.service.js). 
+// Les fonctions incluent l'initiation d'un paiement Wave, la synchronisation du statut d'un paiement, la simulation de scénarios de paiement pour le développement/test, et la gestion des webhooks envoyés par Wave. 
+// Chaque fonction gère également les erreurs et retourne des réponses JSON appropriées au client.
 
 const paymentsService = require("./payments.service");
 

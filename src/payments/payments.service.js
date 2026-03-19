@@ -1,4 +1,5 @@
-// src/payments/payments.service.js
+// backend/src/payments/payments.service.js
+// Service de gestion des paiements, notamment l'intégration avec le provider Wave (Mobile Money).
 
 const crypto = require("crypto");
 const prisma = require("../prisma");
@@ -22,8 +23,6 @@ async function addLogTx(tx, preorderId, action, note, meta, actorAdminId = null)
       },
     });
   } catch (error) {
-    // Pour le mini test, on ne casse pas le flux si l'enum PreorderLogAction
-    // n'a pas encore les nouvelles valeurs métier.
     console.warn("addLogTx skipped:", {
       preorderId,
       action,
@@ -624,7 +623,6 @@ async function syncWavePaymentStatus({ req, preorderId }) {
   };
 }
 
-// ✅ simulation locale sans vraie API Wave
 async function simulateWaveStatus({ req, preorderId, scenario }) {
   if (!isWaveSimulationEnabled()) {
     const err = new Error("Simulation Wave désactivée");
@@ -632,12 +630,12 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
     throw err;
   }
 
-  const allowed = new Set(["processing", "succeeded", "expired", "cancelled"]);
+  const allowed = new Set(["processing", "succeeded", "expired", "cancelled", "failed"]);
   const normalizedScenario = String(scenario || "").trim().toLowerCase();
 
   if (!allowed.has(normalizedScenario)) {
     const err = new Error(
-      "scenario invalide. Valeurs autorisées: processing, succeeded, expired, cancelled"
+      "scenario invalide. Valeurs autorisées: processing, succeeded, expired, cancelled, failed"
     );
     err.statusCode = 400;
     throw err;
@@ -686,13 +684,17 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
         ? "complete"
         : normalizedScenario === "expired"
           ? "expired"
-          : "open",
+          : normalizedScenario === "failed"
+            ? "failed"
+            : "open",
     payment_status:
       normalizedScenario === "succeeded"
         ? "succeeded"
         : normalizedScenario === "cancelled"
           ? "cancelled"
-          : "processing",
+          : normalizedScenario === "failed"
+            ? "failed"
+            : "processing",
     wave_launch_url:
       lastAttempt.providerLaunchUrl || lastAttempt.checkoutUrl || null,
     when_completed:
@@ -751,6 +753,25 @@ async function handleWaveWebhook({ req }) {
   }
 
   try {
+    if (!parsed.signatureValid) {
+      await prisma.paymentWebhookEvent.update({
+        where: { id: event.id },
+        data: {
+          processingStatus: "FAILED",
+          processedAt: new Date(),
+          errorMessage:
+            parsed.signatureReason || "Signature webhook Wave invalide",
+        },
+      });
+
+      return {
+        ok: true,
+        received: true,
+        processed: false,
+        error: parsed.signatureReason || "Signature webhook invalide",
+      };
+    }
+
     const preorder = await resolvePreorderFromWebhookPayload(parsed);
 
     if (preorder) {

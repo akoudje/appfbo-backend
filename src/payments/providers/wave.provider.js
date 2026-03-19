@@ -1,4 +1,5 @@
 // src/payments/providers/wave.provider.js
+// Implémentation du provider de paiement Wave
 
 const crypto = require("crypto");
 const BasePaymentProvider = require("./base.provider");
@@ -6,11 +7,22 @@ const BasePaymentProvider = require("./base.provider");
 class WaveProvider extends BasePaymentProvider {
   constructor({ logger = console } = {}) {
     super({ logger });
+
     this.baseUrl = process.env.WAVE_API_BASE_URL || "https://api.wave.com";
     this.apiKey = process.env.WAVE_API_KEY || "";
-    this.signingSecret = process.env.WAVE_API_SIGNING_SECRET || "";
+
+    // Secret pour SIGNER les requêtes sortantes vers Wave
+    this.apiSigningSecret = process.env.WAVE_API_SIGNING_SECRET || "";
+
+    // Secret pour VÉRIFIER les webhooks entrants Wave
+    this.webhookSecret = process.env.WAVE_WEBHOOK_SECRET || "";
+
     this.webhookSignatureHeader =
       process.env.WAVE_WEBHOOK_SIGNATURE_HEADER || "wave-signature";
+
+    this.webhookToleranceSeconds = Number(
+      process.env.WAVE_WEBHOOK_TOLERANCE_SECONDS || 300
+    );
   }
 
   get code() {
@@ -31,11 +43,12 @@ class WaveProvider extends BasePaymentProvider {
       "Content-Type": "application/json",
     };
 
-    if (this.signingSecret) {
+    // Si request signing est activé sur la clé API, Wave exige Wave-Signature
+    if (this.apiSigningSecret) {
       const timestamp = Math.floor(Date.now() / 1000);
       const payload = `${timestamp}${bodyString}`;
       const signature = crypto
-        .createHmac("sha256", this.signingSecret)
+        .createHmac("sha256", this.apiSigningSecret)
         .update(payload)
         .digest("hex");
 
@@ -68,6 +81,7 @@ class WaveProvider extends BasePaymentProvider {
       const err = new Error(
         data?.message ||
           data?.error ||
+          data?.details?.message ||
           `Wave API error (${response.status})`
       );
       err.statusCode = response.status;
@@ -140,56 +154,143 @@ class WaveProvider extends BasePaymentProvider {
     };
   }
 
-  verifyWebhookSignature(req) {
-    if (!this.signingSecret) return false;
+  getHeader(req, name) {
+    const lower = String(name || "").toLowerCase();
+    return (
+      req.headers?.[name] ||
+      req.headers?.[lower] ||
+      req.get?.(name) ||
+      null
+    );
+  }
 
-    const rawBody = req.rawBody || "";
-    if (!rawBody) return false;
+  parseWaveSignatureHeader(signatureHeader) {
+    if (!signatureHeader) {
+      return {
+        timestamp: null,
+        signatures: [],
+      };
+    }
 
-    const signatureHeader =
-      req.headers[this.webhookSignatureHeader] ||
-      req.headers[this.webhookSignatureHeader.toLowerCase()] ||
-      null;
-
-    if (!signatureHeader) return false;
-
-    // Format attendu configurable type: t=...,v1=...
     const parts = String(signatureHeader)
       .split(",")
-      .map((x) => x.trim());
+      .map((x) => x.trim())
+      .filter(Boolean);
 
     const timestampPart = parts.find((x) => x.startsWith("t="));
-    const signaturePart = parts.find((x) => x.startsWith("v1="));
+    const signatureParts = parts.filter((x) => x.startsWith("v1="));
 
-    if (!timestampPart || !signaturePart) return false;
+    return {
+      timestamp: timestampPart ? timestampPart.slice(2) : null,
+      signatures: signatureParts.map((x) => x.slice(3)).filter(Boolean),
+    };
+  }
 
-    const timestamp = timestampPart.slice(2);
-    const receivedSignature = signaturePart.slice(3);
+  isWebhookTimestampFresh(timestamp) {
+    const ts = Number(timestamp);
+    if (!Number.isFinite(ts)) return false;
 
-    const payload = `${timestamp}${rawBody}`;
-    const expectedSignature = crypto
-      .createHmac("sha256", this.signingSecret)
-      .update(payload)
-      .digest("hex");
+    const now = Math.floor(Date.now() / 1000);
+    return Math.abs(now - ts) <= this.webhookToleranceSeconds;
+  }
 
-    try {
-      return crypto.timingSafeEqual(
-        Buffer.from(receivedSignature, "hex"),
-        Buffer.from(expectedSignature, "hex")
-      );
-    } catch {
-      return false;
+  verifyWebhookSignature(req) {
+    if (!this.webhookSecret) {
+      return {
+        valid: false,
+        mode: "missing_secret",
+        reason: "WAVE_WEBHOOK_SECRET manquant",
+      };
     }
+
+    const rawBody = req.rawBody || "";
+    if (!rawBody) {
+      return {
+        valid: false,
+        mode: "missing_raw_body",
+        reason: "req.rawBody manquant",
+      };
+    }
+
+    const signatureHeader = this.getHeader(req, this.webhookSignatureHeader);
+
+    // Mode recommandé: signing secret via Wave-Signature
+    if (signatureHeader) {
+      const { timestamp, signatures } =
+        this.parseWaveSignatureHeader(signatureHeader);
+
+      if (!timestamp || signatures.length === 0) {
+        return {
+          valid: false,
+          mode: "signature",
+          reason: "Header Wave-Signature invalide",
+        };
+      }
+
+      if (!this.isWebhookTimestampFresh(timestamp)) {
+        return {
+          valid: false,
+          mode: "signature",
+          reason: "Timestamp webhook expiré",
+        };
+      }
+
+      const payload = `${timestamp}${rawBody}`;
+      const expectedSignature = crypto
+        .createHmac("sha256", this.webhookSecret)
+        .update(payload)
+        .digest("hex");
+
+      const valid = signatures.some((receivedSignature) => {
+        try {
+          return crypto.timingSafeEqual(
+            Buffer.from(receivedSignature, "hex"),
+            Buffer.from(expectedSignature, "hex")
+          );
+        } catch {
+          return false;
+        }
+      });
+
+      return {
+        valid,
+        mode: "signature",
+        reason: valid ? null : "Signature webhook invalide",
+      };
+    }
+
+    // Mode alternatif: shared secret dans Authorization: Bearer <secret>
+    const authHeader = this.getHeader(req, "authorization");
+    if (authHeader) {
+      const expected = `Bearer ${this.webhookSecret}`;
+      const valid = authHeader === expected;
+
+      return {
+        valid,
+        mode: "shared_secret",
+        reason: valid ? null : "Authorization webhook invalide",
+      };
+    }
+
+    return {
+      valid: false,
+      mode: "missing_auth",
+      reason: "Aucun mécanisme d'authentification webhook trouvé",
+    };
   }
 
   async parseWebhook({ req }) {
+    const signature = this.verifyWebhookSignature(req);
+
     return {
       provider: this.code,
-      signatureValid: this.verifyWebhookSignature(req),
+      signatureValid: signature.valid,
+      signatureMode: signature.mode,
+      signatureReason: signature.reason,
       providerEventId:
         req.body?.id ||
         req.body?.event_id ||
-        req.headers["x-wave-event-id"] ||
+        this.getHeader(req, "x-wave-event-id") ||
         null,
       eventType: req.body?.type || req.body?.event_type || null,
       body: req.body,

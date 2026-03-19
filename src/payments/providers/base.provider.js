@@ -1,5 +1,6 @@
 // src/payments/providers/base.provider.js
-// Classe de base pour les fournisseurs de paiement, définissant l'interface et les méthodes communes. Chaque fournisseur spécifique (ex: Wave) étend cette classe et implémente les méthodes nécessaires.
+// Classe de base pour les fournisseurs de paiement, définissant l'interface et les méthodes communes. 
+// Chaque fournisseur spécifique (ex: Wave) étend cette classe et implémente les méthodes nécessaires.
 
 class BasePaymentProvider {
   constructor({ logger = console } = {}) {
@@ -8,6 +9,10 @@ class BasePaymentProvider {
 
   get code() {
     throw new Error("Provider code getter must be implemented");
+  }
+
+  ensureConfigured() {
+    throw new Error("ensureConfigured() must be implemented");
   }
 
   async createCheckoutSession(_payload) {

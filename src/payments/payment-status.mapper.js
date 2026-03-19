@@ -9,9 +9,9 @@ function mapWaveSessionToInternal(session = {}) {
   // Paiement réussi
   if (paymentStatus === "succeeded" || checkoutStatus === "complete") {
     return {
-      paymentStatus: "SUCCEEDED", // Payment.status
-      attemptStatus: "SUCCEEDED", // PaymentAttempt.status
-      orderPaymentStatus: "PAID", // Preorder.paymentStatus
+      paymentStatus: "SUCCEEDED",
+      attemptStatus: "SUCCEEDED",
+      orderPaymentStatus: "PAID",
       markOrderPaid: true,
       markFailed: false,
       markExpired: false,
@@ -48,6 +48,25 @@ function mapWaveSessionToInternal(session = {}) {
       markCancelled: true,
       isFinal: true,
       reason: "wave_cancelled",
+    };
+  }
+
+  // Échec explicite éventuel
+  if (
+    paymentStatus === "failed" ||
+    paymentStatus === "error" ||
+    checkoutStatus === "failed"
+  ) {
+    return {
+      paymentStatus: "FAILED",
+      attemptStatus: "FAILED",
+      orderPaymentStatus: "PAYMENT_PENDING",
+      markOrderPaid: false,
+      markFailed: true,
+      markExpired: false,
+      markCancelled: false,
+      isFinal: true,
+      reason: "wave_failed",
     };
   }
 
