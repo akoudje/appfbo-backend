@@ -5,7 +5,6 @@
 // 3) getSummary : récapitulatif de la précommande avant validation (calcul des totaux, message WhatsApp, etc.)
 // 4) submit : validation finale qui fige les totaux, génère le message WhatsApp, change le statut en SUBMITTED
 
-
 const prisma = require("../prisma");
 const {
   computePreorderTotals,
@@ -54,7 +53,9 @@ async function createDraft(req, res) {
     const normalizedNomComplet = String(nomComplet).trim();
     const normalizedPointDeVente = String(pointDeVente).trim();
 
-    const normalizedGrade = String(grade || "").trim().toUpperCase();
+    const normalizedGrade = String(grade || "")
+      .trim()
+      .toUpperCase();
 
     const normalizedDeliveryMode = deliveryMode
       ? String(deliveryMode).trim().toUpperCase()
@@ -117,7 +118,10 @@ async function getCatalog(req, res) {
   const countryId = req.country.id;
 
   try {
-    const items = await computeCatalogProductsForPreorder(preorderId, countryId);
+    const items = await computeCatalogProductsForPreorder(
+      preorderId,
+      countryId,
+    );
 
     return res.json({
       preorderId,
@@ -214,7 +218,9 @@ async function setItems(req, res) {
         where: { id: preorderId },
         data: {
           totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
-          totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
+          totalPoidsKg: String(
+            Number(summary.totals.totalPoidsKg || 0).toFixed(3),
+          ),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
@@ -264,9 +270,11 @@ async function getSummary(req, res) {
     }
 
     if (
-      ["PRODUCT_COUNTRY_MISMATCH", "PRODUCT_NOT_FOUND", "PRODUCT_INACTIVE"].includes(
-        String(e.message),
-      )
+      [
+        "PRODUCT_COUNTRY_MISMATCH",
+        "PRODUCT_NOT_FOUND",
+        "PRODUCT_INACTIVE",
+      ].includes(String(e.message))
     ) {
       return res.status(400).json({
         error: "Un ou plusieurs produits du panier sont invalides.",
@@ -300,25 +308,34 @@ async function submit(req, res) {
     }
 
     if (!preorder.items || preorder.items.length === 0) {
-      return res.status(400).json({ error: "Panier vide. Ajoute au moins 1 article." });
+      return res
+        .status(400)
+        .json({ error: "Panier vide. Ajoute au moins 1 article." });
     }
 
     if (!preorder.deliveryMode) {
-      return res.status(400).json({ error: "Le mode de livraison est obligatoire." });
+      return res
+        .status(400)
+        .json({ error: "Le mode de livraison est obligatoire." });
     }
 
     if (!isNonEmptyString(preorder.fboNumero) || !preorder.fboGrade) {
-      return res.status(400).json({ error: "Les informations FBO sont incomplètes." });
+      return res
+        .status(400)
+        .json({ error: "Les informations FBO sont incomplètes." });
     }
 
     const summary = await computePreorderTotals(preorderId, countryId);
 
     if (!summary.items || summary.items.length === 0) {
-      return res.status(400).json({ error: "Panier vide. Ajoute au moins 1 article." });
+      return res
+        .status(400)
+        .json({ error: "Panier vide. Ajoute au moins 1 article." });
     }
 
-    const minCartFcfa = preorder.country?.settings?.minCartFcfa || 0;
-    if ((summary.totals.totalFcfa || 0) < minCartFcfa) {
+    const minCartFcfa = Number(preorder.country?.settings?.minCartFcfa ?? 0);
+
+    if (Number(summary.totals.totalFcfa || 0) < minCartFcfa) {
       return res.status(400).json({
         error: `Montant minimum non atteint. Minimum requis: ${minCartFcfa} FCFA.`,
       });
@@ -353,9 +370,13 @@ async function submit(req, res) {
             productSkuSnapshot: it.sku || null,
             productNameSnapshot: it.nom || null,
             prixCatalogueFcfa:
-              it.prixCatalogueFcfa != null ? it.prixCatalogueFcfa : it.prixUnitaireFcfa,
+              it.prixCatalogueFcfa != null
+                ? it.prixCatalogueFcfa
+                : it.prixUnitaireFcfa,
             discountPercent: String(
-              Number(it.discountPercent != null ? it.discountPercent : 0).toFixed(2),
+              Number(
+                it.discountPercent != null ? it.discountPercent : 0,
+              ).toFixed(2),
             ),
             prixUnitaireFcfa: it.prixUnitaireFcfa,
             ccUnitaire: String(Number(it.ccUnitaire || 0).toFixed(3)),
@@ -376,7 +397,9 @@ async function submit(req, res) {
           billingQueueEnteredAt: now,
           billingSlaDeadlineAt: sla,
           totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
-          totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
+          totalPoidsKg: String(
+            Number(summary.totals.totalPoidsKg || 0).toFixed(3),
+          ),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,

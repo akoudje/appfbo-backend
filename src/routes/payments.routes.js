@@ -1,3 +1,6 @@
+// backend/src/routes/payments.routes.js
+// Routes liées aux paiements, notamment l'initiation de paiements via le provider Wave (Mobile Money) et la gestion des webhooks de statut de paiement.
+
 const express = require("express");
 const router = express.Router();
 
