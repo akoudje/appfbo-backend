@@ -1207,7 +1207,7 @@ async function updateCountrySettings(req, res) {
       create: {
         countryId,
         minCartFcfa:
-          data.minCartFcfa !== undefined ? data.minCartFcfa : 10000,
+          data.minCartFcfa !== undefined ? data.minCartFcfa : 100,
         maxActiveBillingPerInvoicer:
           data.maxActiveBillingPerInvoicer !== undefined
             ? data.maxActiveBillingPerInvoicer

@@ -83,7 +83,7 @@ async function main() {
     .trim()
     .toUpperCase();
 
-  const minCartFcfa = readIntEnv("DEFAULT_MIN_CART_FCFA", 10000);
+  const minCartFcfa = readIntEnv("DEFAULT_MIN_CART_FCFA", 100);
   const maxActiveBillingPerInvoicer = readIntEnv(
     "DEFAULT_MAX_ACTIVE_BILLING_PER_INVOICER",
     5,
