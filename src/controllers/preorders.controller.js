@@ -20,7 +20,7 @@ const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const {
   formatDateKey,
   formatPreorderNumber,
-} = require("./utils/preorder-number");
+} = require("../../utils/preorder-number");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
