@@ -1,4 +1,4 @@
-// src/services/whatsapp.service.js
+// backend/src/services/whatsapp.service.js
 
 /**
  * Formate un montant FCFA
@@ -22,11 +22,11 @@ function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   const lines = [];
 
   lines.push(`- PRÉCOMMANDE FLP CIV -`);
-  lines.push(`Précommande N° : ${preorder?.id || "-"}`);
+  lines.push(`Précommande N° : ${preorder?.preorderNumber || "-"}`);
   lines.push(`FBO : ${preorder?.fboNumero || "-"}`);
   lines.push(`Nom : ${preorder?.fboNomComplet || "-"}`);
   lines.push(`Mode de livraison : ${preorder?.deliveryMode || "-"}`);
-  lines.push(`Mode de paiement : ${preorder?.paymentMode || "-"}`);
+  lines.push(`Mode de paiement : ${preorder?.preorderPaymentMode || "-"}`);
   lines.push("");
 
   lines.push(`Produits demandés :`);

@@ -236,7 +236,10 @@ async function computePreorderTotals(preorderId, countryId) {
   const totalFcfa = totalProduitsFcfa + fraisLivraisonFcfa;
 
   return {
-    preorder,
+    preorder: {
+      ...preorder,
+      preorderPaymentMode: preorder?.preorderPaymentMode || null,
+    },
     discountPercent,
     items: computedItems,
     totals: {

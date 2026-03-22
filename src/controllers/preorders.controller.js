@@ -17,8 +17,10 @@ const {
 } = require("../services/whatsapp.service");
 
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
-
-const { formatDateKey, formatPreorderNumber } = require("../utils/preorder-number");
+const {
+  formatDateKey,
+  formatPreorderNumber,
+} = require("../utils/preorder-number");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
@@ -30,8 +32,6 @@ function normalizeNumeroFbo(v) {
   return String(v || "").trim();
 }
 
-
-
 async function createDraft(req, res) {
   try {
     const {
@@ -39,6 +39,7 @@ async function createDraft(req, res) {
       nomComplet,
       grade,
       pointDeVente,
+      paymentMode = null,
       deliveryMode = null,
     } = req.body || {};
 
@@ -56,10 +57,11 @@ async function createDraft(req, res) {
     const normalizedNumeroFbo = normalizeNumeroFbo(numeroFbo);
     const normalizedNomComplet = String(nomComplet).trim().toUpperCase();
     const normalizedPointDeVente = String(pointDeVente).trim().toUpperCase();
+    const normalizedGrade = String(grade || "").trim().toUpperCase();
 
-    const normalizedGrade = String(grade || "")
-      .trim()
-      .toUpperCase();
+    const normalizedPaymentMode = paymentMode
+      ? String(paymentMode).trim().toUpperCase()
+      : null;
 
     const normalizedDeliveryMode = deliveryMode
       ? String(deliveryMode).trim().toUpperCase()
@@ -124,7 +126,10 @@ async function createDraft(req, res) {
           fboNomComplet: fbo.nomComplet,
           fboGrade: fbo.grade,
           pointDeVente: fbo.pointDeVente,
+
+          preorderPaymentMode: normalizedPaymentMode,
           deliveryMode: normalizedDeliveryMode,
+
           status: "DRAFT",
           billingWorkStatus: "NONE",
           paymentStatus: "UNPAID",
@@ -143,6 +148,7 @@ async function createDraft(req, res) {
           meta: {
             fboId: fbo.id,
             numeroFbo: fbo.numeroFbo,
+            preorderPaymentMode: normalizedPaymentMode,
             deliveryMode: normalizedDeliveryMode,
             preorderNumber,
             preorderSeq: nextSeq,
@@ -164,8 +170,7 @@ async function createDraft(req, res) {
   } catch (e) {
     if (e?.code === "P2002") {
       return res.status(409).json({
-        error:
-          "Conflit de numérotation détecté. Réessayez immédiatement.",
+        error: "Conflit de numérotation détecté. Réessayez immédiatement.",
       });
     }
 
@@ -180,10 +185,7 @@ async function getCatalog(req, res) {
   const countryId = req.country.id;
 
   try {
-    const items = await computeCatalogProductsForPreorder(
-      preorderId,
-      countryId,
-    );
+    const items = await computeCatalogProductsForPreorder(preorderId, countryId);
 
     return res.json({
       preorderId,
@@ -304,6 +306,8 @@ async function setItems(req, res) {
 
     return res.json({
       preorderId,
+      preorderNumber:
+        summary?.preorder?.preorderNumber || preorder.preorderNumber,
       items: summary.items,
       totals: summary.totals,
     });
@@ -321,6 +325,7 @@ async function getSummary(req, res) {
 
     return res.json({
       preorderId,
+      preorderNumber: summary?.preorder?.preorderNumber || null,
       discountPercent: summary.discountPercent,
       items: summary.items,
       totals: summary.totals,
@@ -477,6 +482,12 @@ async function submit(req, res) {
           action: "SUBMIT",
           note: "Précommande soumise",
           meta: {
+            preorderNumber:
+              summary?.preorder?.preorderNumber || preorder.preorderNumber,
+            preorderPaymentMode:
+              summary?.preorder?.preorderPaymentMode ||
+              preorder.preorderPaymentMode ||
+              null,
             totalFcfa: summary.totals.totalFcfa || 0,
             itemsCount: summary.items.length,
             whatsappTo: chosen,
@@ -499,6 +510,8 @@ async function submit(req, res) {
 
     return res.json({
       preorderId,
+      preorderNumber:
+        summary?.preorder?.preorderNumber || preorder.preorderNumber,
       status: "SUBMITTED",
       billingWorkStatus: "QUEUED",
       totals: summary.totals,

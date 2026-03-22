@@ -72,6 +72,12 @@ enum PaymentMethodType {
   MANUAL_PROOF
 }
 
+enum PreorderPaymentMode {
+  ESPECES
+  WAVE
+  ORANGE_MONEY
+}
+
 enum PaymentStatus {
   INITIATED
   PENDING_CUSTOMER_ACTION
@@ -421,6 +427,9 @@ model Preorder {
   preorderSeq     Int?
   preorderDateKey String?
 
+  // mode de paiement
+  preorderPaymentMode PreorderPaymentMode?
+
   // Workflow global commande
   status        PreorderStatus     @default(DRAFT)
   paymentStatus OrderPaymentStatus @default(UNPAID)
@@ -528,6 +537,7 @@ model Preorder {
   stockMovements StockMovement[]
 
   @@index([status, createdAt])
+  @@index([preorderPaymentMode])
   @@index([countryId, status, createdAt])
   @@index([paymentStatus, createdAt])
   @@index([fboId])
