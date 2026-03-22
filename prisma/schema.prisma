@@ -416,6 +416,11 @@ model GradeDiscount {
 model Preorder {
   id String @id @default(cuid())
 
+  // Numéro de precommande 
+  preorderNumber  String? @unique
+  preorderSeq     Int?
+  preorderDateKey String?
+
   // Workflow global commande
   status        PreorderStatus     @default(DRAFT)
   paymentStatus OrderPaymentStatus @default(UNPAID)

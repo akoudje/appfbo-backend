@@ -18,6 +18,8 @@ const {
 
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 
+const { formatDateKey, formatPreorderNumber } = require("../utils/preorder-number");
+
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
 function isNonEmptyString(v) {
@@ -27,6 +29,8 @@ function isNonEmptyString(v) {
 function normalizeNumeroFbo(v) {
   return String(v || "").trim();
 }
+
+
 
 async function createDraft(req, res) {
   try {
@@ -50,8 +54,8 @@ async function createDraft(req, res) {
     }
 
     const normalizedNumeroFbo = normalizeNumeroFbo(numeroFbo);
-    const normalizedNomComplet = String(nomComplet).trim();
-    const normalizedPointDeVente = String(pointDeVente).trim();
+    const normalizedNomComplet = String(nomComplet).trim().toUpperCase();
+    const normalizedPointDeVente = String(pointDeVente).trim().toUpperCase();
 
     const normalizedGrade = String(grade || "")
       .trim()
@@ -60,6 +64,21 @@ async function createDraft(req, res) {
     const normalizedDeliveryMode = deliveryMode
       ? String(deliveryMode).trim().toUpperCase()
       : null;
+
+    const countryId = req.country?.id || req.scope?.countryId || req.countryId;
+    const countryCode =
+      req.country?.code ||
+      req.scope?.countryCode ||
+      req.headers["x-country"] ||
+      "CIV";
+
+    if (!countryId) {
+      return res.status(400).json({
+        error: "countryId introuvable dans le scope de la requête",
+      });
+    }
+
+    const preorderDateKey = formatDateKey(new Date());
 
     const fbo = await prisma.fbo.upsert({
       where: { numeroFbo: normalizedNumeroFbo },
@@ -77,6 +96,27 @@ async function createDraft(req, res) {
     });
 
     const preorder = await prisma.$transaction(async (tx) => {
+      const lastPreorderOfDay = await tx.preorder.findFirst({
+        where: {
+          countryId,
+          preorderDateKey,
+        },
+        orderBy: {
+          preorderSeq: "desc",
+        },
+        select: {
+          preorderSeq: true,
+        },
+      });
+
+      const nextSeq = (lastPreorderOfDay?.preorderSeq || 0) + 1;
+
+      const preorderNumber = formatPreorderNumber({
+        countryCode,
+        dateKey: preorderDateKey,
+        seq: nextSeq,
+      });
+
       const created = await tx.preorder.create({
         data: scopeCreate(req, {
           fboId: fbo.id,
@@ -88,6 +128,10 @@ async function createDraft(req, res) {
           status: "DRAFT",
           billingWorkStatus: "NONE",
           paymentStatus: "UNPAID",
+
+          preorderNumber,
+          preorderSeq: nextSeq,
+          preorderDateKey,
         }),
       });
 
@@ -100,6 +144,11 @@ async function createDraft(req, res) {
             fboId: fbo.id,
             numeroFbo: fbo.numeroFbo,
             deliveryMode: normalizedDeliveryMode,
+            preorderNumber,
+            preorderSeq: nextSeq,
+            preorderDateKey,
+            countryId,
+            countryCode,
           },
         },
       });
@@ -107,9 +156,22 @@ async function createDraft(req, res) {
       return created;
     });
 
-    return res.json({ preorderId: preorder.id, status: preorder.status });
+    return res.json({
+      preorderId: preorder.id,
+      preorderNumber: preorder.preorderNumber,
+      status: preorder.status,
+    });
   } catch (e) {
-    return res.status(500).json({ error: e.message || "Erreur createDraft" });
+    if (e?.code === "P2002") {
+      return res.status(409).json({
+        error:
+          "Conflit de numérotation détecté. Réessayez immédiatement.",
+      });
+    }
+
+    return res.status(500).json({
+      error: e.message || "Erreur createDraft",
+    });
   }
 }
 
