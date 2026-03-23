@@ -61,9 +61,6 @@ async function createPreorderLog(
   });
 }
 
-
-
-
 /**
  * Détermine si la précommande doit utiliser Wave
  */
@@ -84,15 +81,6 @@ function isWavePreorder(preorder) {
     mode.includes("MOMO")
   );
 }
-
-console.log(
-  "[invoiceAndSendPreorder] messagePurpose =",
-  messagePurpose
-);
-console.log(
-  "[invoiceAndSendPreorder] body to save =",
-  whatsappMessage
-);
 
 /**
  * Construit le message WhatsApp de facturation.
@@ -148,7 +136,7 @@ async function invoiceAndSendPreorder({
 
   const now = new Date();
 
-  // 1) Charger d'abord la commande hors transaction principale
+  // 1) Charger la commande
   const existingPreorder = await prisma.preorder.findUnique({
     where: { id: preorderId },
     include: {
@@ -176,7 +164,7 @@ async function invoiceAndSendPreorder({
 
   const whatsappTo = resolveWhatsappTo(existingPreorder, whatsappToInput);
 
-  // 2) Facturer d'abord la commande sans envoyer tout de suite le message
+  // 2) Facturer la commande
   const invoicedPreorder = await prisma.$transaction(async (tx) => {
     const updatedPreorder = await tx.preorder.update({
       where: { id: existingPreorder.id },
@@ -218,13 +206,14 @@ async function invoiceAndSendPreorder({
     return updatedPreorder;
   });
 
-console.log("[invoiceAndSendPreorder] preorderPaymentMode =", invoicedPreorder?.preorderPaymentMode);
-console.log("[invoiceAndSendPreorder] paymentMode =", invoicedPreorder?.paymentMode);
-console.log("[invoiceAndSendPreorder] paymentProvider =", invoicedPreorder?.paymentProvider);
-console.log("[invoiceAndSendPreorder] isWavePreorder =", isWavePreorder(invoicedPreorder));
-console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
+  // 🔍 Logs déplacés ici (correct)
+  console.log("[invoiceAndSendPreorder] preorderPaymentMode =", invoicedPreorder?.preorderPaymentMode);
+  console.log("[invoiceAndSendPreorder] paymentMode =", invoicedPreorder?.paymentMode);
+  console.log("[invoiceAndSendPreorder] paymentProvider =", invoicedPreorder?.paymentProvider);
+  console.log("[invoiceAndSendPreorder] isWavePreorder =", isWavePreorder(invoicedPreorder));
+  console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
 
-  // 3) Si la commande est Wave, on initie Wave MAINTENANT
+  // 3) Initier Wave si nécessaire
   let waveResult = null;
   let paymentLink = null;
 
@@ -240,7 +229,7 @@ console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
       null;
   }
 
-  // 4) Construire le message final avec le lien si dispo
+  // 4) Construire le message WhatsApp
   const messagePurpose = paymentLink ? "PAYMENT_LINK" : "INVOICE";
 
   let whatsappMessage = buildInvoiceMessage({
@@ -250,8 +239,6 @@ console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
     paymentLink,
   });
 
-  // garde-fou : si Wave est utilisé et que le lien n'apparait pas dans le texte,
-  // on l'ajoute explicitement à la fin du message.
   if (paymentLink && !String(whatsappMessage || "").includes(paymentLink)) {
     whatsappMessage = [
       String(whatsappMessage || "").trim(),
@@ -263,7 +250,14 @@ console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
       .join("\n");
   }
 
-  // 5) Créer et envoyer le message WhatsApp final
+  // 🔍 Logs déplacés ici (correct)
+  console.log("[invoiceAndSendPreorder] messagePurpose =", messagePurpose);
+  console.log("[invoiceAndSendPreorder] body to save =", whatsappMessage);
+
+  console.log("[invoiceAndSendPreorder] waveResult =", JSON.stringify(waveResult, null, 2));
+  console.log("[invoiceAndSendPreorder] paymentLink =", paymentLink);
+
+  // 5) Envoi WhatsApp + logs + mise à jour
   const finalResult = await prisma.$transaction(async (tx) => {
     const createdMessage = await tx.orderMessage.create({
       data: {
@@ -390,9 +384,6 @@ console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
 
   return finalResult;
 }
-
-console.log("[invoiceAndSendPreorder] messagePurpose =", messagePurpose);
-console.log("[invoiceAndSendPreorder] body to save =", whatsappMessage);
 
 module.exports = {
   invoiceAndSendPreorder,
