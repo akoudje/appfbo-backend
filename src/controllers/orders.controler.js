@@ -376,6 +376,7 @@ async function invoiceOrder(req, res) {
     const actorAdminId = req.user?.id || null;
 
     const result = await invoiceAndSendPreorder({
+      req, // ✅ important
       preorderId: id,
       actorName,
       actorAdminId,

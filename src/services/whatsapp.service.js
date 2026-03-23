@@ -97,6 +97,8 @@ function buildPaymentWhatsAppMessage({
   paymentMode,
   note,
 }) {
+  const normalizedMode = String(paymentMode || "").trim().toUpperCase();
+
   const lines = [
     `Bonjour ${fboNomComplet || "Cher FBO"},`,
     "",
@@ -107,7 +109,7 @@ function buildPaymentWhatsAppMessage({
     `Montant à payer : ${formatFcfa(totalFcfa)}`,
   ];
 
-  if (paymentMode === "ESPECES") {
+  if (normalizedMode === "ESPECES") {
     lines.push("");
     lines.push(
       "Merci de vous présenter au bureau pour effectuer le règlement en espèces."
@@ -115,11 +117,10 @@ function buildPaymentWhatsAppMessage({
     lines.push("Votre commande sera préparée après validation du paiement.");
   } else if (paymentLink) {
     lines.push("");
-    lines.push(
-      "Veuillez finaliser votre paiement en cliquant sur le lien ci-dessous :"
-    );
+    lines.push("Lien de paiement Wave :");
     lines.push(paymentLink);
     lines.push("");
+    lines.push("Veuillez cliquer sur ce lien pour finaliser votre paiement.");
     lines.push("Une fois le paiement confirmé, votre commande sera préparée.");
   } else {
     lines.push("");
