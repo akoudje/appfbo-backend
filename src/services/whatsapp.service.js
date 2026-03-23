@@ -21,15 +21,25 @@ function normalizePhone(phone) {
 function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   const lines = [];
 
-  lines.push(`- PRÉCOMMANDE FLP CIV -`);
+  // Header dynamique
+  lines.push(formatPreorderHeader(preorder));
+
   lines.push(`Précommande N° : ${preorder?.preorderNumber || "-"}`);
   lines.push(`FBO : ${preorder?.fboNumero || "-"}`);
   lines.push(`Nom : ${preorder?.fboNomComplet || "-"}`);
-  lines.push(`Mode de livraison : ${preorder?.deliveryMode || "-"}`);
-  lines.push(`Mode de paiement : ${preorder?.preorderPaymentMode || "-"}`);
+
+  lines.push(
+    `Mode de livraison : ${humanizeEnum(preorder?.deliveryMode)}`
+  );
+
+  lines.push(
+    `Mode de paiement : ${humanizeEnum(preorder?.preorderPaymentMode)}`
+  );
+
   lines.push("");
 
   lines.push(`Produits demandés :`);
+
   for (const it of items) {
     lines.push(
       `- x ${it.qty || 0} | SKU: ${it.sku || it.productSkuSnapshot || "-"} | ${it.nom || it.productNameSnapshot || "-"} | ${formatFcfa(it.lineTotalFcfa)} | ${it.lineTotalCc || 0} CC`
@@ -40,7 +50,7 @@ function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   lines.push(`Totaux :`);
   lines.push(`Produits : ${formatFcfa(totals.totalProduitsFcfa)}`);
   lines.push(`Livraison : ${formatFcfa(totals.fraisLivraisonFcfa)}`);
-  lines.push(`GLOBAL : ${formatFcfa(totals.totalFcfa)}`);
+  lines.push(`TOTAL : ${formatFcfa(totals.totalFcfa)}`);
 
   return lines.join("\n");
 }
