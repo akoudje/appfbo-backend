@@ -1,4 +1,4 @@
-// src/services/orders/invoiceAndSendPreorder.service.js
+// src/services/invoiceAndSendPreorder.service.js
 //
 // Version réécrite pour le nouveau schéma :
 // - plus de PaymentMode
@@ -7,6 +7,8 @@
 // - facturation = SUBMITTED -> INVOICED
 // - met la commande en attente de paiement côté file facturier
 // - conserve OrderMessage pour l'envoi WhatsApp
+// - initie Wave AVANT de construire/envoyer le message WhatsApp
+// - garantit l'injection du lien de paiement dans le message final
 
 const prisma = require("../prisma");
 const whatsappService = require("./whatsapp.service");
@@ -44,7 +46,10 @@ function resolveWhatsappTo(preorder, whatsappToInput) {
 /**
  * Crée un log métier standard dans PreorderLog
  */
-async function createPreorderLog(tx, { preorderId, action, note, meta, actorAdminId }) {
+async function createPreorderLog(
+  tx,
+  { preorderId, action, note, meta, actorAdminId },
+) {
   await tx.preorderLog.create({
     data: {
       preorderId,
@@ -64,7 +69,7 @@ function isWavePreorder(preorder) {
     preorder?.preorderPaymentMode ||
       preorder?.paymentMode ||
       preorder?.paymentProvider ||
-      ""
+      "",
   )
     .trim()
     .toUpperCase();
@@ -101,7 +106,7 @@ function buildInvoiceMessage({ preorder, invoiceRef, note, paymentLink }) {
   return [
     `Bonjour ${preorder.fboNomComplet || ""},`,
     "",
-    `Votre précommande FOREVER a été facturée.`,
+    "Votre précommande FOREVER a été facturée.",
     `Référence facture : ${invoiceRef}`,
     `Montant : ${preorder.totalFcfa} FCFA`,
     paymentLink ? `Lien de paiement : ${paymentLink}` : null,
@@ -131,7 +136,7 @@ async function invoiceAndSendPreorder({
 
   const now = new Date();
 
-  // 1) On charge d'abord la commande hors transaction principale
+  // 1) Charger d'abord la commande hors transaction principale
   const existingPreorder = await prisma.preorder.findUnique({
     where: { id: preorderId },
     include: {
@@ -159,7 +164,7 @@ async function invoiceAndSendPreorder({
 
   const whatsappTo = resolveWhatsappTo(existingPreorder, whatsappToInput);
 
-  // 2) On facture d'abord la commande sans envoyer tout de suite le message
+  // 2) Facturer d'abord la commande sans envoyer tout de suite le message
   const invoicedPreorder = await prisma.$transaction(async (tx) => {
     const updatedPreorder = await tx.preorder.update({
       where: { id: existingPreorder.id },
@@ -211,20 +216,39 @@ async function invoiceAndSendPreorder({
       preorderId: invoicedPreorder.id,
     });
 
-    paymentLink = waveResult?.checkoutUrl || null;
+    paymentLink =
+      waveResult?.paymentAttempt?.providerLaunchUrl ||
+      waveResult?.paymentAttempt?.checkoutUrl ||
+      null;
   }
 
-  // 4) Maintenant seulement on construit le message final avec le lien si dispo
+  // 4) Construire le message final avec le lien si dispo
   const messagePurpose = paymentLink ? "PAYMENT_LINK" : "INVOICE";
 
-  const whatsappMessage = buildInvoiceMessage({
+  let whatsappMessage = buildInvoiceMessage({
     preorder: invoicedPreorder,
     invoiceRef,
     note: invoiceNote,
     paymentLink,
   });
 
-  // 5) On crée et envoie le message WhatsApp final
+  // garde-fou : si Wave est utilisé et que le lien n'apparait pas dans le texte,
+  // on l'ajoute explicitement à la fin du message.
+  if (paymentLink && !String(whatsappMessage || "").includes(paymentLink)) {
+    whatsappMessage = [
+      String(whatsappMessage || "").trim(),
+      "",
+      "Lien de paiement Wave :",
+      paymentLink,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  console.log("[invoiceAndSendPreorder] waveResult =", JSON.stringify(waveResult, null, 2));
+  console.log("[invoiceAndSendPreorder] paymentLink =", paymentLink);
+
+  // 5) Créer et envoyer le message WhatsApp final
   const finalResult = await prisma.$transaction(async (tx) => {
     const createdMessage = await tx.orderMessage.create({
       data: {
@@ -271,6 +295,8 @@ async function invoiceAndSendPreorder({
         };
       }
     }
+
+    console.log("[invoiceAndSendPreorder] whatsappMessage =", whatsappMessage);
 
     const finalMessageStatus = sendResult.accepted ? "SENT" : "FAILED";
 
