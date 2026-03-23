@@ -15,18 +15,40 @@ function normalizePhone(phone) {
 }
 
 /**
+ * Rend un enum plus lisible
+ */
+function humanizeEnum(value) {
+  if (!value) return "-";
+
+  return String(value)
+    .toLowerCase()
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (l) => l.toUpperCase());
+}
+
+/**
+ * Construit l'en-tête de la précommande
+ */
+function formatPreorderHeader(preorder) {
+  const countryCode = preorder?.country?.code || "CIV";
+  return `- PRÉCOMMANDE FLP ${countryCode} -`;
+}
+
+/**
  * Construit un message récapitulatif complet de précommande
  * Usage: génération manuelle / audit / support
  */
 function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   const lines = [];
 
-  lines.push(`- PRÉCOMMANDE FLP CIV -`);
+  lines.push(formatPreorderHeader(preorder));
   lines.push(`Précommande N° : ${preorder?.preorderNumber || "-"}`);
   lines.push(`FBO : ${preorder?.fboNumero || "-"}`);
   lines.push(`Nom : ${preorder?.fboNomComplet || "-"}`);
-  lines.push(`Mode de livraison : ${preorder?.deliveryMode || "-"}`);
-  lines.push(`Mode de paiement : ${preorder?.preorderPaymentMode || "-"}`);
+  lines.push(`Mode de livraison : ${humanizeEnum(preorder?.deliveryMode)}`);
+  lines.push(
+    `Mode de paiement : ${humanizeEnum(preorder?.preorderPaymentMode)}`
+  );
   lines.push("");
 
   lines.push(`Produits demandés :`);
@@ -40,7 +62,7 @@ function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   lines.push(`Totaux :`);
   lines.push(`Produits : ${formatFcfa(totals.totalProduitsFcfa)}`);
   lines.push(`Livraison : ${formatFcfa(totals.fraisLivraisonFcfa)}`);
-  lines.push(`GLOBAL : ${formatFcfa(totals.totalFcfa)}`);
+  lines.push(`TOTAL : ${formatFcfa(totals.totalFcfa)}`);
 
   return lines.join("\n");
 }
