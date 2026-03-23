@@ -17,10 +17,7 @@ const {
 } = require("../services/whatsapp.service");
 
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
-const {
-  formatDateKey,
-  formatPreorderNumber,
-} = require("../../utils/preorder-number");
+const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
