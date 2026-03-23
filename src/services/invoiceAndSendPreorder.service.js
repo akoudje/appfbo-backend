@@ -61,26 +61,7 @@ async function createPreorderLog(
   });
 }
 
-console.log(
-  "[invoiceAndSendPreorder] preorderPaymentMode =",
-  invoicedPreorder?.preorderPaymentMode
-);
-console.log(
-  "[invoiceAndSendPreorder] paymentMode =",
-  invoicedPreorder?.paymentMode
-);
-console.log(
-  "[invoiceAndSendPreorder] paymentProvider =",
-  invoicedPreorder?.paymentProvider
-);
-console.log(
-  "[invoiceAndSendPreorder] isWavePreorder =",
-  isWavePreorder(invoicedPreorder)
-);
-console.log(
-  "[invoiceAndSendPreorder] hasReq =",
-  Boolean(req)
-);
+
 
 
 /**
@@ -237,6 +218,12 @@ async function invoiceAndSendPreorder({
     return updatedPreorder;
   });
 
+console.log("[invoiceAndSendPreorder] preorderPaymentMode =", invoicedPreorder?.preorderPaymentMode);
+console.log("[invoiceAndSendPreorder] paymentMode =", invoicedPreorder?.paymentMode);
+console.log("[invoiceAndSendPreorder] paymentProvider =", invoicedPreorder?.paymentProvider);
+console.log("[invoiceAndSendPreorder] isWavePreorder =", isWavePreorder(invoicedPreorder));
+console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
+
   // 3) Si la commande est Wave, on initie Wave MAINTENANT
   let waveResult = null;
   let paymentLink = null;
@@ -275,9 +262,6 @@ async function invoiceAndSendPreorder({
       .filter(Boolean)
       .join("\n");
   }
-
-  console.log("[invoiceAndSendPreorder] waveResult =", JSON.stringify(waveResult, null, 2));
-  console.log("[invoiceAndSendPreorder] paymentLink =", paymentLink);
 
   // 5) Créer et envoyer le message WhatsApp final
   const finalResult = await prisma.$transaction(async (tx) => {
@@ -406,6 +390,9 @@ async function invoiceAndSendPreorder({
 
   return finalResult;
 }
+
+console.log("[invoiceAndSendPreorder] messagePurpose =", messagePurpose);
+console.log("[invoiceAndSendPreorder] body to save =", whatsappMessage);
 
 module.exports = {
   invoiceAndSendPreorder,
