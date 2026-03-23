@@ -61,6 +61,28 @@ async function createPreorderLog(
   });
 }
 
+console.log(
+  "[invoiceAndSendPreorder] preorderPaymentMode =",
+  invoicedPreorder?.preorderPaymentMode
+);
+console.log(
+  "[invoiceAndSendPreorder] paymentMode =",
+  invoicedPreorder?.paymentMode
+);
+console.log(
+  "[invoiceAndSendPreorder] paymentProvider =",
+  invoicedPreorder?.paymentProvider
+);
+console.log(
+  "[invoiceAndSendPreorder] isWavePreorder =",
+  isWavePreorder(invoicedPreorder)
+);
+console.log(
+  "[invoiceAndSendPreorder] hasReq =",
+  Boolean(req)
+);
+
+
 /**
  * Détermine si la précommande doit utiliser Wave
  */
@@ -81,6 +103,15 @@ function isWavePreorder(preorder) {
     mode.includes("MOMO")
   );
 }
+
+console.log(
+  "[invoiceAndSendPreorder] messagePurpose =",
+  messagePurpose
+);
+console.log(
+  "[invoiceAndSendPreorder] body to save =",
+  whatsappMessage
+);
 
 /**
  * Construit le message WhatsApp de facturation.
