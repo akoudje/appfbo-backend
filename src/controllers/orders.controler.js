@@ -92,7 +92,14 @@ function assertTransition(from, to) {
   }
 }
 
-async function addLogTx(tx, preorderId, action, note, meta, actorAdminId = null) {
+async function addLogTx(
+  tx,
+  preorderId,
+  action,
+  note,
+  meta,
+  actorAdminId = null,
+) {
   await tx.preorderLog.create({
     data: {
       preorderId,
@@ -154,7 +161,8 @@ async function listOrders(req, res) {
 
     if (status) where.status = cleanString(status);
     if (paymentStatus) where.paymentStatus = cleanString(paymentStatus);
-    if (billingWorkStatus) where.billingWorkStatus = cleanString(billingWorkStatus);
+    if (billingWorkStatus)
+      where.billingWorkStatus = cleanString(billingWorkStatus);
     if (priority) where.billingPriority = cleanString(priority);
 
     if (parseBoolean(assignedOnly) && req.user?.id) {
@@ -376,7 +384,6 @@ async function invoiceOrder(req, res) {
     const actorAdminId = req.user?.id || null;
 
     const result = await invoiceAndSendPreorder({
-      req, // ✅ important
       preorderId: id,
       actorName,
       actorAdminId,
@@ -388,6 +395,12 @@ async function invoiceOrder(req, res) {
     return res.json(result.preorder);
   } catch (e) {
     console.error("invoiceOrder error:", e);
+
+    console.log("[orders.controller][invoiceOrder] HIT", {
+      orderId: req.params?.id,
+      hasReq: Boolean(req),
+      userId: req.user?.id || null,
+    });
 
     if (e.message === "PREORDER_NOT_FOUND") {
       return res.status(404).json({ message: "Commande introuvable" });
@@ -731,7 +744,8 @@ async function cancelOrder(req, res) {
 async function markManualPaymentPending(req, res) {
   try {
     const { id } = req.params;
-    const { manualPaymentProofUrl, manualPaymentReference, note } = req.body || {};
+    const { manualPaymentProofUrl, manualPaymentReference, note } =
+      req.body || {};
 
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
@@ -741,7 +755,9 @@ async function markManualPaymentPending(req, res) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
 
-    if (["PAYMENT_PENDING", "PAID", "READY", "FULFILLED"].includes(order.status)) {
+    if (
+      ["PAYMENT_PENDING", "PAID", "READY", "FULFILLED"].includes(order.status)
+    ) {
       return res.json({
         ok: true,
         alreadyDone: true,
@@ -965,7 +981,9 @@ async function markCashPayment(req, res) {
     return res.json(updated);
   } catch (e) {
     console.error("markCashPayment error:", e);
-    return res.status(500).json({ message: "Erreur serveur (markCashPayment)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (markCashPayment)" });
   }
 }
 
