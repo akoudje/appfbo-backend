@@ -35,6 +35,14 @@ class PaymentOrchestratorService {
     return this.getProvider(providerCode).getCheckoutSession(payload);
   }
 
+  async getCheckoutSessionDetails(providerCode, payload) {
+    const provider = this.getProvider(providerCode);
+    if (typeof provider.getCheckoutSessionDetails === "function") {
+      return provider.getCheckoutSessionDetails(payload);
+    }
+    return provider.getCheckoutSession(payload);
+  }
+
   async parseWebhook(providerCode, payload) {
     return this.getProvider(providerCode).parseWebhook(payload);
   }

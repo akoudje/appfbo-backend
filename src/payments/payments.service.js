@@ -101,6 +101,12 @@ function normalizePhone(value) {
   return compact || raw;
 }
 
+function mergeObjectLike(base, extra) {
+  if (!base || typeof base !== "object") return extra;
+  if (!extra || typeof extra !== "object") return base;
+  return { ...base, ...extra };
+}
+
 function extractWaveProviderMetadata(raw = {}) {
   const providerSessionId =
     firstNonEmptyString(
@@ -108,6 +114,9 @@ function extractWaveProviderMetadata(raw = {}) {
       raw?.data?.id,
       raw?.checkout_session?.id,
       raw?.session?.id,
+      raw?.providerSessionId,
+      getNested(raw, ["payment", "checkout_session_id"]),
+      getNested(raw, ["data", "payment", "checkout_session_id"]),
     ) || null;
 
   const providerTransactionId =
@@ -118,6 +127,9 @@ function extractWaveProviderMetadata(raw = {}) {
       raw?.session?.transaction_id,
       raw?.payment_id,
       raw?.data?.payment_id,
+      raw?.providerTransactionId,
+      raw?.payment?.id,
+      raw?.data?.payment?.id,
     ) || null;
 
   const providerPayerPhone = normalizePhone(
@@ -129,31 +141,57 @@ function extractWaveProviderMetadata(raw = {}) {
       raw?.phone_number,
       raw?.sender_phone,
       raw?.sender_msisdn,
+      raw?.mobile,
+      raw?.senderPhone,
       raw?.customer_phone,
       raw?.customerPhone,
+      raw?.client_phone,
+      raw?.clientPhone,
+      raw?.phone,
+      getNested(raw, ["payer", "phone_number"]),
+      getNested(raw, ["payer", "phone"]),
+      getNested(raw, ["client", "phone"]),
+      getNested(raw, ["customer", "phone"]),
+      getNested(raw, ["customer", "mobile"]),
       raw?.data?.payerPhone,
       raw?.data?.payer_phone,
       raw?.data?.customer_msisdn,
       raw?.data?.phone_number,
       raw?.data?.sender_phone,
       raw?.data?.customer_phone,
+      getNested(raw, ["data", "payer", "phone_number"]),
+      getNested(raw, ["data", "payer", "phone"]),
+      getNested(raw, ["data", "client", "phone"]),
+      getNested(raw, ["data", "customer", "phone"]),
       raw?.checkout_session?.payerPhone,
       raw?.checkout_session?.payer_phone,
       raw?.checkout_session?.customer_msisdn,
       raw?.checkout_session?.phone_number,
       raw?.checkout_session?.sender_phone,
+      getNested(raw, ["checkout_session", "payer", "phone_number"]),
+      getNested(raw, ["checkout_session", "payer", "phone"]),
+      getNested(raw, ["checkout_session", "client", "phone"]),
+      getNested(raw, ["session", "payer", "phone_number"]),
+      getNested(raw, ["session", "payer", "phone"]),
+      getNested(raw, ["session", "client", "phone"]),
       getNested(raw, ["payment_method", "phone_number"]),
       getNested(raw, ["payment_method", "payer_phone"]),
       getNested(raw, ["payment_method", "customer_msisdn"]),
       getNested(raw, ["payment_method", "sender_phone"]),
+      getNested(raw, ["payment_method", "mobile"]),
       getNested(raw, ["data", "payment_method", "phone_number"]),
       getNested(raw, ["data", "payment_method", "payer_phone"]),
       getNested(raw, ["data", "payment_method", "customer_msisdn"]),
       getNested(raw, ["data", "payment_method", "sender_phone"]),
+      getNested(raw, ["data", "payment_method", "mobile"]),
       getNested(raw, ["checkout_session", "payment_method", "phone_number"]),
       getNested(raw, ["checkout_session", "payment_method", "payer_phone"]),
       getNested(raw, ["checkout_session", "payment_method", "customer_msisdn"]),
       getNested(raw, ["checkout_session", "payment_method", "sender_phone"]),
+      getNested(raw, ["session", "payment_method", "phone_number"]),
+      getNested(raw, ["session", "payment_method", "payer_phone"]),
+      getNested(raw, ["session", "payment_method", "customer_msisdn"]),
+      getNested(raw, ["session", "payment_method", "sender_phone"]),
     ),
   );
 
@@ -162,14 +200,23 @@ function extractWaveProviderMetadata(raw = {}) {
       raw?.payment_status_label,
       raw?.checkout_status_label,
       raw?.status_label,
+      raw?.status,
       raw?.data?.payment_status_label,
       raw?.data?.checkout_status_label,
       raw?.data?.status_label,
+      raw?.data?.status,
       raw?.checkout_session?.payment_status_label,
       raw?.checkout_session?.checkout_status_label,
       raw?.checkout_session?.status_label,
+      raw?.session?.payment_status_label,
+      raw?.session?.checkout_status_label,
+      raw?.session?.status_label,
       raw?.payment_status,
       raw?.checkout_status,
+      raw?.data?.payment_status,
+      raw?.data?.checkout_status,
+      raw?.session?.payment_status,
+      raw?.session?.checkout_status,
     ) || null;
 
   const completedAt =
@@ -183,6 +230,9 @@ function extractWaveProviderMetadata(raw = {}) {
       raw?.checkout_session?.when_completed,
       raw?.checkout_session?.completed_at,
       raw?.checkout_session?.paid_at,
+      raw?.session?.when_completed,
+      raw?.session?.completed_at,
+      raw?.session?.paid_at,
     ) || null;
 
   return {
@@ -354,6 +404,74 @@ function buildProviderStatusFromLocalAttempt(lastAttempt, payment, preorder) {
   };
 }
 
+async function fetchWaveCheckoutDetails({
+  preorderId,
+  paymentId,
+  paymentAttemptId,
+  providerSessionId,
+  providerTransactionId,
+}) {
+  const lookupSessionId = firstNonEmptyString(providerSessionId) || null;
+  const lookupTransactionId =
+    firstNonEmptyString(providerTransactionId) || null;
+
+  if (!lookupSessionId && !lookupTransactionId) {
+    console.log("[payments][wave] details enrichment skipped (missing ids)", {
+      preorderId: preorderId || null,
+      paymentId: paymentId || null,
+      paymentAttemptId: paymentAttemptId || null,
+    });
+    return null;
+  }
+
+  console.log("[payments][wave] details enrichment start", {
+    preorderId: preorderId || null,
+    paymentId: paymentId || null,
+    paymentAttemptId: paymentAttemptId || null,
+    providerSessionId: lookupSessionId,
+    providerTransactionId: lookupTransactionId,
+  });
+
+  try {
+    const details = await paymentOrchestrator.getCheckoutSessionDetails("WAVE", {
+      providerSessionId: lookupSessionId,
+      providerTransactionId: lookupTransactionId,
+    });
+    const metadata = extractWaveProviderMetadata(details?.raw || {});
+
+    console.log("[payments][wave] details enrichment success", {
+      preorderId: preorderId || null,
+      paymentId: paymentId || null,
+      paymentAttemptId: paymentAttemptId || null,
+      providerSessionId: metadata.providerSessionId || lookupSessionId || null,
+      providerTransactionId:
+        metadata.providerTransactionId || lookupTransactionId || null,
+      payerPhoneFound: Boolean(metadata.providerPayerPhone),
+      providerPayerPhone: metadata.providerPayerPhone || null,
+    });
+
+    return {
+      raw: details?.raw || null,
+      providerSessionId: metadata.providerSessionId || lookupSessionId || null,
+      providerTransactionId:
+        metadata.providerTransactionId || lookupTransactionId || null,
+      providerPayerPhone: metadata.providerPayerPhone || null,
+      providerStatusLabel: metadata.providerStatusLabel || null,
+      completedAt: metadata.completedAt || null,
+    };
+  } catch (error) {
+    console.warn("[payments][wave] details enrichment failed", {
+      preorderId: preorderId || null,
+      paymentId: paymentId || null,
+      paymentAttemptId: paymentAttemptId || null,
+      providerSessionId: lookupSessionId,
+      providerTransactionId: lookupTransactionId,
+      message: error?.message || String(error),
+    });
+    return null;
+  }
+}
+
 async function applyWaveMappedStateTx({
   tx,
   preorder,
@@ -378,31 +496,62 @@ async function applyWaveMappedStateTx({
   let updatedAttempt = null;
 
   if (lastAttempt) {
+    const existingNormalized = lastAttempt.normalizedPayloadJson || {};
+    const resolvedProviderSessionId =
+      metadata.providerSessionId ||
+      lastAttempt.providerSessionId ||
+      existingNormalized?.providerSessionId ||
+      null;
+    const resolvedProviderTransactionId =
+      metadata.providerTransactionId ||
+      lastAttempt.providerTransactionId ||
+      existingNormalized?.providerTransactionId ||
+      existingNormalized?.transactionId ||
+      null;
+    const resolvedProviderPayerPhone =
+      lastAttempt.providerPayerPhone ||
+      metadata.providerPayerPhone ||
+      existingNormalized?.providerPayerPhone ||
+      null;
+    const resolvedProviderStatusLabel =
+      metadata.providerStatusLabel ||
+      lastAttempt.providerStatusLabel ||
+      existingNormalized?.providerStatusLabel ||
+      null;
+
     updatedAttempt = await tx.paymentAttempt.update({
       where: { id: lastAttempt.id },
       data: {
         status: mapped.attemptStatus,
-        providerSessionId:
-          metadata.providerSessionId || lastAttempt.providerSessionId,
-        providerTransactionId:
-          metadata.providerTransactionId || lastAttempt.providerTransactionId,
-        providerPayerPhone:
-          lastAttempt.providerPayerPhone || metadata.providerPayerPhone,
-        providerStatusLabel:
-          metadata.providerStatusLabel || lastAttempt.providerStatusLabel,
+        providerSessionId: resolvedProviderSessionId,
+        providerTransactionId: resolvedProviderTransactionId,
+        providerPayerPhone: resolvedProviderPayerPhone,
+        providerStatusLabel: resolvedProviderStatusLabel,
         responsePayloadJson: providerStatusRaw,
         normalizedPayloadJson: {
-          checkoutStatus: providerStatusRaw?.checkout_status || null,
-          paymentStatus: providerStatusRaw?.payment_status || null,
-          transactionId:
-            metadata.providerTransactionId ||
-            providerStatusRaw?.transaction_id ||
+          ...existingNormalized,
+          checkoutStatus:
+            providerStatusRaw?.checkout_status ||
+            existingNormalized?.checkoutStatus ||
             null,
-          providerSessionId: metadata.providerSessionId || null,
-          providerPayerPhone: metadata.providerPayerPhone || null,
-          providerStatusLabel: metadata.providerStatusLabel || null,
+          paymentStatus:
+            providerStatusRaw?.payment_status ||
+            existingNormalized?.paymentStatus ||
+            null,
+          transactionId:
+            resolvedProviderTransactionId ||
+            providerStatusRaw?.transaction_id ||
+            existingNormalized?.transactionId ||
+            null,
+          providerTransactionId: resolvedProviderTransactionId,
+          providerSessionId: resolvedProviderSessionId,
+          providerPayerPhone: resolvedProviderPayerPhone,
+          providerStatusLabel: resolvedProviderStatusLabel,
           whenCompleted:
-            metadata.completedAt || providerStatusRaw?.when_completed || null,
+            metadata.completedAt ||
+            providerStatusRaw?.when_completed ||
+            existingNormalized?.whenCompleted ||
+            null,
           simulated: providerStatusRaw?.simulated === true,
         },
         completedAt: mapped.isFinal
@@ -823,6 +972,7 @@ async function syncWavePaymentStatus({ req, preorderId }) {
   }
 
   let providerStatus;
+  let providerDetails = null;
 
   if (isSimulatedAttempt(lastAttempt, payment)) {
     providerStatus = buildProviderStatusFromLocalAttempt(
@@ -837,6 +987,57 @@ async function syncWavePaymentStatus({ req, preorderId }) {
   }
 
   const mapped = mapWaveSessionToInternal(providerStatus.raw);
+  let providerStatusRawForPersist = providerStatus.raw;
+
+  if (!providerStatus.raw?.simulated && mapped.isFinal) {
+    const initialMetadata = extractWaveProviderMetadata(providerStatus.raw || {});
+    providerDetails = await fetchWaveCheckoutDetails({
+      preorderId: preorder.id,
+      paymentId: payment.id,
+      paymentAttemptId: lastAttempt?.id || null,
+      providerSessionId:
+        initialMetadata.providerSessionId ||
+        providerSessionId ||
+        lastAttempt?.providerSessionId ||
+        payment.providerReference ||
+        null,
+      providerTransactionId:
+        initialMetadata.providerTransactionId ||
+        lastAttempt?.providerTransactionId ||
+        payment.providerTxnId ||
+        null,
+    });
+
+    if (providerDetails?.raw) {
+      providerStatusRawForPersist = mergeObjectLike(
+        providerStatus.raw,
+        providerDetails.raw,
+      );
+      providerStatusRawForPersist = {
+        ...providerStatusRawForPersist,
+        _wave: {
+          statusPayload: providerStatus.raw,
+          detailsPayload: providerDetails.raw,
+          detailsFetchedAt: new Date().toISOString(),
+        },
+      };
+
+      console.log("[payments][wave] details payload attached to provider status", {
+        preorderId: preorder.id,
+        paymentId: payment.id,
+        paymentAttemptId: lastAttempt?.id || null,
+        providerSessionId:
+          providerDetails.providerSessionId ||
+          initialMetadata.providerSessionId ||
+          null,
+        providerTransactionId:
+          providerDetails.providerTransactionId ||
+          initialMetadata.providerTransactionId ||
+          null,
+        providerPayerPhone: providerDetails.providerPayerPhone || null,
+      });
+    }
+  }
 
   const result = await prisma.$transaction(async (tx) => {
     return applyWaveMappedStateTx({
@@ -844,7 +1045,7 @@ async function syncWavePaymentStatus({ req, preorderId }) {
       preorder,
       payment,
       lastAttempt,
-      providerStatusRaw: providerStatus.raw,
+      providerStatusRaw: providerStatusRawForPersist,
       mapped,
       actorAdminId: req.user?.id || null,
     });
@@ -855,7 +1056,8 @@ async function syncWavePaymentStatus({ req, preorderId }) {
     simulated: providerStatus.raw?.simulated === true,
     ...result,
     mapped,
-    providerStatus: providerStatus.raw,
+    providerStatus: providerStatusRawForPersist,
+    providerDetails,
   };
 }
 

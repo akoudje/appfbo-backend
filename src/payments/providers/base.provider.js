@@ -23,6 +23,10 @@ class BasePaymentProvider {
     throw new Error("getCheckoutSession() must be implemented");
   }
 
+  async getCheckoutSessionDetails(_payload) {
+    throw new Error("getCheckoutSessionDetails() must be implemented");
+  }
+
   async parseWebhook(_payload) {
     throw new Error("parseWebhook() must be implemented");
   }
