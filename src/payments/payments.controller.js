@@ -76,6 +76,7 @@ async function waveWebhook(req, res) {
   console.log("[payments.controller][waveWebhook] endpoint hit", {
     method: req.method,
     url: req.originalUrl,
+    originalUrl: req.originalUrl,
     contentType:
       req.get?.("content-type") || req.headers?.["content-type"] || null,
     hasRawBody: Boolean(req.rawBody),

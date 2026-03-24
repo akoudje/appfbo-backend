@@ -13,6 +13,7 @@ const adminAuthRoutes = require("./routes/adminAuth.routes");
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
 const paymentsRoutes = require("./routes/payments.routes");
+const webhooksRoutes = require("./routes/webhooks.routes");
 
 
 const app = express();
@@ -100,6 +101,7 @@ app.use("/api/preorders", preordersRoutes);
    Routes de paiement (webhooks, etc.)
    ========================================================= */
 app.use("/api/payments", paymentsRoutes);
+app.use("/webhooks", webhooksRoutes);
 
 /* =========================================================
    Admin AUTH (publique)
