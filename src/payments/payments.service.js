@@ -432,8 +432,6 @@ async function applyWaveMappedStateTx({
     status: mapped.paymentStatus,
     providerReference: metadata.providerSessionId || payment.providerReference,
     providerTxnId: metadata.providerTransactionId || payment.providerTxnId,
-    providerPayerPhone:
-      payment.providerPayerPhone || metadata.providerPayerPhone,
   };
 
   if (mapped.markOrderPaid) {
