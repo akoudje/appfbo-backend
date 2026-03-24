@@ -71,6 +71,115 @@ function buildSyntheticWebhookId(parsed) {
   return `hash:${hash}`;
 }
 
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const trimmed = String(value).trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function getNested(source, path) {
+  return path.reduce((acc, key) => (acc == null ? undefined : acc[key]), source);
+}
+
+function normalizePhone(value) {
+  const raw = firstNonEmptyString(value);
+  if (!raw) return null;
+  const compact = raw.replace(/[^\d+]/g, "");
+  return compact || raw;
+}
+
+function extractWaveProviderMetadata(raw = {}) {
+  const providerSessionId = firstNonEmptyString(
+    raw?.id,
+    raw?.data?.id,
+    raw?.checkout_session?.id,
+    raw?.session?.id,
+  ) || null;
+
+  const providerTransactionId = firstNonEmptyString(
+    raw?.transaction_id,
+    raw?.data?.transaction_id,
+    raw?.checkout_session?.transaction_id,
+    raw?.session?.transaction_id,
+    raw?.payment_id,
+    raw?.data?.payment_id,
+  ) || null;
+
+  const providerPayerPhone = normalizePhone(
+    firstNonEmptyString(
+      raw?.payerPhone,
+      raw?.payer_phone,
+      raw?.providerPayerPhone,
+      raw?.customer_msisdn,
+      raw?.phone_number,
+      raw?.sender_phone,
+      raw?.sender_msisdn,
+      raw?.customer_phone,
+      raw?.customerPhone,
+      raw?.data?.payerPhone,
+      raw?.data?.payer_phone,
+      raw?.data?.customer_msisdn,
+      raw?.data?.phone_number,
+      raw?.data?.sender_phone,
+      raw?.data?.customer_phone,
+      raw?.checkout_session?.payerPhone,
+      raw?.checkout_session?.payer_phone,
+      raw?.checkout_session?.customer_msisdn,
+      raw?.checkout_session?.phone_number,
+      raw?.checkout_session?.sender_phone,
+      getNested(raw, ["payment_method", "phone_number"]),
+      getNested(raw, ["payment_method", "payer_phone"]),
+      getNested(raw, ["payment_method", "customer_msisdn"]),
+      getNested(raw, ["payment_method", "sender_phone"]),
+      getNested(raw, ["data", "payment_method", "phone_number"]),
+      getNested(raw, ["data", "payment_method", "payer_phone"]),
+      getNested(raw, ["data", "payment_method", "customer_msisdn"]),
+      getNested(raw, ["data", "payment_method", "sender_phone"]),
+      getNested(raw, ["checkout_session", "payment_method", "phone_number"]),
+      getNested(raw, ["checkout_session", "payment_method", "payer_phone"]),
+      getNested(raw, ["checkout_session", "payment_method", "customer_msisdn"]),
+      getNested(raw, ["checkout_session", "payment_method", "sender_phone"]),
+    ),
+  );
+
+  const providerStatusLabel = firstNonEmptyString(
+    raw?.payment_status_label,
+    raw?.checkout_status_label,
+    raw?.status_label,
+    raw?.data?.payment_status_label,
+    raw?.data?.checkout_status_label,
+    raw?.data?.status_label,
+    raw?.checkout_session?.payment_status_label,
+    raw?.checkout_session?.checkout_status_label,
+    raw?.checkout_session?.status_label,
+    raw?.payment_status,
+    raw?.checkout_status,
+  ) || null;
+
+  const completedAt = firstNonEmptyString(
+    raw?.when_completed,
+    raw?.completed_at,
+    raw?.paid_at,
+    raw?.data?.when_completed,
+    raw?.data?.completed_at,
+    raw?.data?.paid_at,
+    raw?.checkout_session?.when_completed,
+    raw?.checkout_session?.completed_at,
+    raw?.checkout_session?.paid_at,
+  ) || null;
+
+  return {
+    providerSessionId,
+    providerTransactionId,
+    providerPayerPhone,
+    providerStatusLabel,
+    completedAt,
+  };
+}
+
 async function resolvePreorderFromWebhookPayload(parsed) {
   const body = parsed.body || {};
 
@@ -151,11 +260,14 @@ function buildSimulatedProviderResponse({ preorderId, successUrl }) {
       client_reference: preorderId,
       checkout_status: "open",
       payment_status: "processing",
+      payment_status_label: "processing",
       wave_launch_url: `${successUrl}&simulated=1`,
       simulated: true,
     },
     providerSessionId: syntheticSessionId,
     providerTransactionId: null,
+    providerPayerPhone: null,
+    providerStatusLabel: "processing",
     checkoutUrl: `${successUrl}&simulated=1`,
     providerLaunchUrl: `${successUrl}&simulated=1`,
     clientReference: preorderId,
@@ -181,33 +293,36 @@ function isSimulatedAttempt(lastAttempt, payment) {
 function buildProviderStatusFromLocalAttempt(lastAttempt, payment, preorder) {
   const responsePayload = lastAttempt?.responsePayloadJson || {};
   const normalized = lastAttempt?.normalizedPayloadJson || {};
+  const metadata = extractWaveProviderMetadata(responsePayload);
 
   return {
     provider: "WAVE",
     raw: {
-      id:
-        responsePayload?.id ||
-        lastAttempt?.providerSessionId ||
-        payment?.providerReference ||
-        null,
-      transaction_id:
-        responsePayload?.transaction_id ||
-        lastAttempt?.providerTransactionId ||
-        payment?.providerTxnId ||
-        null,
+      id: metadata.providerSessionId || lastAttempt?.providerSessionId || payment?.providerReference || null,
+      transaction_id: metadata.providerTransactionId || lastAttempt?.providerTransactionId || payment?.providerTxnId || null,
       client_reference:
         responsePayload?.client_reference || preorder?.id || null,
       checkout_status:
         responsePayload?.checkout_status || normalized?.checkoutStatus || "open",
       payment_status:
         responsePayload?.payment_status || normalized?.paymentStatus || "processing",
+      payment_status_label:
+        responsePayload?.payment_status_label ||
+        normalized?.providerStatusLabel ||
+        normalized?.paymentStatus ||
+        "processing",
+      payer_phone:
+        metadata.providerPayerPhone ||
+        lastAttempt?.providerPayerPhone ||
+        normalized?.providerPayerPhone ||
+        null,
       wave_launch_url:
         responsePayload?.wave_launch_url ||
         lastAttempt?.providerLaunchUrl ||
         lastAttempt?.checkoutUrl ||
         null,
       when_completed:
-        responsePayload?.when_completed || normalized?.whenCompleted || null,
+        metadata.completedAt || responsePayload?.when_completed || normalized?.whenCompleted || null,
       simulated: true,
     },
   };
@@ -223,6 +338,12 @@ async function applyWaveMappedStateTx({
   actorAdminId = null,
 }) {
   const now = new Date();
+  const metadata = extractWaveProviderMetadata(providerStatusRaw);
+  const completedAtDate = metadata.completedAt ? new Date(metadata.completedAt) : null;
+  const paidAtValue =
+    mapped.markOrderPaid && completedAtDate && !Number.isNaN(completedAtDate.getTime())
+      ? completedAtDate
+      : now;
 
   let updatedAttempt = null;
 
@@ -231,15 +352,32 @@ async function applyWaveMappedStateTx({
       where: { id: lastAttempt.id },
       data: {
         status: mapped.attemptStatus,
+        providerSessionId: metadata.providerSessionId || lastAttempt.providerSessionId,
+        providerTransactionId:
+          metadata.providerTransactionId || lastAttempt.providerTransactionId,
+        providerPayerPhone:
+          metadata.providerPayerPhone || lastAttempt.providerPayerPhone,
+        providerStatusLabel:
+          metadata.providerStatusLabel || lastAttempt.providerStatusLabel,
         responsePayloadJson: providerStatusRaw,
         normalizedPayloadJson: {
           checkoutStatus: providerStatusRaw?.checkout_status || null,
           paymentStatus: providerStatusRaw?.payment_status || null,
-          transactionId: providerStatusRaw?.transaction_id || null,
-          whenCompleted: providerStatusRaw?.when_completed || null,
+          transactionId:
+            metadata.providerTransactionId || providerStatusRaw?.transaction_id || null,
+          providerSessionId: metadata.providerSessionId || null,
+          providerPayerPhone: metadata.providerPayerPhone || null,
+          providerStatusLabel: metadata.providerStatusLabel || null,
+          whenCompleted:
+            metadata.completedAt || providerStatusRaw?.when_completed || null,
           simulated: providerStatusRaw?.simulated === true,
         },
-        completedAt: mapped.isFinal ? now : lastAttempt.completedAt,
+        completedAt:
+          mapped.isFinal
+            ? completedAtDate && !Number.isNaN(completedAtDate.getTime())
+              ? completedAtDate
+              : now
+            : lastAttempt.completedAt,
         failureCode: mapped.markExpired
           ? "WAVE_EXPIRED"
           : mapped.markCancelled
@@ -260,12 +398,13 @@ async function applyWaveMappedStateTx({
 
   const paymentData = {
     status: mapped.paymentStatus,
-    providerTxnId: providerStatusRaw?.transaction_id || payment.providerTxnId,
+    providerReference: metadata.providerSessionId || payment.providerReference,
+    providerTxnId: metadata.providerTransactionId || payment.providerTxnId,
   };
 
   if (mapped.markOrderPaid) {
     paymentData.amountPaidFcfa = payment.amountExpectedFcfa;
-    paymentData.paidAt = payment.paidAt || now;
+    paymentData.paidAt = payment.paidAt || paidAtValue;
   }
 
   if (mapped.markExpired) {
@@ -292,7 +431,7 @@ async function applyWaveMappedStateTx({
 
   if (mapped.markOrderPaid) {
     preorderData.status = "PAID";
-    preorderData.paidAt = preorder.paidAt || now;
+    preorderData.paidAt = preorder.paidAt || paidAtValue;
     preorderData.billingCompletedAt = preorder.billingCompletedAt || now;
     preorderData.paymentProvider = "WAVE";
   }
@@ -328,10 +467,25 @@ async function applyWaveMappedStateTx({
       mapped,
       providerStatus: providerStatusRaw,
       provider: "WAVE",
+      providerSessionId: metadata.providerSessionId,
+      providerTransactionId: metadata.providerTransactionId,
+      providerPayerPhone: metadata.providerPayerPhone,
+      providerStatusLabel: metadata.providerStatusLabel,
       simulated: providerStatusRaw?.simulated === true,
     },
     actorAdminId
   );
+
+  if (metadata.providerPayerPhone) {
+    console.log("[payments][wave] payer phone captured", {
+      preorderId: preorder.id,
+      paymentId: payment.id,
+      paymentAttemptId: updatedAttempt?.id || null,
+      providerSessionId: metadata.providerSessionId,
+      providerTransactionId: metadata.providerTransactionId,
+      providerPayerPhone: metadata.providerPayerPhone,
+    });
+  }
 
   if (mapped.markOrderPaid) {
     await addLogTx(
@@ -407,6 +561,7 @@ async function initiateWavePayment({
   }
 
   const now = new Date();
+  const providerMetadata = extractWaveProviderMetadata(providerResponse.raw);
 
   const result = await prisma.$transaction(async (tx) => {
     let payment = preorder.activePayment;
@@ -423,8 +578,11 @@ async function initiateWavePayment({
           amountPaidFcfa: 0,
           currencyCode: "XOF",
           providerAccountId: providerAccount.id,
-          providerReference: providerResponse.providerSessionId,
-          providerTxnId: providerResponse.providerTransactionId,
+          providerReference:
+            providerMetadata.providerSessionId || providerResponse.providerSessionId,
+          providerTxnId:
+            providerMetadata.providerTransactionId ||
+            providerResponse.providerTransactionId,
           clientReference: preorder.id,
           initiatedAt: now,
         },
@@ -442,8 +600,11 @@ async function initiateWavePayment({
           methodType: "MOBILE_MONEY",
           status: "PENDING_CUSTOMER_ACTION",
           providerAccountId: providerAccount.id,
-          providerReference: providerResponse.providerSessionId,
-          providerTxnId: providerResponse.providerTransactionId,
+          providerReference:
+            providerMetadata.providerSessionId || providerResponse.providerSessionId,
+          providerTxnId:
+            providerMetadata.providerTransactionId ||
+            providerResponse.providerTransactionId,
           clientReference: preorder.id,
         },
       });
@@ -456,8 +617,15 @@ async function initiateWavePayment({
         status: providerResponse.checkoutUrl
           ? "REDIRECT_READY"
           : "PROVIDER_SESSION_CREATED",
-        providerSessionId: providerResponse.providerSessionId,
-        providerTransactionId: providerResponse.providerTransactionId,
+        providerSessionId:
+          providerMetadata.providerSessionId || providerResponse.providerSessionId,
+        providerTransactionId:
+          providerMetadata.providerTransactionId ||
+          providerResponse.providerTransactionId,
+        providerPayerPhone:
+          providerMetadata.providerPayerPhone || providerResponse.providerPayerPhone,
+        providerStatusLabel:
+          providerMetadata.providerStatusLabel || providerResponse.providerStatusLabel,
         checkoutUrl: providerResponse.checkoutUrl,
         providerLaunchUrl: providerResponse.providerLaunchUrl,
         requestPayloadJson: {
@@ -469,8 +637,15 @@ async function initiateWavePayment({
         },
         responsePayloadJson: providerResponse.raw,
         normalizedPayloadJson: {
-          providerSessionId: providerResponse.providerSessionId,
-          providerTransactionId: providerResponse.providerTransactionId,
+          providerSessionId:
+            providerMetadata.providerSessionId || providerResponse.providerSessionId,
+          providerTransactionId:
+            providerMetadata.providerTransactionId ||
+            providerResponse.providerTransactionId,
+          providerPayerPhone:
+            providerMetadata.providerPayerPhone || providerResponse.providerPayerPhone,
+          providerStatusLabel:
+            providerMetadata.providerStatusLabel || providerResponse.providerStatusLabel,
           checkoutUrl: providerResponse.checkoutUrl,
           providerLaunchUrl: providerResponse.providerLaunchUrl,
           clientReference: providerResponse.clientReference,
@@ -524,13 +699,29 @@ async function initiateWavePayment({
         paymentId: updatedPayment.id,
         paymentAttemptId: attempt.id,
         provider: "WAVE",
-        providerSessionId: providerResponse.providerSessionId,
-        providerTransactionId: providerResponse.providerTransactionId,
+        providerSessionId:
+          providerMetadata.providerSessionId || providerResponse.providerSessionId,
+        providerTransactionId:
+          providerMetadata.providerTransactionId ||
+          providerResponse.providerTransactionId,
+        providerPayerPhone:
+          providerMetadata.providerPayerPhone || providerResponse.providerPayerPhone,
+        providerStatusLabel:
+          providerMetadata.providerStatusLabel || providerResponse.providerStatusLabel,
         checkoutUrl: providerResponse.checkoutUrl,
         simulated: simulation,
       },
       req.user?.id || null
     );
+
+    if (providerMetadata.providerPayerPhone) {
+      console.log("[payments][wave] payer phone captured at initiation", {
+        preorderId: preorder.id,
+        paymentId: updatedPayment.id,
+        paymentAttemptId: attempt.id,
+        providerPayerPhone: providerMetadata.providerPayerPhone,
+      });
+    }
 
     return {
       payment: updatedPayment,
@@ -678,6 +869,10 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
     id: lastAttempt.providerSessionId || payment.providerReference,
     transaction_id:
       lastAttempt.providerTransactionId || payment.providerTxnId || null,
+    payer_phone:
+      lastAttempt.providerPayerPhone ||
+      lastAttempt.normalizedPayloadJson?.providerPayerPhone ||
+      null,
     client_reference: preorder.id,
     checkout_status:
       normalizedScenario === "succeeded"
@@ -695,6 +890,7 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
           : normalizedScenario === "failed"
             ? "failed"
             : "processing",
+    payment_status_label: normalizedScenario,
     wave_launch_url:
       lastAttempt.providerLaunchUrl || lastAttempt.checkoutUrl || null,
     when_completed:
@@ -775,6 +971,11 @@ async function handleWaveWebhook({ req }) {
     const preorder = await resolvePreorderFromWebhookPayload(parsed);
 
     if (preorder) {
+      console.log("[payments][wave] webhook received", {
+        preorderId: preorder.id,
+        providerEventId: syntheticEventId,
+        eventType: parsed.eventType || null,
+      });
       await syncWavePaymentStatus({
         req: {
           ...req,

@@ -698,6 +698,8 @@ model PaymentAttempt {
 
   providerSessionId     String?
   providerTransactionId String?
+  providerPayerPhone    String?
+  providerStatusLabel   String?
 
   checkoutUrl       String?
   deepLink          String?

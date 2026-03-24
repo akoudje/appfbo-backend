@@ -121,6 +121,20 @@ class WaveProvider extends BasePaymentProvider {
       raw: session,
       providerSessionId: session?.id || null,
       providerTransactionId: session?.transaction_id || null,
+      providerPayerPhone:
+        session?.payerPhone ||
+        session?.customer_msisdn ||
+        session?.phone_number ||
+        session?.sender_phone ||
+        session?.payment_method?.phone_number ||
+        session?.payment_method?.payer_phone ||
+        session?.payment_method?.customer_msisdn ||
+        null,
+      providerStatusLabel:
+        session?.payment_status_label ||
+        session?.checkout_status_label ||
+        session?.status_label ||
+        null,
       checkoutUrl: session?.wave_launch_url || null,
       providerLaunchUrl: session?.wave_launch_url || null,
       clientReference: session?.client_reference || clientReference || null,
@@ -145,6 +159,20 @@ class WaveProvider extends BasePaymentProvider {
       raw: session,
       providerSessionId: session?.id || providerSessionId,
       providerTransactionId: session?.transaction_id || null,
+      providerPayerPhone:
+        session?.payerPhone ||
+        session?.customer_msisdn ||
+        session?.phone_number ||
+        session?.sender_phone ||
+        session?.payment_method?.phone_number ||
+        session?.payment_method?.payer_phone ||
+        session?.payment_method?.customer_msisdn ||
+        null,
+      providerStatusLabel:
+        session?.payment_status_label ||
+        session?.checkout_status_label ||
+        session?.status_label ||
+        null,
       checkoutUrl: session?.wave_launch_url || null,
       providerLaunchUrl: session?.wave_launch_url || null,
       clientReference: session?.client_reference || null,
