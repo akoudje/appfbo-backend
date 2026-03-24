@@ -73,15 +73,22 @@ async function simulateWaveStatus(req, res) {
 }
 
 async function waveWebhook(req, res) {
+  console.log("[payments.controller][waveWebhook] endpoint hit", {
+    method: req.method,
+    url: req.originalUrl,
+    contentType:
+      req.get?.("content-type") || req.headers?.["content-type"] || null,
+    hasRawBody: Boolean(req.rawBody),
+    bodyType: Array.isArray(req.body) ? "array" : typeof req.body,
+  });
+
   try {
     const result = await paymentsService.handleWaveWebhook({ req });
     return res.status(200).json(result);
   } catch (e) {
-    console.error("waveWebhook error:", e);
-    return res.status(200).json({
-      ok: true,
-      ignored: true,
-      message: e.message || "Webhook reçu mais non traité",
+    console.error("[payments.controller][waveWebhook] error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur webhook Wave",
     });
   }
 }

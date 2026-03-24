@@ -978,12 +978,18 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
 }
 
 async function handleWaveWebhook({ req }) {
-  
   const parsed = await paymentOrchestrator.parseWebhook("WAVE", { req });
-
-  console.log("[wave webhook payload]", JSON.stringify(parsed.body, null, 2));
-  
   const syntheticEventId = buildSyntheticWebhookId(parsed);
+
+  console.log("[payments][wave] webhook parsed", {
+    providerEventId: parsed.providerEventId || null,
+    syntheticEventId,
+    eventType: parsed.eventType || null,
+    signatureValid: Boolean(parsed.signatureValid),
+    signatureMode: parsed.signatureMode || null,
+    signatureReason: parsed.signatureReason || null,
+  });
+  console.log("[wave webhook payload]", JSON.stringify(parsed.body, null, 2));
 
   let event = null;
 
@@ -1000,6 +1006,11 @@ async function handleWaveWebhook({ req }) {
       },
     });
   } catch (_e) {
+    console.warn("[payments][wave] duplicate webhook event ignored", {
+      providerEventId: parsed.providerEventId || null,
+      syntheticEventId,
+      eventType: parsed.eventType || null,
+    });
     return {
       ok: true,
       received: true,
@@ -1009,6 +1020,14 @@ async function handleWaveWebhook({ req }) {
 
   try {
     if (!parsed.signatureValid) {
+      console.warn("[payments][wave] invalid webhook signature", {
+        providerEventId: parsed.providerEventId || null,
+        syntheticEventId,
+        eventType: parsed.eventType || null,
+        signatureMode: parsed.signatureMode || null,
+        signatureReason: parsed.signatureReason || null,
+      });
+
       await prisma.paymentWebhookEvent.update({
         where: { id: event.id },
         data: {
@@ -1030,11 +1049,12 @@ async function handleWaveWebhook({ req }) {
     const preorder = await resolvePreorderFromWebhookPayload(parsed);
 
     if (preorder) {
-      console.log("[payments][wave] webhook received", {
+      console.log("[payments][wave] preorder resolved from webhook", {
         preorderId: preorder.id,
         providerEventId: syntheticEventId,
         eventType: parsed.eventType || null,
       });
+
       await syncWavePaymentStatus({
         req: {
           ...req,
@@ -1043,6 +1063,12 @@ async function handleWaveWebhook({ req }) {
           country: { id: preorder.countryId },
         },
         preorderId: preorder.id,
+      });
+    } else {
+      console.warn("[payments][wave] preorder not resolved from webhook", {
+        providerEventId: parsed.providerEventId || null,
+        syntheticEventId,
+        eventType: parsed.eventType || null,
       });
     }
 
@@ -1053,6 +1079,12 @@ async function handleWaveWebhook({ req }) {
         processedAt: new Date(),
       },
     });
+    console.log("[payments][wave] webhook event marked PROCESSED", {
+      eventId: event.id,
+      providerEventId: parsed.providerEventId || null,
+      syntheticEventId,
+      eventType: parsed.eventType || null,
+    });
 
     return {
       ok: true,
@@ -1060,6 +1092,14 @@ async function handleWaveWebhook({ req }) {
       processed: true,
     };
   } catch (e) {
+    console.error("[payments][wave] webhook processing error", {
+      eventId: event?.id || null,
+      providerEventId: parsed.providerEventId || null,
+      syntheticEventId,
+      eventType: parsed.eventType || null,
+      message: e?.message || String(e),
+    });
+
     await prisma.paymentWebhookEvent.update({
       where: { id: event.id },
       data: {
