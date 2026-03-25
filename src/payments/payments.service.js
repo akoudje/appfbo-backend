@@ -616,6 +616,7 @@ async function applyWaveMappedStateTx({
   if (mapped.markOrderPaid) {
     preorderData.status = "PAID";
     preorderData.paidAt = preorder.paidAt || paidAtValue;
+    preorderData.billingWorkStatus = "COMPLETED";
     preorderData.billingCompletedAt = preorder.billingCompletedAt || now;
     preorderData.paymentProvider = "WAVE";
   }
