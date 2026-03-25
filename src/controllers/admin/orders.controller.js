@@ -82,6 +82,7 @@ async function listOrders(req, res) {
       paymentStatus,
       billingWorkStatus,
       assignedOnly,
+      assignedToMe,
       invoicerId,
     } = req.query;
 
@@ -103,7 +104,9 @@ async function listOrders(req, res) {
     if (paymentStatus) where.paymentStatus = paymentStatus;
     if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
 
-    if (String(assignedOnly) === "true") {
+    if (String(assignedToMe) === "true") {
+      where.assignedInvoicerId = req.user?.id || "__no_user__";
+    } else if (String(assignedOnly) === "true") {
       where.assignedInvoicerId = { not: null };
     }
 
@@ -129,9 +132,19 @@ async function listOrders(req, res) {
       if (to) where.createdAt.lte = to;
     }
 
-    const orderBy = {};
-    orderBy[sort === "total" ? "totalFcfa" : "createdAt"] =
-      dir === "asc" ? "asc" : "desc";
+    const sortMap = {
+      createdAt: "createdAt",
+      updatedAt: "updatedAt",
+      total: "totalFcfa",
+      totalFcfa: "totalFcfa",
+      billingSlaDeadlineAt: "billingSlaDeadlineAt",
+      billingQueueEnteredAt: "billingQueueEnteredAt",
+      billingPriority: "billingPriority",
+      assignedAt: "assignedAt",
+    };
+    const sortField = sortMap[String(sort || "").trim()] || "createdAt";
+    const sortDir = dir === "asc" ? "asc" : "desc";
+    const orderBy = [{ [sortField]: sortDir }, { createdAt: "desc" }];
 
     const [totalCount, orders] = await Promise.all([
       prisma.preorder.count({ where }),

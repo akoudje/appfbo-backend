@@ -110,7 +110,7 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
   }
 
   return prisma.$transaction(async (tx) => {
-    const candidate = await tx.preorder.findFirst({
+    const candidates = await tx.preorder.findMany({
       where: {
         countryId,
         status: "SUBMITTED",
@@ -125,9 +125,10 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
       select: {
         id: true,
       },
+      take: 20,
     });
 
-    if (!candidate) {
+    if (!candidates.length) {
       return {
         ok: false,
         reason: "NO_ORDER_AVAILABLE",
@@ -136,37 +137,61 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
 
     const now = new Date();
 
-    const updated = await tx.preorder.update({
-      where: { id: candidate.id },
-      data: {
-        assignedInvoicerId: userId,
-        assignedAt: now,
-        billingWorkStatus: "ASSIGNED",
-        billingLastActivityAt: now,
-      },
-      include: {
-        assignedInvoicer: {
-          select: { id: true, fullName: true, email: true },
+    for (const candidate of candidates) {
+      const claimed = await tx.preorder.updateMany({
+        where: {
+          id: candidate.id,
+          assignedInvoicerId: null,
+          status: "SUBMITTED",
+          billingWorkStatus: { in: ["QUEUED", "RELEASED"] },
         },
-      },
-    });
-
-    await tx.preorderLog.create({
-      data: {
-        preorderId: updated.id,
-        action: "ASSIGN_INVOICER",
-        note: "Précommande attribuée automatiquement à un facturier",
-        actorAdminId: userId,
-        meta: {
+        data: {
           assignedInvoicerId: userId,
-          mode: "AUTO_CLAIM",
+          assignedAt: now,
+          billingWorkStatus: "ASSIGNED",
+          billingLastActivityAt: now,
         },
-      },
-    });
+      });
+
+      if (claimed.count !== 1) {
+        continue;
+      }
+
+      const updated = await tx.preorder.findUnique({
+        where: { id: candidate.id },
+        include: {
+          assignedInvoicer: {
+            select: { id: true, fullName: true, email: true },
+          },
+        },
+      });
+
+      if (!updated) {
+        continue;
+      }
+
+      await tx.preorderLog.create({
+        data: {
+          preorderId: updated.id,
+          action: "ASSIGN_INVOICER",
+          note: "Précommande attribuée automatiquement à un facturier",
+          actorAdminId: userId,
+          meta: {
+            assignedInvoicerId: userId,
+            mode: "AUTO_CLAIM",
+          },
+        },
+      });
+
+      return {
+        ok: true,
+        preorder: updated,
+      };
+    }
 
     return {
-      ok: true,
-      preorder: updated,
+      ok: false,
+      reason: "NO_ORDER_AVAILABLE",
     };
   });
 }
