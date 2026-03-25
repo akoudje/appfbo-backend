@@ -94,9 +94,34 @@ async function waveWebhook(req, res) {
   }
 }
 
+async function listPaymentTransactionLogs(req, res) {
+  try {
+    const { orderId } = req.params;
+    const { take } = req.query || {};
+
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId requis" });
+    }
+
+    const result = await paymentsService.listPaymentTransactionLogs({
+      req,
+      preorderId: orderId,
+      take,
+    });
+
+    return res.json(result);
+  } catch (e) {
+    console.error("listPaymentTransactionLogs error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (listPaymentTransactionLogs)" });
+  }
+}
+
 module.exports = {
   initiateWavePayment,
   syncWavePaymentStatus,
   simulateWaveStatus,
   waveWebhook,
+  listPaymentTransactionLogs,
 };

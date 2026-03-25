@@ -121,6 +121,35 @@ enum WebhookProcessingStatus {
   FAILED
 }
 
+enum PaymentTransactionEventType {
+  PAYMENT_INITIATED
+  PROVIDER_SESSION_CREATED
+  CHECKOUT_LINK_READY
+  STATUS_SYNCED
+  WEBHOOK_RECEIVED
+  WEBHOOK_INVALID_SIGNATURE
+  WEBHOOK_PROCESSED
+  WEBHOOK_PREORDER_UNRESOLVED
+  TRANSACTION_CAPTURED
+  PAYER_PHONE_CAPTURED
+  PAYMENT_CONFIRMED
+  PAYMENT_EXPIRED
+  PAYMENT_CANCELLED
+  PAYMENT_FAILED
+  DETAILS_ENRICHED
+  SIMULATION_TRIGGERED
+  SIMULATION_RESULT_APPLIED
+}
+
+enum PaymentTransactionSource {
+  INITIATE
+  SYNC
+  WEBHOOK
+  SIMULATION
+  ENRICHMENT
+  SYSTEM
+}
+
 enum PreorderStatus {
   DRAFT
   SUBMITTED
@@ -346,6 +375,7 @@ model AdminUser {
 
   stockMovements StockMovement[]
   preorderLogs   PreorderLog[]
+  paymentTransactionLogs PaymentTransactionLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -534,6 +564,7 @@ model Preorder {
   logs           PreorderLog[]
   messages       OrderMessage[]
   payments       Payment[]       @relation("PreorderPayments")
+  paymentTransactionLogs PaymentTransactionLog[]
   stockMovements StockMovement[]
 
   @@index([status, createdAt])
@@ -677,6 +708,7 @@ model Payment {
 
   attempts           PaymentAttempt[]
   refunds            PaymentRefund[]
+  transactionLogs    PaymentTransactionLog[]
   activeForPreorders Preorder[]       @relation("ActivePayment")
 
   @@unique([provider, providerTxnId])
@@ -718,6 +750,8 @@ model PaymentAttempt {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  transactionLogs PaymentTransactionLog[]
 
   @@unique([provider, providerTransactionId])
   @@index([paymentId, createdAt])
@@ -793,6 +827,51 @@ model PaymentWebhookEvent {
 
   @@unique([provider, providerEventId])
   @@index([provider, processingStatus, receivedAt])
+}
+
+model PaymentTransactionLog {
+  id String @id @default(cuid())
+
+  preorderId String?
+  preorder   Preorder? @relation(fields: [preorderId], references: [id], onDelete: SetNull)
+
+  paymentId String?
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  paymentAttemptId String?
+  paymentAttempt   PaymentAttempt? @relation(fields: [paymentAttemptId], references: [id], onDelete: SetNull)
+
+  provider PaymentProvider?
+
+  eventType PaymentTransactionEventType
+  source    PaymentTransactionSource
+
+  status       PaymentStatus?
+  attemptStatus PaymentAttemptStatus?
+  providerStatus String?
+
+  providerSessionId     String?
+  providerTransactionId String?
+  providerPayerPhone    String?
+
+  amountFcfa    Int?
+  currencyCode  String? @db.VarChar(3)
+
+  note       String? @db.Text
+  payloadJson Json?
+
+  actorAdminId String?
+  actorAdmin   AdminUser? @relation(fields: [actorAdminId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([preorderId, createdAt])
+  @@index([paymentId, createdAt])
+  @@index([paymentAttemptId, createdAt])
+  @@index([provider, providerSessionId])
+  @@index([provider, providerTransactionId])
+  @@index([eventType, source, createdAt])
+  @@index([actorAdminId])
 }
 
 model PaymentRefund {

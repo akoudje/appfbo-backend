@@ -238,6 +238,15 @@ async function getOrderById(req, res) {
             },
             orderBy: { createdAt: "desc" },
           },
+          paymentTransactionLogs: {
+            orderBy: { createdAt: "desc" },
+            take: 200,
+            include: {
+              actorAdmin: {
+                select: { id: true, fullName: true, email: true, role: true },
+              },
+            },
+          },
           logs: {
             orderBy: { createdAt: "desc" },
             include: {

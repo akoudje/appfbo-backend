@@ -6,6 +6,9 @@ const prisma = require("../prisma");
 const paymentOrchestrator = require("./payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("./payment-status.mapper");
 const { scopeWhere, pickCountryId } = require("../helpers/countryScope");
+const {
+  addPaymentTransactionLogTx,
+} = require("./payment-transaction-log.helper");
 
 function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
@@ -637,10 +640,198 @@ async function applyWaveMappedStateTx({
     },
   });
 
+  const transactionLogSource =
+    providerStatusRaw?.simulated === true ? "SIMULATION" : "SYNC";
+
+  await addPaymentTransactionLogTx(tx, {
+    preorderId: preorder.id,
+    paymentId: updatedPayment.id,
+    paymentAttemptId: updatedAttempt?.id || lastAttempt?.id || null,
+    provider: "WAVE",
+    eventType: "STATUS_SYNCED",
+    source: transactionLogSource,
+    status: mapped.paymentStatus,
+    attemptStatus: mapped.attemptStatus,
+    providerStatus:
+      providerStatusRaw?.payment_status ||
+      providerStatusRaw?.checkout_status ||
+      metadata.providerStatusLabel ||
+      null,
+    providerSessionId:
+      metadata.providerSessionId ||
+      updatedAttempt?.providerSessionId ||
+      payment.providerReference ||
+      null,
+    providerTransactionId:
+      metadata.providerTransactionId ||
+      updatedAttempt?.providerTransactionId ||
+      payment.providerTxnId ||
+      null,
+    providerPayerPhone:
+      updatedAttempt?.providerPayerPhone || metadata.providerPayerPhone || null,
+    amountFcfa: payment.amountExpectedFcfa,
+    currencyCode: payment.currencyCode,
+    note: "Statut de paiement synchronisé et appliqué",
+    payloadJson: {
+      mapped,
+      providerStatusRaw,
+    },
+    actorAdminId,
+  });
+
+  if (
+    metadata.providerTransactionId ||
+    updatedAttempt?.providerTransactionId ||
+    payment.providerTxnId
+  ) {
+    await addPaymentTransactionLogTx(tx, {
+      preorderId: preorder.id,
+      paymentId: updatedPayment.id,
+      paymentAttemptId: updatedAttempt?.id || lastAttempt?.id || null,
+      provider: "WAVE",
+      eventType: "TRANSACTION_CAPTURED",
+      source: transactionLogSource,
+      status: mapped.paymentStatus,
+      attemptStatus: mapped.attemptStatus,
+      providerStatus: metadata.providerStatusLabel || null,
+      providerSessionId:
+        metadata.providerSessionId ||
+        updatedAttempt?.providerSessionId ||
+        payment.providerReference ||
+        null,
+      providerTransactionId:
+        metadata.providerTransactionId ||
+        updatedAttempt?.providerTransactionId ||
+        payment.providerTxnId ||
+        null,
+      amountFcfa: payment.amountExpectedFcfa,
+      currencyCode: payment.currencyCode,
+      note: "Identifiant transaction provider capturé",
+      payloadJson: {
+        providerStatusRaw,
+      },
+      actorAdminId,
+    });
+  }
+
+  if (providerStatusRaw?._wave?.detailsPayload) {
+    await addPaymentTransactionLogTx(tx, {
+      preorderId: preorder.id,
+      paymentId: updatedPayment.id,
+      paymentAttemptId: updatedAttempt?.id || lastAttempt?.id || null,
+      provider: "WAVE",
+      eventType: "DETAILS_ENRICHED",
+      source: "ENRICHMENT",
+      status: mapped.paymentStatus,
+      attemptStatus: mapped.attemptStatus,
+      providerStatus: metadata.providerStatusLabel || null,
+      providerSessionId:
+        metadata.providerSessionId ||
+        updatedAttempt?.providerSessionId ||
+        payment.providerReference ||
+        null,
+      providerTransactionId:
+        metadata.providerTransactionId ||
+        updatedAttempt?.providerTransactionId ||
+        payment.providerTxnId ||
+        null,
+      providerPayerPhone:
+        updatedAttempt?.providerPayerPhone || metadata.providerPayerPhone || null,
+      amountFcfa: payment.amountExpectedFcfa,
+      currencyCode: payment.currencyCode,
+      note: "Enrichissement provider détaillé appliqué",
+      payloadJson: {
+        detailsPayload: providerStatusRaw?._wave?.detailsPayload || null,
+        statusPayload: providerStatusRaw?._wave?.statusPayload || null,
+      },
+      actorAdminId,
+    });
+  }
+
+  if (updatedAttempt?.providerPayerPhone || metadata.providerPayerPhone) {
+    await addPaymentTransactionLogTx(tx, {
+      preorderId: preorder.id,
+      paymentId: updatedPayment.id,
+      paymentAttemptId: updatedAttempt?.id || lastAttempt?.id || null,
+      provider: "WAVE",
+      eventType: "PAYER_PHONE_CAPTURED",
+      source: transactionLogSource,
+      status: mapped.paymentStatus,
+      attemptStatus: mapped.attemptStatus,
+      providerStatus: metadata.providerStatusLabel || null,
+      providerSessionId:
+        metadata.providerSessionId ||
+        updatedAttempt?.providerSessionId ||
+        payment.providerReference ||
+        null,
+      providerTransactionId:
+        metadata.providerTransactionId ||
+        updatedAttempt?.providerTransactionId ||
+        payment.providerTxnId ||
+        null,
+      providerPayerPhone:
+        updatedAttempt?.providerPayerPhone || metadata.providerPayerPhone || null,
+      amountFcfa: payment.amountExpectedFcfa,
+      currencyCode: payment.currencyCode,
+      note: "Numéro payeur capturé",
+      payloadJson: {
+        providerStatusRaw,
+      },
+      actorAdminId,
+    });
+  }
+
+  let finalEventType = null;
+  if (mapped.markOrderPaid) finalEventType = "PAYMENT_CONFIRMED";
+  if (mapped.markExpired) finalEventType = "PAYMENT_EXPIRED";
+  if (mapped.markCancelled) finalEventType = "PAYMENT_CANCELLED";
+  if (mapped.markFailed) finalEventType = "PAYMENT_FAILED";
+
+  if (finalEventType) {
+    await addPaymentTransactionLogTx(tx, {
+      preorderId: preorder.id,
+      paymentId: updatedPayment.id,
+      paymentAttemptId: updatedAttempt?.id || lastAttempt?.id || null,
+      provider: "WAVE",
+      eventType: finalEventType,
+      source: transactionLogSource,
+      status: mapped.paymentStatus,
+      attemptStatus: mapped.attemptStatus,
+      providerStatus: metadata.providerStatusLabel || null,
+      providerSessionId:
+        metadata.providerSessionId ||
+        updatedAttempt?.providerSessionId ||
+        payment.providerReference ||
+        null,
+      providerTransactionId:
+        metadata.providerTransactionId ||
+        updatedAttempt?.providerTransactionId ||
+        payment.providerTxnId ||
+        null,
+      providerPayerPhone:
+        updatedAttempt?.providerPayerPhone || metadata.providerPayerPhone || null,
+      amountFcfa: payment.amountExpectedFcfa,
+      currencyCode: payment.currencyCode,
+      note:
+        finalEventType === "PAYMENT_CONFIRMED"
+          ? "Paiement confirmé"
+          : finalEventType === "PAYMENT_EXPIRED"
+            ? "Paiement expiré"
+            : finalEventType === "PAYMENT_CANCELLED"
+              ? "Paiement annulé"
+              : "Paiement échoué",
+      payloadJson: {
+        mapped,
+        providerStatusRaw,
+      },
+      actorAdminId,
+    });
+  }
+
   await addLogTx(
     tx,
     preorder.id,
-    "PAYMENT_UPDATED",
+    "PAYMENT_PENDING",
     "Synchronisation statut Wave",
     {
       paymentId: updatedPayment.id,
@@ -672,7 +863,7 @@ async function applyWaveMappedStateTx({
     await addLogTx(
       tx,
       preorder.id,
-      "PAYMENT_UPDATED",
+      "PAYMENT_CONFIRMED",
       "Paiement confirmé via Wave",
       {
         paymentProvider: "WAVE",
@@ -877,10 +1068,89 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
       },
     });
 
+    const logSource = simulation ? "SIMULATION" : "INITIATE";
+
+    await addPaymentTransactionLogTx(tx, {
+      preorderId: preorder.id,
+      paymentId: updatedPayment.id,
+      paymentAttemptId: attempt.id,
+      provider: "WAVE",
+      eventType: "PAYMENT_INITIATED",
+      source: logSource,
+      status: updatedPayment.status,
+      attemptStatus: attempt.status,
+      providerStatus:
+        attempt.providerStatusLabel ||
+        providerResponse.paymentStatus ||
+        providerResponse.checkoutStatus ||
+        null,
+      providerSessionId: attempt.providerSessionId || null,
+      providerTransactionId: attempt.providerTransactionId || null,
+      providerPayerPhone: attempt.providerPayerPhone || null,
+      amountFcfa: updatedPayment.amountExpectedFcfa,
+      currencyCode: updatedPayment.currencyCode,
+      note: simulation
+        ? "Paiement Wave initié en mode simulation"
+        : "Paiement Wave initié",
+      payloadJson: {
+        providerRequest: attempt.requestPayloadJson || null,
+        providerResponse: providerResponse.raw || null,
+      },
+      actorAdminId: req.user?.id || null,
+    });
+
+    await addPaymentTransactionLogTx(tx, {
+      preorderId: preorder.id,
+      paymentId: updatedPayment.id,
+      paymentAttemptId: attempt.id,
+      provider: "WAVE",
+      eventType: "PROVIDER_SESSION_CREATED",
+      source: logSource,
+      status: updatedPayment.status,
+      attemptStatus: attempt.status,
+      providerStatus: attempt.providerStatusLabel || null,
+      providerSessionId: attempt.providerSessionId || null,
+      providerTransactionId: attempt.providerTransactionId || null,
+      providerPayerPhone: attempt.providerPayerPhone || null,
+      amountFcfa: updatedPayment.amountExpectedFcfa,
+      currencyCode: updatedPayment.currencyCode,
+      note: "Session provider Wave créée",
+      payloadJson: {
+        responsePayload: providerResponse.raw || null,
+        normalizedPayload: attempt.normalizedPayloadJson || null,
+      },
+      actorAdminId: req.user?.id || null,
+    });
+
+    if (attempt.checkoutUrl || attempt.providerLaunchUrl) {
+      await addPaymentTransactionLogTx(tx, {
+        preorderId: preorder.id,
+        paymentId: updatedPayment.id,
+        paymentAttemptId: attempt.id,
+        provider: "WAVE",
+        eventType: "CHECKOUT_LINK_READY",
+        source: logSource,
+        status: updatedPayment.status,
+        attemptStatus: attempt.status,
+        providerStatus: attempt.providerStatusLabel || null,
+        providerSessionId: attempt.providerSessionId || null,
+        providerTransactionId: attempt.providerTransactionId || null,
+        providerPayerPhone: attempt.providerPayerPhone || null,
+        amountFcfa: updatedPayment.amountExpectedFcfa,
+        currencyCode: updatedPayment.currencyCode,
+        note: "Lien checkout Wave généré",
+        payloadJson: {
+          checkoutUrl: attempt.checkoutUrl || null,
+          providerLaunchUrl: attempt.providerLaunchUrl || null,
+        },
+        actorAdminId: req.user?.id || null,
+      });
+    }
+
     await addLogTx(
       tx,
       preorder.id,
-      "PAYMENT_UPDATED",
+      "GENERATE_PAYMENT",
       simulation ? "Paiement Wave initié (simulation)" : "Paiement Wave initié",
       {
         paymentId: updatedPayment.id,
@@ -971,6 +1241,30 @@ async function syncWavePaymentStatus({ req, preorderId }) {
     throw err;
   }
 
+  await addPaymentTransactionLogTx(prisma, {
+    preorderId: preorder.id,
+    paymentId: payment.id,
+    paymentAttemptId: lastAttempt?.id || null,
+    provider: "WAVE",
+    eventType: "STATUS_SYNCED",
+    source: "SYNC",
+    status: payment.status,
+    attemptStatus: lastAttempt?.status || null,
+    providerStatus: "sync_requested",
+    providerSessionId:
+      lastAttempt?.providerSessionId || payment.providerReference || null,
+    providerTransactionId:
+      lastAttempt?.providerTransactionId || payment.providerTxnId || null,
+    providerPayerPhone: lastAttempt?.providerPayerPhone || null,
+    amountFcfa: payment.amountExpectedFcfa,
+    currencyCode: payment.currencyCode,
+    note: "Synchronisation statut Wave déclenchée",
+    payloadJson: {
+      simulated: isSimulatedAttempt(lastAttempt, payment),
+    },
+    actorAdminId: req.user?.id || null,
+  });
+
   let providerStatus;
   let providerDetails = null;
 
@@ -988,9 +1282,47 @@ async function syncWavePaymentStatus({ req, preorderId }) {
 
   const mapped = mapWaveSessionToInternal(providerStatus.raw);
   let providerStatusRawForPersist = providerStatus.raw;
+  const syncMetadata = extractWaveProviderMetadata(providerStatus.raw || {});
+
+  await addPaymentTransactionLogTx(prisma, {
+    preorderId: preorder.id,
+    paymentId: payment.id,
+    paymentAttemptId: lastAttempt?.id || null,
+    provider: "WAVE",
+    eventType: "STATUS_SYNCED",
+    source: providerStatus.raw?.simulated ? "SIMULATION" : "SYNC",
+    status: mapped.paymentStatus,
+    attemptStatus: mapped.attemptStatus,
+    providerStatus:
+      providerStatus.raw?.payment_status ||
+      providerStatus.raw?.checkout_status ||
+      null,
+    providerSessionId:
+      syncMetadata.providerSessionId ||
+      lastAttempt?.providerSessionId ||
+      payment.providerReference ||
+      null,
+    providerTransactionId:
+      syncMetadata.providerTransactionId ||
+      lastAttempt?.providerTransactionId ||
+      payment.providerTxnId ||
+      null,
+    providerPayerPhone:
+      syncMetadata.providerPayerPhone ||
+      lastAttempt?.providerPayerPhone ||
+      null,
+    amountFcfa: payment.amountExpectedFcfa,
+    currencyCode: payment.currencyCode,
+    note: "Statut provider reçu depuis Wave",
+    payloadJson: {
+      providerStatus: providerStatus.raw,
+      mapped,
+    },
+    actorAdminId: req.user?.id || null,
+  });
 
   if (!providerStatus.raw?.simulated && mapped.isFinal) {
-    const initialMetadata = extractWaveProviderMetadata(providerStatus.raw || {});
+    const initialMetadata = syncMetadata;
     providerDetails = await fetchWaveCheckoutDetails({
       preorderId: preorder.id,
       paymentId: payment.id,
@@ -1009,6 +1341,38 @@ async function syncWavePaymentStatus({ req, preorderId }) {
     });
 
     if (providerDetails?.raw) {
+      await addPaymentTransactionLogTx(prisma, {
+        preorderId: preorder.id,
+        paymentId: payment.id,
+        paymentAttemptId: lastAttempt?.id || null,
+        provider: "WAVE",
+        eventType: "DETAILS_ENRICHED",
+        source: "ENRICHMENT",
+        status: mapped.paymentStatus,
+        attemptStatus: mapped.attemptStatus,
+        providerStatus:
+          providerDetails.providerStatusLabel ||
+          providerStatus.raw?.payment_status ||
+          providerStatus.raw?.checkout_status ||
+          null,
+        providerSessionId:
+          providerDetails.providerSessionId ||
+          initialMetadata.providerSessionId ||
+          null,
+        providerTransactionId:
+          providerDetails.providerTransactionId ||
+          initialMetadata.providerTransactionId ||
+          null,
+        providerPayerPhone: providerDetails.providerPayerPhone || null,
+        amountFcfa: payment.amountExpectedFcfa,
+        currencyCode: payment.currencyCode,
+        note: "Payload provider détaillé récupéré et prêt à persister",
+        payloadJson: {
+          details: providerDetails.raw,
+        },
+        actorAdminId: req.user?.id || null,
+      });
+
       providerStatusRawForPersist = mergeObjectLike(
         providerStatus.raw,
         providerDetails.raw,
@@ -1155,6 +1519,29 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
     simulated: true,
   };
 
+  await addPaymentTransactionLogTx(prisma, {
+    preorderId: preorder.id,
+    paymentId: payment.id,
+    paymentAttemptId: lastAttempt.id,
+    provider: "WAVE",
+    eventType: "SIMULATION_TRIGGERED",
+    source: "SIMULATION",
+    status: payment.status,
+    attemptStatus: lastAttempt.status,
+    providerStatus: normalizedScenario,
+    providerSessionId: fakeSession.id || null,
+    providerTransactionId: fakeSession.transaction_id || null,
+    providerPayerPhone: fakeSession.payer_phone || null,
+    amountFcfa: payment.amountExpectedFcfa,
+    currencyCode: payment.currencyCode,
+    note: "Simulation Wave déclenchée",
+    payloadJson: {
+      scenario: normalizedScenario,
+      providerStatus: fakeSession,
+    },
+    actorAdminId: req.user?.id || null,
+  });
+
   const mapped = mapWaveSessionToInternal(fakeSession);
 
   const result = await prisma.$transaction(async (tx) => {
@@ -1167,6 +1554,31 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
       mapped,
       actorAdminId: req.user?.id || null,
     });
+  });
+
+  await addPaymentTransactionLogTx(prisma, {
+    preorderId: preorder.id,
+    paymentId: payment.id,
+    paymentAttemptId: lastAttempt.id,
+    provider: "WAVE",
+    eventType: "SIMULATION_RESULT_APPLIED",
+    source: "SIMULATION",
+    status: mapped.paymentStatus,
+    attemptStatus: mapped.attemptStatus,
+    providerStatus:
+      fakeSession.payment_status || fakeSession.checkout_status || null,
+    providerSessionId: fakeSession.id || null,
+    providerTransactionId: fakeSession.transaction_id || null,
+    providerPayerPhone: fakeSession.payer_phone || null,
+    amountFcfa: payment.amountExpectedFcfa,
+    currencyCode: payment.currencyCode,
+    note: "Simulation Wave appliquée au paiement",
+    payloadJson: {
+      scenario: normalizedScenario,
+      mapped,
+      providerStatus: fakeSession,
+    },
+    actorAdminId: req.user?.id || null,
   });
 
   return {
@@ -1182,6 +1594,11 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
 async function handleWaveWebhook({ req }) {
   const parsed = await paymentOrchestrator.parseWebhook("WAVE", { req });
   const syntheticEventId = buildSyntheticWebhookId(parsed);
+  const webhookPreorderHint =
+    parsed.body?.data?.client_reference ||
+    parsed.body?.client_reference ||
+    parsed.body?.checkout_session?.client_reference ||
+    null;
 
   console.log("[payments][wave] webhook parsed", {
     providerEventId: parsed.providerEventId || null,
@@ -1192,6 +1609,37 @@ async function handleWaveWebhook({ req }) {
     signatureReason: parsed.signatureReason || null,
   });
   console.log("[wave webhook payload]", JSON.stringify(parsed.body, null, 2));
+
+  await addPaymentTransactionLogTx(prisma, {
+    preorderId: null,
+    provider: "WAVE",
+    eventType: "WEBHOOK_RECEIVED",
+    source: "WEBHOOK",
+    providerStatus: parsed.eventType || null,
+    providerSessionId:
+      parsed.body?.data?.id ||
+      parsed.body?.id ||
+      parsed.body?.checkout_session?.id ||
+      null,
+    providerTransactionId:
+      parsed.body?.data?.transaction_id ||
+      parsed.body?.transaction_id ||
+      parsed.body?.checkout_session?.transaction_id ||
+      null,
+    note: "Webhook Wave reçu",
+    payloadJson: {
+      providerEventId: parsed.providerEventId || null,
+      syntheticEventId,
+      eventType: parsed.eventType || null,
+      signatureValid: Boolean(parsed.signatureValid),
+      signatureMode: parsed.signatureMode || null,
+      signatureReason: parsed.signatureReason || null,
+      body: parsed.body || null,
+      headers: parsed.headers || null,
+      preorderHint: webhookPreorderHint,
+    },
+    actorAdminId: null,
+  });
 
   let event = null;
 
@@ -1230,6 +1678,33 @@ async function handleWaveWebhook({ req }) {
         signatureReason: parsed.signatureReason || null,
       });
 
+      await addPaymentTransactionLogTx(prisma, {
+        preorderId: null,
+        provider: "WAVE",
+        eventType: "WEBHOOK_INVALID_SIGNATURE",
+        source: "WEBHOOK",
+        providerStatus: parsed.eventType || null,
+        providerSessionId:
+          parsed.body?.data?.id ||
+          parsed.body?.id ||
+          parsed.body?.checkout_session?.id ||
+          null,
+        providerTransactionId:
+          parsed.body?.data?.transaction_id ||
+          parsed.body?.transaction_id ||
+          parsed.body?.checkout_session?.transaction_id ||
+          null,
+        note: parsed.signatureReason || "Signature webhook Wave invalide",
+        payloadJson: {
+          providerEventId: parsed.providerEventId || null,
+          syntheticEventId,
+          eventType: parsed.eventType || null,
+          signatureMode: parsed.signatureMode || null,
+          signatureReason: parsed.signatureReason || null,
+          preorderHint: webhookPreorderHint,
+        },
+      });
+
       await prisma.paymentWebhookEvent.update({
         where: { id: event.id },
         data: {
@@ -1266,11 +1741,60 @@ async function handleWaveWebhook({ req }) {
         },
         preorderId: preorder.id,
       });
+
+      await addPaymentTransactionLogTx(prisma, {
+        preorderId: preorder.id,
+        provider: "WAVE",
+        eventType: "WEBHOOK_PROCESSED",
+        source: "WEBHOOK",
+        providerStatus: parsed.eventType || null,
+        providerSessionId:
+          parsed.body?.data?.id ||
+          parsed.body?.id ||
+          parsed.body?.checkout_session?.id ||
+          null,
+        providerTransactionId:
+          parsed.body?.data?.transaction_id ||
+          parsed.body?.transaction_id ||
+          parsed.body?.checkout_session?.transaction_id ||
+          null,
+        note: "Webhook Wave traité et synchronisation lancée",
+        payloadJson: {
+          providerEventId: parsed.providerEventId || null,
+          syntheticEventId,
+          eventType: parsed.eventType || null,
+        },
+      });
     } else {
       console.warn("[payments][wave] preorder not resolved from webhook", {
         providerEventId: parsed.providerEventId || null,
         syntheticEventId,
         eventType: parsed.eventType || null,
+      });
+
+      await addPaymentTransactionLogTx(prisma, {
+        preorderId: null,
+        provider: "WAVE",
+        eventType: "WEBHOOK_PREORDER_UNRESOLVED",
+        source: "WEBHOOK",
+        providerStatus: parsed.eventType || null,
+        providerSessionId:
+          parsed.body?.data?.id ||
+          parsed.body?.id ||
+          parsed.body?.checkout_session?.id ||
+          null,
+        providerTransactionId:
+          parsed.body?.data?.transaction_id ||
+          parsed.body?.transaction_id ||
+          parsed.body?.checkout_session?.transaction_id ||
+          null,
+        note: "Webhook reçu mais précommande non résolue",
+        payloadJson: {
+          providerEventId: parsed.providerEventId || null,
+          syntheticEventId,
+          eventType: parsed.eventType || null,
+          preorderHint: webhookPreorderHint,
+        },
       });
     }
 
@@ -1320,9 +1844,43 @@ async function handleWaveWebhook({ req }) {
   }
 }
 
+async function listPaymentTransactionLogs({ req, preorderId, take = 200 }) {
+  const preorder = await prisma.preorder.findFirst({
+    where: scopeWhere(req, { id: preorderId }),
+    select: { id: true },
+  });
+
+  if (!preorder) {
+    const err = new Error("Commande introuvable");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const normalizedTake = Math.max(1, Math.min(500, Number(take) || 200));
+
+  const data = await prisma.paymentTransactionLog.findMany({
+    where: { preorderId: preorder.id },
+    include: {
+      actorAdmin: {
+        select: { id: true, fullName: true, email: true, role: true },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    take: normalizedTake,
+  });
+
+  return {
+    ok: true,
+    preorderId: preorder.id,
+    count: data.length,
+    data,
+  };
+}
+
 module.exports = {
   initiateWavePayment,
   syncWavePaymentStatus,
   simulateWaveStatus,
   handleWaveWebhook,
+  listPaymentTransactionLogs,
 };

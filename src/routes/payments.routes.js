@@ -31,6 +31,13 @@ router.post(
   paymentsController.simulateWaveStatus
 );
 
+router.get(
+  "/wave/:orderId/transactions",
+  requireAuth,
+  resolveCountry,
+  paymentsController.listPaymentTransactionLogs
+);
+
 // Provider webhook
 router.post(
   "/wave/webhook",
