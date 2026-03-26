@@ -1,4 +1,4 @@
-// preorders.routes.js : définit les routes liées aux précommandes, permettant de créer un brouillon, de définir les items, d'obtenir un résumé et de soumettre la précommande
+// preorders.routes.js
 
 const router = require("express").Router();
 const {
@@ -7,31 +7,18 @@ const {
   getCatalog,
   getSummary,
   submit,
+  notifySms,
 } = require("../controllers/preorders.controller");
 const { resolveCountry } = require("../middlewares/resolveCountry");
 
 router.use(resolveCountry);
 
-// ✅ Étape 1 : créer un draft (route officielle)
 router.post("/draft", createDraft);
-
-// ✅ (Optionnel) Alias rétro-compatible si ton front appelle encore POST /api/preorders
 router.post("/", createDraft);
-
-// ✅ Étape 1.5 : obtenir les produits du catalogue pour une précommande donnée et les prix en fonction du grade du client FBO
-//router.get("/preorders/:id/catalog", getCatalog);
 router.get("/:id/catalog", getCatalog);
-
-// ✅ Étape 2 : items
 router.put("/:id/items", setItems);
-
-// ✅ Étape 3 : summary
 router.get("/:id/summary", getSummary);
-
-// ✅ Finalisation
 router.post("/:id/submit", submit);
+router.post("/:id/notify-sms", notifySms);
 
 module.exports = router;
-
-
-

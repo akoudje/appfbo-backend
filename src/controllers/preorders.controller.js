@@ -1,25 +1,13 @@
 // src/controllers/preorders.controller.js
-// Ce controller gère le processus de précommande en 4 étapes :
-// 1) createDraft : création du brouillon de précommande avec les infos FBO + mode paiement/livraison
-// 2) setItems : définition du panier (remplace le panier précédent)
-// 3) getSummary : récapitulatif de la précommande avant validation (calcul des totaux, message WhatsApp, etc.)
-// 4) submit : validation finale qui fige les totaux, génère le message WhatsApp, change le statut en SUBMITTED
 
 const prisma = require("../prisma");
 const {
   computePreorderTotals,
   computeCatalogProductsForPreorder,
 } = require("../services/pricing.service");
-
-const {
-  buildPreorderWhatsAppMessage,
-  buildWhatsAppLink,
-} = require("../services/whatsapp.service");
-
+const { buildPreorderSmsMessage, normalizePhone, sendSms } = require("../services/sms.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
-
-const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -27,6 +15,21 @@ function isNonEmptyString(v) {
 
 function normalizeNumeroFbo(v) {
   return String(v || "").trim();
+}
+
+function mapSmsStatus(rawStatus) {
+  const s = String(rawStatus || "").trim().toUpperCase();
+  if (["SENT", "DELIVERED", "READ"].includes(s)) return "sent";
+  if (["FAILED", "CANCELLED"].includes(s)) return "failed";
+  return "pending";
+}
+
+function extractNotificationFromPreorder(preorder) {
+  return {
+    smsStatus: mapSmsStatus(preorder?.lastWhatsappStatus),
+    smsLastError: null,
+    smsLastSentAt: preorder?.lastWhatsappStatusAt || null,
+  };
 }
 
 async function createDraft(req, res) {
@@ -319,6 +322,13 @@ async function getSummary(req, res) {
 
   try {
     const summary = await computePreorderTotals(preorderId, countryId);
+    const preorder = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id: preorderId }),
+      select: {
+        lastWhatsappStatus: true,
+        lastWhatsappStatusAt: true,
+      },
+    });
 
     return res.json({
       preorderId,
@@ -326,7 +336,7 @@ async function getSummary(req, res) {
       discountPercent: summary.discountPercent,
       items: summary.items,
       totals: summary.totals,
-      billingWhatsapps: BILLING_WHATSAPPS,
+      ...extractNotificationFromPreorder(preorder),
     });
   } catch (e) {
     if (String(e.message) === "PREORDER_NOT_FOUND") {
@@ -351,7 +361,7 @@ async function getSummary(req, res) {
 
 async function submit(req, res) {
   const preorderId = req.params.id;
-  const { whatsappTo } = req.body || {};
+  const { phoneRaw, phoneNormalized } = req.body || {};
   const countryId = req.country.id;
 
   try {
@@ -389,6 +399,11 @@ async function submit(req, res) {
         .json({ error: "Les informations FBO sont incomplètes." });
     }
 
+    const smsTo = normalizePhone(phoneNormalized || phoneRaw);
+    if (!smsTo) {
+      return res.status(400).json({ error: "Le numéro de téléphone est obligatoire." });
+    }
+
     const summary = await computePreorderTotals(preorderId, countryId);
 
     if (!summary.items || summary.items.length === 0) {
@@ -409,17 +424,18 @@ async function submit(req, res) {
     const now = new Date();
     const sla = new Date(now.getTime() + timeoutMin * 60 * 1000);
 
-    const message = buildPreorderWhatsAppMessage({
+    const smsMessage = buildPreorderSmsMessage({
       preorder: summary.preorder,
-      items: summary.items,
       totals: summary.totals,
     });
 
-    const chosen = whatsappTo || BILLING_WHATSAPPS[0];
-    const links = BILLING_WHATSAPPS.map((p) => ({
-      phone: p,
-      link: buildWhatsAppLink(p, message),
-    }));
+    const smsResult = await sendSms({
+      to: smsTo,
+      message: smsMessage,
+    });
+
+    const persistedMessageStatus = smsResult.accepted ? "SENT" : "FAILED";
+    const uiSmsStatus = smsResult.accepted ? "sent" : "failed";
 
     await prisma.$transaction(async (tx) => {
       for (const it of summary.items) {
@@ -438,9 +454,7 @@ async function submit(req, res) {
                 ? it.prixCatalogueFcfa
                 : it.prixUnitaireFcfa,
             discountPercent: String(
-              Number(
-                it.discountPercent != null ? it.discountPercent : 0,
-              ).toFixed(2),
+              Number(it.discountPercent != null ? it.discountPercent : 0).toFixed(2),
             ),
             prixUnitaireFcfa: it.prixUnitaireFcfa,
             ccUnitaire: String(Number(it.ccUnitaire || 0).toFixed(3)),
@@ -461,14 +475,15 @@ async function submit(req, res) {
           billingQueueEnteredAt: now,
           billingSlaDeadlineAt: sla,
           totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
-          totalPoidsKg: String(
-            Number(summary.totals.totalPoidsKg || 0).toFixed(3),
-          ),
+          totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
-          whatsappMessage: message,
-          factureWhatsappTo: chosen,
+          factureWhatsappTo: smsTo,
+          whatsappMessage: smsMessage,
+          lastWhatsappStatus: persistedMessageStatus,
+          lastWhatsappStatusAt: now,
+          lastWhatsappMessageId: smsResult.providerMessageId || null,
           submittedAt: now,
         },
       });
@@ -487,7 +502,10 @@ async function submit(req, res) {
               null,
             totalFcfa: summary.totals.totalFcfa || 0,
             itemsCount: summary.items.length,
-            whatsappTo: chosen,
+            smsTo,
+            smsStatus: uiSmsStatus,
+            smsProvider: smsResult.provider,
+            smsError: smsResult.errorMessage || null,
           },
         },
       });
@@ -512,11 +530,95 @@ async function submit(req, res) {
       status: "SUBMITTED",
       billingWorkStatus: "QUEUED",
       totals: summary.totals,
-      whatsappMessage: message,
-      billing: links,
+      smsStatus: uiSmsStatus,
+      smsLastError: smsResult.errorMessage || null,
+      smsLastSentAt: smsResult.accepted ? now.toISOString() : null,
     });
   } catch (e) {
     return res.status(500).json({ error: e.message || "Erreur submit" });
+  }
+}
+
+async function notifySms(req, res) {
+  const preorderId = req.params.id;
+  const { phoneRaw, phoneNormalized } = req.body || {};
+
+  try {
+    const preorder = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id: preorderId }),
+      include: {
+        country: true,
+      },
+    });
+
+    if (!preorder) {
+      return res.status(404).json({ error: "Preorder not found" });
+    }
+
+    if (!["SUBMITTED", "INVOICED", "PAYMENT_PENDING"].includes(String(preorder.status || ""))) {
+      return res.status(400).json({ error: "Précommande non éligible au renvoi SMS." });
+    }
+
+    const smsTo = normalizePhone(phoneNormalized || phoneRaw || preorder.factureWhatsappTo);
+    if (!smsTo) {
+      return res.status(400).json({ error: "Aucun numéro disponible pour le SMS." });
+    }
+
+    const smsMessage =
+      preorder.whatsappMessage ||
+      buildPreorderSmsMessage({
+        preorder,
+        totals: {
+          totalFcfa: preorder.totalFcfa,
+        },
+      });
+
+    const now = new Date();
+    const smsResult = await sendSms({
+      to: smsTo,
+      message: smsMessage,
+    });
+
+    const persistedMessageStatus = smsResult.accepted ? "SENT" : "FAILED";
+    const uiSmsStatus = smsResult.accepted ? "sent" : "failed";
+
+    await prisma.$transaction(async (tx) => {
+      await tx.preorder.update({
+        where: { id: preorder.id },
+        data: {
+          factureWhatsappTo: smsTo,
+          whatsappMessage: smsMessage,
+          lastWhatsappStatus: persistedMessageStatus,
+          lastWhatsappStatusAt: now,
+          lastWhatsappMessageId: smsResult.providerMessageId || null,
+        },
+      });
+
+      await tx.preorderLog.create({
+        data: {
+          preorderId: preorder.id,
+          action: "NOTIFY_SMS",
+          note: smsResult.accepted
+            ? "SMS renvoyé"
+            : "Échec du renvoi SMS",
+          meta: {
+            smsTo,
+            smsStatus: uiSmsStatus,
+            smsProvider: smsResult.provider,
+            smsError: smsResult.errorMessage || null,
+          },
+        },
+      });
+    });
+
+    return res.json({
+      preorderId: preorder.id,
+      smsStatus: uiSmsStatus,
+      smsLastError: smsResult.errorMessage || null,
+      smsLastSentAt: smsResult.accepted ? now.toISOString() : null,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || "Erreur notifySms" });
   }
 }
 
@@ -526,4 +628,5 @@ module.exports = {
   setItems,
   getSummary,
   submit,
+  notifySms,
 };
