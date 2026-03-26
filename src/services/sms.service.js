@@ -1,38 +1,16 @@
+// src/services/sms.service.js
+// Couche de compatibilite pour les flux de precommande existants.
+
 const axios = require("axios");
 
-const DEFAULT_TOKEN_URL = "https://api.orange.com/oauth/v3/token";
-
-function digitsOnly(v = "") {
-  return String(v || "").replace(/\D/g, "");
-}
+const { normalizeCI } = require("../utils/phone");
+const {
+  getAccessToken,
+  sendText,
+} = require("./sms.orange.service");
 
 function normalizePhone(raw = "") {
-  const d = digitsOnly(raw);
-  if (!d) return "";
-
-  if (d.startsWith("225") && d.length >= 11) {
-    return `+${d}`;
-  }
-
-  if (d.startsWith("0") && d.length === 10) {
-    return `+225${d}`;
-  }
-
-  if (d.length === 10) {
-    return `+225${d}`;
-  }
-
-  if (d.startsWith("00") && d.length > 4) {
-    return `+${d.slice(2)}`;
-  }
-
-  return `+${d}`;
-}
-
-function toOrangeAddress(phone = "") {
-  const normalized = normalizePhone(phone);
-  if (!normalized) return "";
-  return `tel:${normalized}`;
+  return normalizeCI(raw);
 }
 
 function buildPreorderSmsMessage({ preorder, totals }) {
@@ -53,41 +31,13 @@ function orangeConfigured() {
   return Boolean(
     process.env.ORANGE_CLIENT_ID &&
       process.env.ORANGE_CLIENT_SECRET &&
-      process.env.ORANGE_SENDER_ADDRESS,
+      process.env.ORANGE_SENDER_ADDRESS &&
+      process.env.ORANGE_SENDER_NUMBER,
   );
 }
 
-async function getOrangeAccessToken() {
-  const tokenUrl = process.env.ORANGE_TOKEN_URL || DEFAULT_TOKEN_URL;
-  const clientId = process.env.ORANGE_CLIENT_ID;
-  const clientSecret = process.env.ORANGE_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("ORANGE_CREDENTIALS_MISSING");
-  }
-
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-  const res = await axios.post(tokenUrl, "grant_type=client_credentials", {
-    headers: {
-      Authorization: `Basic ${basic}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    timeout: 15000,
-  });
-
-  const accessToken = res.data?.access_token;
-  if (!accessToken) {
-    throw new Error("ORANGE_TOKEN_MISSING");
-  }
-
-  return accessToken;
-}
-
 async function sendSms({ to, message, callbackData = null }) {
-  const toAddress = toOrangeAddress(to);
-  const senderAddress = process.env.ORANGE_SENDER_ADDRESS;
+  const toAddress = normalizePhone(to);
 
   if (!toAddress) {
     return {
@@ -113,62 +63,29 @@ async function sendSms({ to, message, callbackData = null }) {
 
   try {
     console.log("[sms][orange] send requested", {
-      to: toAddress,
-      senderAddress,
+      to: `tel:${toAddress}`,
+      senderAddress: process.env.ORANGE_SENDER_ADDRESS,
       messageLength: String(message || "").length,
     });
 
-    const token = await getOrangeAccessToken();
-    const outboundPath = encodeURIComponent(senderAddress);
-    const url = `https://api.orange.com/smsmessaging/v1/outbound/${outboundPath}/requests`;
-
-    const payload = {
-      outboundSMSMessageRequest: {
-        address: toAddress,
-        senderAddress,
-        outboundSMSTextMessage: {
-          message: String(message || "").slice(0, 600),
-        },
-      },
-    };
-
-    const notifyUrl = String(process.env.ORANGE_DLR_NOTIFY_URL || "").trim();
-    if (notifyUrl) {
-      payload.outboundSMSMessageRequest.receiptRequest = {
-        notifyURL: notifyUrl,
-      };
-      if (callbackData) {
-        payload.outboundSMSMessageRequest.receiptRequest.callbackData = String(
-          callbackData,
-        ).slice(0, 120);
-      }
-    }
-
-    const res = await axios.post(url, payload, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      timeout: 20000,
+    const smsResult = await sendText({
+      phone: toAddress,
+      message: String(message || ""),
+      clientCorrelator: callbackData
+        ? `app_${Date.now()}_${String(callbackData).slice(0, 40)}`
+        : undefined,
     });
 
-    const providerMessageId =
-      res.data?.outboundSMSMessageRequest?.resourceURL ||
-      res.data?.resourceURL ||
-      null;
-
     console.log("[sms][orange] send accepted", {
-      to: toAddress,
-      providerMessageId,
-      httpStatus: res.status,
+      to: `tel:${toAddress}`,
+      providerMessageId: smsResult.trackingUrl,
     });
 
     return {
       accepted: true,
       provider: "ORANGE",
-      providerMessageId,
-      rawPayload: res.data || null,
+      providerMessageId: smsResult.trackingUrl,
+      rawPayload: smsResult.raw,
       errorCode: null,
       errorMessage: null,
     };
@@ -176,28 +93,34 @@ async function sendSms({ to, message, callbackData = null }) {
     console.error("[sms][orange] send failed", {
       to: toAddress,
       errorCode:
+        err?.data?.requestError?.serviceException?.messageId ||
         err?.response?.data?.requestError?.serviceException?.messageId ||
         err?.code ||
         "SMS_SEND_FAILED",
       errorMessage:
+        err?.data?.requestError?.serviceException?.text ||
         err?.response?.data?.requestError?.serviceException?.text ||
+        err?.data?.message ||
         err?.response?.data?.message ||
         err?.message ||
         "Échec d'envoi SMS",
-      httpStatus: err?.response?.status || null,
+      httpStatus: err?.status || err?.response?.status || null,
     });
 
     return {
       accepted: false,
       provider: "ORANGE",
       providerMessageId: null,
-      rawPayload: err?.response?.data || null,
+      rawPayload: err?.data || err?.response?.data || null,
       errorCode:
+        err?.data?.requestError?.serviceException?.messageId ||
         err?.response?.data?.requestError?.serviceException?.messageId ||
         err?.code ||
         "SMS_SEND_FAILED",
       errorMessage:
+        err?.data?.requestError?.serviceException?.text ||
         err?.response?.data?.requestError?.serviceException?.text ||
+        err?.data?.message ||
         err?.response?.data?.message ||
         err?.message ||
         "Échec d'envoi SMS",
@@ -262,13 +185,13 @@ async function fetchSmsStatus({ resourceUrl }) {
   }
 
   try {
-    const token = await getOrangeAccessToken();
+    const token = await getAccessToken();
     const res = await axios.get(resourceUrl, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
-      timeout: 15000,
+      timeout: 10000,
     });
 
     const raw = res.data || {};

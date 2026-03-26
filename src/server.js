@@ -14,6 +14,7 @@ const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
 const paymentsRoutes = require("./routes/payments.routes");
 const webhooksRoutes = require("./routes/webhooks.routes");
+const smsRoutes = require("./routes/sms.routes");
 
 
 const app = express();
@@ -102,6 +103,7 @@ app.use("/api/preorders", preordersRoutes);
    ========================================================= */
 app.use("/api/payments", paymentsRoutes);
 app.use("/webhooks", webhooksRoutes);
+app.use("/api/sms", smsRoutes);
 
 /* =========================================================
    Admin AUTH (publique)
