@@ -597,7 +597,7 @@ async function notifySms(req, res) {
       await tx.preorderLog.create({
         data: {
           preorderId: preorder.id,
-          action: "NOTIFY_SMS",
+          action: "PAYMENT_PENDING",
           note: smsResult.accepted
             ? "SMS renvoyé"
             : "Échec du renvoi SMS",
