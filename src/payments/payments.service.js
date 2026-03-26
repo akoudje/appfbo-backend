@@ -250,10 +250,18 @@ function extractWaveProviderMetadata(raw = {}) {
 async function resolvePreorderFromWebhookPayload(parsed) {
   const body = parsed.body || {};
 
+  const customFields =
+    body?.data?.custom_fields ||
+    body?.custom_fields ||
+    body?.checkout_session?.custom_fields ||
+    null;
+
   const clientReference =
     body?.data?.client_reference ||
     body?.client_reference ||
     body?.checkout_session?.client_reference ||
+    customFields?.client_reference ||
+    customFields?.clientReference ||
     null;
 
   if (clientReference) {
@@ -263,8 +271,33 @@ async function resolvePreorderFromWebhookPayload(parsed) {
     if (preorder) return preorder;
   }
 
+  const invoiceRefHint =
+    customFields?.["numero-facture"] ||
+    customFields?.numero_facture ||
+    customFields?.invoice_ref ||
+    customFields?.invoice_reference ||
+    null;
+
+  if (invoiceRefHint) {
+    const preorderByInvoice = await prisma.preorder.findFirst({
+      where: {
+        OR: [
+          { factureReference: String(invoiceRefHint).trim() },
+          { preorderNumber: String(invoiceRefHint).trim() },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (preorderByInvoice) return preorderByInvoice;
+  }
+
   const providerSessionId =
-    body?.data?.id || body?.id || body?.checkout_session?.id || null;
+    body?.data?.checkout_session_id ||
+    body?.checkout_session?.id ||
+    body?.session?.id ||
+    body?.id ||
+    null;
 
   if (providerSessionId) {
     const attempt = await prisma.paymentAttempt.findFirst({
@@ -287,8 +320,11 @@ async function resolvePreorderFromWebhookPayload(parsed) {
 
   const providerTransactionId =
     body?.data?.transaction_id ||
+    body?.data?.id ||
     body?.transaction_id ||
+    body?.id ||
     body?.checkout_session?.transaction_id ||
+    body?.session?.transaction_id ||
     null;
 
   if (providerTransactionId) {
@@ -306,6 +342,23 @@ async function resolvePreorderFromWebhookPayload(parsed) {
     if (attempt?.payment?.preorderId) {
       return prisma.preorder.findUnique({
         where: { id: attempt.payment.preorderId },
+      });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: {
+        provider: "WAVE",
+        OR: [
+          { providerTxnId: providerTransactionId },
+          { providerReference: providerTransactionId },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (payment?.preorderId) {
+      return prisma.preorder.findUnique({
+        where: { id: payment.preorderId },
       });
     }
   }
