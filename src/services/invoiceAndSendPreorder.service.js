@@ -13,6 +13,7 @@
 const prisma = require("../prisma");
 const whatsappService = require("./whatsapp.service");
 const paymentsService = require("../payments/payments.service");
+const { sendSms } = require("./sms.service");
 
 /**
  * Génère une référence de préfacture lisible
@@ -83,7 +84,7 @@ function isWavePreorder(preorder) {
 }
 
 /**
- * Construit le message WhatsApp de facturation.
+ * Construit le message de facturation.
  * Si paymentLink est fourni, il sera intégré dans le message.
  */
 function buildInvoiceMessage({ preorder, invoiceRef, note, paymentLink }) {
@@ -229,7 +230,7 @@ async function invoiceAndSendPreorder({
       null;
   }
 
-  // 4) Construire le message WhatsApp
+  // 4) Construire le message SMS/WhatsApp historique
   const messagePurpose = paymentLink ? "PAYMENT_LINK" : "INVOICE";
 
   let whatsappMessage = buildInvoiceMessage({
@@ -257,7 +258,7 @@ async function invoiceAndSendPreorder({
   console.log("[invoiceAndSendPreorder] waveResult =", JSON.stringify(waveResult, null, 2));
   console.log("[invoiceAndSendPreorder] paymentLink =", paymentLink);
 
-  // 5) Envoi WhatsApp + logs + mise à jour
+  // 5) Envoi SMS + logs + mise à jour
   const finalResult = await prisma.$transaction(async (tx) => {
     const createdMessage = await tx.orderMessage.create({
       data: {
@@ -265,7 +266,7 @@ async function invoiceAndSendPreorder({
         purpose: messagePurpose,
         status: "QUEUED",
         toPhone: whatsappTo,
-        provider: "SIMULATED",
+        provider: "ORANGE",
         paymentLinkTarget: paymentLink,
         paymentLinkTracked: paymentLink,
         createdBy: actorName,
@@ -275,37 +276,22 @@ async function invoiceAndSendPreorder({
 
     let sendResult = {
       accepted: false,
-      provider: "SIMULATED",
+      provider: "ORANGE",
       providerMessageId: null,
       rawPayload: null,
       errorCode: "NO_DESTINATION",
-      errorMessage: "Aucun numéro WhatsApp disponible pour cette précommande.",
+      errorMessage: "Aucun numero de destination disponible pour cette precommande.",
     };
 
     if (whatsappTo) {
-      if (typeof whatsappService.sendTextMessage === "function") {
-        sendResult = await whatsappService.sendTextMessage({
-          to: whatsappTo,
-          body: whatsappMessage,
-          metadata: {
-            preorderId: invoicedPreorder.id,
-            orderMessageId: createdMessage.id,
-            purpose: messagePurpose,
-          },
-        });
-      } else {
-        sendResult = {
-          accepted: true,
-          provider: "SIMULATED",
-          providerMessageId: `sim_${createdMessage.id}`,
-          rawPayload: null,
-          errorCode: null,
-          errorMessage: null,
-        };
-      }
+      sendResult = await sendSms({
+        to: whatsappTo,
+        message: whatsappMessage,
+        callbackData: invoicedPreorder.id,
+      });
     }
 
-    console.log("[invoiceAndSendPreorder] whatsappMessage =", whatsappMessage);
+    console.log("[invoiceAndSendPreorder] billingMessage =", whatsappMessage);
 
     const finalMessageStatus = sendResult.accepted ? "SENT" : "FAILED";
 
@@ -313,7 +299,7 @@ async function invoiceAndSendPreorder({
       where: { id: createdMessage.id },
       data: {
         status: finalMessageStatus,
-        provider: sendResult.provider || "SIMULATED",
+        provider: sendResult.provider || "ORANGE",
         providerMessageId: sendResult.providerMessageId || null,
         sentAt: sendResult.accepted ? now : null,
         failedAt: sendResult.accepted ? null : now,
@@ -329,8 +315,8 @@ async function invoiceAndSendPreorder({
         status: finalMessageStatus,
         rawPayload: sendResult.rawPayload || null,
         note: sendResult.accepted
-          ? "Message WhatsApp de facturation envoyé."
-          : "Échec de l’envoi WhatsApp de facturation.",
+          ? "Message SMS de facturation envoye."
+          : "Echec de l'envoi SMS de facturation.",
       },
     });
 
@@ -350,11 +336,11 @@ async function invoiceAndSendPreorder({
       action: "INVOICE",
       note: sendResult.accepted
         ? paymentLink
-          ? "Précommande facturée, paiement Wave initié et message WhatsApp envoyé."
-          : "Précommande facturée et message WhatsApp envoyé."
+          ? "Precommande facturee, paiement Wave initie et SMS envoye."
+          : "Precommande facturee et SMS envoye."
         : paymentLink
-          ? "Précommande facturée, paiement Wave initié, mais envoi WhatsApp en échec."
-          : "Précommande facturée, mais envoi WhatsApp en échec.",
+          ? "Precommande facturee, paiement Wave initie, mais envoi SMS en echec."
+          : "Precommande facturee, mais envoi SMS en echec.",
       meta: {
         invoiceRef,
         whatsappTo,
