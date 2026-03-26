@@ -112,6 +112,12 @@ async function sendSms({ to, message }) {
   }
 
   try {
+    console.log("[sms][orange] send requested", {
+      to: toAddress,
+      senderAddress,
+      messageLength: String(message || "").length,
+    });
+
     const token = await getOrangeAccessToken();
     const outboundPath = encodeURIComponent(senderAddress);
     const url = `https://api.orange.com/smsmessaging/v1/outbound/${outboundPath}/requests`;
@@ -140,6 +146,12 @@ async function sendSms({ to, message }) {
       res.data?.resourceURL ||
       null;
 
+    console.log("[sms][orange] send accepted", {
+      to: toAddress,
+      providerMessageId,
+      httpStatus: res.status,
+    });
+
     return {
       accepted: true,
       provider: "ORANGE",
@@ -149,6 +161,20 @@ async function sendSms({ to, message }) {
       errorMessage: null,
     };
   } catch (err) {
+    console.error("[sms][orange] send failed", {
+      to: toAddress,
+      errorCode:
+        err?.response?.data?.requestError?.serviceException?.messageId ||
+        err?.code ||
+        "SMS_SEND_FAILED",
+      errorMessage:
+        err?.response?.data?.requestError?.serviceException?.text ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "Échec d'envoi SMS",
+      httpStatus: err?.response?.status || null,
+    });
+
     return {
       accepted: false,
       provider: "ORANGE",

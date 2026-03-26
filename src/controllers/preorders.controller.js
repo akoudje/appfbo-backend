@@ -433,6 +433,13 @@ async function submit(req, res) {
       to: smsTo,
       message: smsMessage,
     });
+    console.log("[preorders][submit] sms dispatch result", {
+      preorderId,
+      smsTo,
+      accepted: smsResult.accepted,
+      provider: smsResult.provider,
+      error: smsResult.errorMessage || null,
+    });
 
     const persistedMessageStatus = smsResult.accepted ? "SENT" : "FAILED";
     const uiSmsStatus = smsResult.accepted ? "sent" : "failed";
@@ -577,6 +584,13 @@ async function notifySms(req, res) {
     const smsResult = await sendSms({
       to: smsTo,
       message: smsMessage,
+    });
+    console.log("[preorders][notifySms] sms dispatch result", {
+      preorderId,
+      smsTo,
+      accepted: smsResult.accepted,
+      provider: smsResult.provider,
+      error: smsResult.errorMessage || null,
     });
 
     const persistedMessageStatus = smsResult.accepted ? "SENT" : "FAILED";

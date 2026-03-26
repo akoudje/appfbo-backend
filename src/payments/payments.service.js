@@ -1820,10 +1820,16 @@ async function handleWaveWebhook({ req }) {
         },
       });
     } else {
-      console.warn("[payments][wave] preorder not resolved from webhook", {
+      console.info("[payments][wave] webhook ignored (preorder unresolved)", {
         providerEventId: parsed.providerEventId || null,
         syntheticEventId,
         eventType: parsed.eventType || null,
+        hint:
+          parsed.body?.data?.client_reference ||
+          parsed.body?.client_reference ||
+          parsed.body?.checkout_session?.client_reference ||
+          parsed.body?.data?.custom_fields?.["numero-facture"] ||
+          null,
       });
 
       await addPaymentTransactionLogTx(prisma, {
