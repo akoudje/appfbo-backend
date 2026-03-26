@@ -85,7 +85,7 @@ async function getOrangeAccessToken() {
   return accessToken;
 }
 
-async function sendSms({ to, message }) {
+async function sendSms({ to, message, callbackData = null }) {
   const toAddress = toOrangeAddress(to);
   const senderAddress = process.env.ORANGE_SENDER_ADDRESS;
 
@@ -131,6 +131,18 @@ async function sendSms({ to, message }) {
         },
       },
     };
+
+    const notifyUrl = String(process.env.ORANGE_DLR_NOTIFY_URL || "").trim();
+    if (notifyUrl) {
+      payload.outboundSMSMessageRequest.receiptRequest = {
+        notifyURL: notifyUrl,
+      };
+      if (callbackData) {
+        payload.outboundSMSMessageRequest.receiptRequest.callbackData = String(
+          callbackData,
+        ).slice(0, 120);
+      }
+    }
 
     const res = await axios.post(url, payload, {
       headers: {
@@ -297,4 +309,5 @@ module.exports = {
   normalizePhone,
   sendSms,
   fetchSmsStatus,
+  mapOrangeDeliveryStatus,
 };

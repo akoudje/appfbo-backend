@@ -463,6 +463,7 @@ async function submit(req, res) {
     const smsResult = await sendSms({
       to: smsTo,
       message: smsMessage,
+      callbackData: preorderId,
     });
     console.log("[preorders][submit] sms dispatch result", {
       preorderId,
@@ -622,6 +623,7 @@ async function notifySms(req, res) {
     const smsResult = await sendSms({
       to: smsTo,
       message: smsMessage,
+      callbackData: preorderId,
     });
     console.log("[preorders][notifySms] sms dispatch result", {
       preorderId,
