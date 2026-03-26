@@ -9,6 +9,8 @@ const { buildPreorderSmsMessage, normalizePhone, sendSms } = require("../service
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 
+const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
+
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
@@ -22,6 +24,17 @@ function mapSmsStatus(rawStatus) {
   if (["SENT", "DELIVERED", "READ"].includes(s)) return "sent";
   if (["FAILED", "CANCELLED"].includes(s)) return "failed";
   return "pending";
+}
+
+function digitsOnly(v = "") {
+  return String(v || "").replace(/\D/g, "");
+}
+
+function isBillingNumber(phone = "") {
+  const target = digitsOnly(phone);
+  if (!target) return false;
+
+  return BILLING_WHATSAPPS.some((n) => digitsOnly(n) === target);
 }
 
 function extractNotificationFromPreorder(preorder) {
@@ -403,6 +416,12 @@ async function submit(req, res) {
     if (!smsTo) {
       return res.status(400).json({ error: "Le numéro de téléphone est obligatoire." });
     }
+    if (isBillingNumber(smsTo)) {
+      return res.status(400).json({
+        error:
+          "Le numéro de téléphone client est invalide. Veuillez saisir le numéro de l'utilisateur.",
+      });
+    }
 
     const summary = await computePreorderTotals(preorderId, countryId);
 
@@ -537,6 +556,7 @@ async function submit(req, res) {
       status: "SUBMITTED",
       billingWorkStatus: "QUEUED",
       totals: summary.totals,
+      smsTo,
       smsStatus: uiSmsStatus,
       smsLastError: smsResult.errorMessage || null,
       smsLastSentAt: smsResult.accepted ? now.toISOString() : null,
@@ -569,6 +589,12 @@ async function notifySms(req, res) {
     const smsTo = normalizePhone(phoneNormalized || phoneRaw || preorder.factureWhatsappTo);
     if (!smsTo) {
       return res.status(400).json({ error: "Aucun numéro disponible pour le SMS." });
+    }
+    if (isBillingNumber(smsTo)) {
+      return res.status(400).json({
+        error:
+          "Le numéro de téléphone client est invalide. Veuillez saisir le numéro de l'utilisateur.",
+      });
     }
 
     const smsMessage =
@@ -627,6 +653,7 @@ async function notifySms(req, res) {
 
     return res.json({
       preorderId: preorder.id,
+      smsTo,
       smsStatus: uiSmsStatus,
       smsLastError: smsResult.errorMessage || null,
       smsLastSentAt: smsResult.accepted ? now.toISOString() : null,
