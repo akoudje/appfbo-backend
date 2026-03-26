@@ -193,8 +193,108 @@ async function sendSms({ to, message }) {
   }
 }
 
+function mapOrangeDeliveryStatus(raw = "") {
+  const s = String(raw || "").trim().toLowerCase();
+  if (!s) return "unknown";
+
+  if (
+    s.includes("deliveredtoterminal") ||
+    s.includes("delivered") ||
+    s.includes("successful")
+  ) {
+    return "delivered";
+  }
+
+  if (
+    s.includes("failed") ||
+    s.includes("rejected") ||
+    s.includes("undeliverable") ||
+    s.includes("expired")
+  ) {
+    return "failed";
+  }
+
+  if (
+    s.includes("pending") ||
+    s.includes("submitted") ||
+    s.includes("sent") ||
+    s.includes("accepted")
+  ) {
+    return "pending";
+  }
+
+  return "unknown";
+}
+
+async function fetchSmsStatus({ resourceUrl }) {
+  if (!resourceUrl || typeof resourceUrl !== "string") {
+    return {
+      ok: false,
+      provider: "ORANGE",
+      deliveryStatus: "unknown",
+      providerStatus: null,
+      error: "RESOURCE_URL_MISSING",
+      raw: null,
+    };
+  }
+
+  if (!orangeConfigured()) {
+    return {
+      ok: false,
+      provider: "ORANGE",
+      deliveryStatus: "unknown",
+      providerStatus: null,
+      error: "SMS_PROVIDER_NOT_CONFIGURED",
+      raw: null,
+    };
+  }
+
+  try {
+    const token = await getOrangeAccessToken();
+    const res = await axios.get(resourceUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+      timeout: 15000,
+    });
+
+    const raw = res.data || {};
+    const providerStatus =
+      raw?.deliveryInfoList?.deliveryInfo?.[0]?.deliveryStatus ||
+      raw?.outboundSMSMessageRequest?.deliveryInfoList?.deliveryInfo?.[0]
+        ?.deliveryStatus ||
+      raw?.deliveryStatus ||
+      raw?.status ||
+      null;
+
+    return {
+      ok: true,
+      provider: "ORANGE",
+      deliveryStatus: mapOrangeDeliveryStatus(providerStatus),
+      providerStatus: providerStatus || null,
+      error: null,
+      raw,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      provider: "ORANGE",
+      deliveryStatus: "unknown",
+      providerStatus: null,
+      error:
+        err?.response?.data?.requestError?.serviceException?.text ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "SMS_STATUS_FETCH_FAILED",
+      raw: err?.response?.data || null,
+    };
+  }
+}
+
 module.exports = {
   buildPreorderSmsMessage,
   normalizePhone,
   sendSms,
+  fetchSmsStatus,
 };

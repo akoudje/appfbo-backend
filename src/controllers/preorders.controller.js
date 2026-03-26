@@ -5,7 +5,12 @@ const {
   computePreorderTotals,
   computeCatalogProductsForPreorder,
 } = require("../services/pricing.service");
-const { buildPreorderSmsMessage, normalizePhone, sendSms } = require("../services/sms.service");
+const {
+  buildPreorderSmsMessage,
+  normalizePhone,
+  sendSms,
+  fetchSmsStatus,
+} = require("../services/sms.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 
@@ -43,6 +48,13 @@ function extractNotificationFromPreorder(preorder) {
     smsLastError: null,
     smsLastSentAt: preorder?.lastWhatsappStatusAt || null,
   };
+}
+
+function mapDeliveryToPersistedStatus(deliveryStatus) {
+  if (deliveryStatus === "delivered") return "DELIVERED";
+  if (deliveryStatus === "failed") return "FAILED";
+  if (deliveryStatus === "pending") return "SENT";
+  return null;
 }
 
 async function createDraft(req, res) {
@@ -663,6 +675,77 @@ async function notifySms(req, res) {
   }
 }
 
+async function getSmsStatus(req, res) {
+  const preorderId = req.params.id;
+
+  try {
+    const preorder = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id: preorderId }),
+      select: {
+        id: true,
+        lastWhatsappMessageId: true,
+        lastWhatsappStatus: true,
+        lastWhatsappStatusAt: true,
+        factureWhatsappTo: true,
+      },
+    });
+
+    if (!preorder) {
+      return res.status(404).json({ error: "Preorder not found" });
+    }
+
+    const resourceUrl = preorder.lastWhatsappMessageId;
+    if (!resourceUrl || !String(resourceUrl).startsWith("http")) {
+      return res.json({
+        preorderId: preorder.id,
+        smsTo: preorder.factureWhatsappTo || null,
+        smsStatus: mapSmsStatus(preorder.lastWhatsappStatus),
+        smsProviderStatus: preorder.lastWhatsappStatus || null,
+        smsLastSentAt: preorder.lastWhatsappStatusAt || null,
+        source: "db_only",
+      });
+    }
+
+    const statusResult = await fetchSmsStatus({ resourceUrl });
+    const now = new Date();
+
+    let smsStatus = mapSmsStatus(preorder.lastWhatsappStatus);
+    let smsProviderStatus = preorder.lastWhatsappStatus || null;
+    let smsLastSentAt = preorder.lastWhatsappStatusAt || null;
+
+    if (statusResult.ok) {
+      const persisted = mapDeliveryToPersistedStatus(statusResult.deliveryStatus);
+      if (persisted) {
+        await prisma.preorder.update({
+          where: { id: preorder.id },
+          data: {
+            lastWhatsappStatus: persisted,
+            lastWhatsappStatusAt: now,
+          },
+        });
+        smsStatus = mapSmsStatus(persisted);
+        smsProviderStatus = statusResult.providerStatus || persisted;
+        smsLastSentAt = now;
+      } else {
+        smsStatus = statusResult.deliveryStatus === "unknown" ? smsStatus : statusResult.deliveryStatus;
+        smsProviderStatus = statusResult.providerStatus || smsProviderStatus;
+      }
+    }
+
+    return res.json({
+      preorderId: preorder.id,
+      smsTo: preorder.factureWhatsappTo || null,
+      smsStatus,
+      smsProviderStatus,
+      smsLastSentAt,
+      smsLastError: statusResult.ok ? null : statusResult.error || null,
+      source: statusResult.ok ? "orange_status_api" : "orange_status_api_error",
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || "Erreur getSmsStatus" });
+  }
+}
+
 module.exports = {
   createDraft,
   getCatalog,
@@ -670,4 +753,5 @@ module.exports = {
   getSummary,
   submit,
   notifySms,
+  getSmsStatus,
 };

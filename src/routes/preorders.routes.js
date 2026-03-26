@@ -8,6 +8,7 @@ const {
   getSummary,
   submit,
   notifySms,
+  getSmsStatus,
 } = require("../controllers/preorders.controller");
 const { resolveCountry } = require("../middlewares/resolveCountry");
 
@@ -20,5 +21,6 @@ router.put("/:id/items", setItems);
 router.get("/:id/summary", getSummary);
 router.post("/:id/submit", submit);
 router.post("/:id/notify-sms", notifySms);
+router.get("/:id/sms-status", getSmsStatus);
 
 module.exports = router;
