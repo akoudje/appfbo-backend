@@ -112,31 +112,31 @@ router.put(
 
 router.get(
   "/users",
-  requirePermission(Permission.COUNTRY_READ),
+  requirePermission(Permission.USER_ADMIN),
   listUsers,
 );
 
 router.get(
   "/users/:id",
-  requirePermission(Permission.COUNTRY_READ),
+  requirePermission(Permission.USER_ADMIN),
   getUserById,
 );
 
 router.post(
   "/users",
-  requirePermission(Permission.COUNTRY_WRITE),
+  requirePermission(Permission.USER_ADMIN),
   createUser,
 );
 
 router.put(
   "/users/:id",
-  requirePermission(Permission.COUNTRY_WRITE),
+  requirePermission(Permission.USER_ADMIN),
   updateUser,
 );
 
 router.patch(
   "/users/:id/status",
-  requirePermission(Permission.COUNTRY_WRITE),
+  requirePermission(Permission.USER_ADMIN),
   updateUserStatus,
 );
 

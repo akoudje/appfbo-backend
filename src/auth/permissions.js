@@ -18,6 +18,7 @@ const AdminRole = {
 const Permission = {
   COUNTRY_READ: "COUNTRY_READ",
   COUNTRY_WRITE: "COUNTRY_WRITE",
+  USER_ADMIN: "USER_ADMIN",
 
   PRODUCT_READ: "PRODUCT_READ",
   PRODUCT_WRITE: "PRODUCT_WRITE",
@@ -43,6 +44,7 @@ const ROLE_PERMISSIONS = {
 
   [AdminRole.OPERATIONS_DIRECTOR]: [
     Permission.COUNTRY_READ,
+    Permission.USER_ADMIN,
     Permission.PRODUCT_READ,
     Permission.PRODUCT_WRITE,
     Permission.DISCOUNT_READ,

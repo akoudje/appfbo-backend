@@ -364,6 +364,10 @@ model AdminUser {
   fullName String?
   role     AdminRole
   actif    Boolean   @default(true)
+  lastLoginAt DateTime?
+  passwordChangedAt DateTime?
+  failedLoginCount Int @default(0)
+  lockedUntil DateTime?
 
   countryId String?
   country   Country? @relation(fields: [countryId], references: [id], onDelete: Restrict)
@@ -381,12 +385,35 @@ model AdminUser {
   stockMovements StockMovement[]
   preorderLogs   PreorderLog[]
   paymentTransactionLogs PaymentTransactionLog[]
+  auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
+  auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([countryId])
   @@index([role])
+  @@index([lockedUntil])
+}
+
+model AdminUserAuditLog {
+  id String @id @default(cuid())
+
+  actorAdminId String?
+  actorAdmin   AdminUser? @relation("AdminUserAuditActor", fields: [actorAdminId], references: [id], onDelete: SetNull)
+
+  targetAdminId String?
+  targetAdmin   AdminUser? @relation("AdminUserAuditTarget", fields: [targetAdminId], references: [id], onDelete: SetNull)
+
+  action String
+  note   String? @db.Text
+  meta   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([actorAdminId, createdAt])
+  @@index([targetAdminId, createdAt])
+  @@index([action, createdAt])
 }
 
 model FboCountry {

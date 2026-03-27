@@ -5,6 +5,12 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
 const { getRolePermissions } = require("../auth/permissions");
+const {
+  validateAdminPassword,
+  buildWeakPasswordMessage,
+  computeLoginLockInfo,
+  createAdminAuditLog,
+} = require("../services/admin-security.service");
 
 function signAdminToken(admin) {
   const secret = process.env.JWT_SECRET;
@@ -33,6 +39,9 @@ function sanitizeAdmin(admin) {
     permissions: getRolePermissions(admin.role),
     actif: admin.actif,
     countryId: admin.countryId || null,
+    lastLoginAt: admin.lastLoginAt || null,
+    passwordChangedAt: admin.passwordChangedAt || null,
+    lockedUntil: admin.lockedUntil || null,
     createdAt: admin.createdAt,
     updatedAt: admin.updatedAt,
   };
@@ -58,13 +67,54 @@ async function adminLogin(req, res) {
       return res.status(401).json({ message: "Identifiants invalides" });
     }
 
+    if (admin.lockedUntil && new Date(admin.lockedUntil).getTime() > Date.now()) {
+      return res.status(423).json({
+        message: "Compte temporairement verrouillé. Réessayez plus tard.",
+      });
+    }
+
     const ok = await bcrypt.compare(String(password), admin.password);
     if (!ok) {
+      const lockInfo = computeLoginLockInfo(admin.failedLoginCount);
+      await prisma.adminUser.update({
+        where: { id: admin.id },
+        data: {
+          failedLoginCount: lockInfo.nextCount,
+          lockedUntil: lockInfo.lockedUntil,
+        },
+      });
+      await createAdminAuditLog(prisma, {
+        targetAdminId: admin.id,
+        action: "LOGIN_FAILED",
+        note: lockInfo.shouldLock
+          ? "Échec de connexion - compte verrouillé temporairement."
+          : "Échec de connexion.",
+        meta: {
+          failedLoginCount: lockInfo.nextCount,
+          lockedUntil: lockInfo.lockedUntil,
+        },
+      });
       return res.status(401).json({ message: "Identifiants invalides" });
     }
 
-    const token = signAdminToken(admin);
-    return res.json({ token, user: sanitizeAdmin(admin) });
+    const updatedAdmin = await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: {
+        lastLoginAt: new Date(),
+        failedLoginCount: 0,
+        lockedUntil: null,
+      },
+    });
+
+    await createAdminAuditLog(prisma, {
+      actorAdminId: updatedAdmin.id,
+      targetAdminId: updatedAdmin.id,
+      action: "LOGIN_SUCCESS",
+      note: "Connexion administrateur réussie.",
+    });
+
+    const token = signAdminToken(updatedAdmin);
+    return res.json({ token, user: sanitizeAdmin(updatedAdmin) });
   } catch (e) {
     console.error("adminLogin error:", e);
     return res.status(500).json({ message: "Erreur serveur (adminLogin)" });
@@ -112,6 +162,14 @@ async function seedSuperAdmin(req, res) {
       return res.status(400).json({ message: "email et password requis" });
     }
 
+    try {
+      validateAdminPassword(password);
+    } catch (error) {
+      return res.status(error.statusCode || 400).json({
+        message: buildWeakPasswordMessage(),
+      });
+    }
+
     const hash = await bcrypt.hash(String(password), 10);
 
     const admin = await prisma.adminUser.create({
@@ -122,6 +180,7 @@ async function seedSuperAdmin(req, res) {
         role: "SUPER_ADMIN",
         actif: true,
         countryId: null,
+        passwordChangedAt: new Date(),
       },
     });
 
