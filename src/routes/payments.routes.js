@@ -8,6 +8,24 @@ const paymentsController = require("../payments/payments.controller");
 const { requireAuth } = require("../middlewares/rbac");
 const { resolveCountry } = require("../middlewares/resolveCountry");
 
+router.get(
+  "/wave/public/:orderId/context",
+  resolveCountry,
+  paymentsController.getPublicWavePaymentContext
+);
+
+router.post(
+  "/wave/public/initiate",
+  resolveCountry,
+  paymentsController.initiatePublicWavePayment
+);
+
+router.post(
+  "/wave/public/:orderId/sync",
+  resolveCountry,
+  paymentsController.syncPublicWavePaymentStatus
+);
+
 // Admin protégé
 router.post(
   "/wave/initiate",

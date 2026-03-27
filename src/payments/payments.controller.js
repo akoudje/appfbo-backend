@@ -94,6 +94,77 @@ async function waveWebhook(req, res) {
   }
 }
 
+async function getPublicWavePaymentContext(req, res) {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId requis" });
+    }
+
+    const result = await paymentsService.getPublicWavePaymentContext({
+      req,
+      preorderId: orderId,
+    });
+
+    return res.json(result);
+  } catch (e) {
+    console.error("getPublicWavePaymentContext error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (getPublicWavePaymentContext)" });
+  }
+}
+
+async function initiatePublicWavePayment(req, res) {
+  try {
+    const { orderId, payerPhone } = req.body || {};
+
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId requis" });
+    }
+
+    if (!payerPhone) {
+      return res.status(400).json({ message: "payerPhone requis" });
+    }
+
+    const result = await paymentsService.initiateWavePayment({
+      req,
+      preorderId: orderId,
+      restrictPayerMobile: payerPhone,
+    });
+
+    return res.json(result);
+  } catch (e) {
+    console.error("initiatePublicWavePayment error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (initiatePublicWavePayment)" });
+  }
+}
+
+async function syncPublicWavePaymentStatus(req, res) {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId requis" });
+    }
+
+    const result = await paymentsService.syncWavePaymentStatus({
+      req,
+      preorderId: orderId,
+    });
+
+    return res.json(result);
+  } catch (e) {
+    console.error("syncPublicWavePaymentStatus error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (syncPublicWavePaymentStatus)" });
+  }
+}
+
 async function listPaymentTransactionLogs(req, res) {
   try {
     const { orderId } = req.params;
@@ -120,6 +191,9 @@ async function listPaymentTransactionLogs(req, res) {
 
 module.exports = {
   initiateWavePayment,
+  getPublicWavePaymentContext,
+  initiatePublicWavePayment,
+  syncPublicWavePaymentStatus,
   syncWavePaymentStatus,
   simulateWaveStatus,
   waveWebhook,

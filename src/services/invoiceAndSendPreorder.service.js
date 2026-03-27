@@ -15,6 +15,7 @@ const whatsappService = require("./whatsapp.service");
 const paymentsService = require("../payments/payments.service");
 const { sendSms } = require("./sms.service");
 const { computePreorderTotalsForGrade } = require("./pricing.service");
+const { computePaymentPricing } = require("../payments/payment-pricing");
 
 const BILLING_GRADES = [
   "CLIENT_PRIVILEGIE",
@@ -23,11 +24,6 @@ const BILLING_GRADES = [
   "MANAGER_ADJOINT",
   "MANAGER",
 ];
-
-const MOBILE_MONEY_SERVICE_FEE_RATES = {
-  WAVE: 1,
-  ORANGE_MONEY: 0,
-};
 
 /**
  * Génère une référence de préfacture lisible
@@ -111,29 +107,6 @@ function normalizeBillingGrade(value, fallback) {
   }
 
   return grade;
-}
-
-function normalizePaymentMode(value) {
-  return String(value || "").trim().toUpperCase();
-}
-
-function computePaymentPricing({ preorderPaymentMode, orderTotalFcfa }) {
-  const normalizedMode = normalizePaymentMode(preorderPaymentMode);
-  const baseTotalFcfa = Math.max(0, Number(orderTotalFcfa || 0));
-  const serviceFeeRatePercent =
-    MOBILE_MONEY_SERVICE_FEE_RATES[normalizedMode] || 0;
-  const paymentServiceFeeFcfa =
-    serviceFeeRatePercent > 0
-      ? Math.ceil(baseTotalFcfa * (serviceFeeRatePercent / 100))
-      : 0;
-
-  return {
-    paymentMode: normalizedMode || null,
-    baseTotalFcfa,
-    serviceFeeRatePercent,
-    paymentServiceFeeFcfa,
-    amountToPayFcfa: baseTotalFcfa + paymentServiceFeeFcfa,
-  };
 }
 
 async function buildInvoicePreview({ preorderId, billingGradeInput = "" }) {
@@ -253,6 +226,11 @@ async function invoiceAndSendPreorder({
     where: { id: preorderId },
     include: {
       fbo: true,
+      country: {
+        select: {
+          code: true,
+        },
+      },
       items: true,
       messages: {
         orderBy: { createdAt: "desc" },
@@ -378,22 +356,14 @@ async function invoiceAndSendPreorder({
   console.log("[invoiceAndSendPreorder] isWavePreorder =", isWavePreorder(invoicedPreorder));
   console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
 
-  // 3) Initier Wave si nécessaire
-  let waveResult = null;
+  // 3) Générer le lien public de paiement Wave si nécessaire
   let paymentLink = null;
 
   if (isWavePreorder(invoicedPreorder) && req) {
-    waveResult = await paymentsService.initiateWavePayment({
-      req,
-      preorderId: invoicedPreorder.id,
-      amountFcfaOverride: paymentPricing.amountToPayFcfa,
-      pricingMeta: paymentPricing,
-    });
-
-    paymentLink =
-      waveResult?.paymentAttempt?.providerLaunchUrl ||
-      waveResult?.paymentAttempt?.checkoutUrl ||
-      null;
+    paymentLink = paymentsService.buildPublicWavePaymentUrl(
+      invoicedPreorder.id,
+      invoicedPreorder.country?.code || "CIV",
+    );
   }
 
   // 4) Construire le message SMS/WhatsApp historique
@@ -424,7 +394,6 @@ async function invoiceAndSendPreorder({
   console.log("[invoiceAndSendPreorder] messagePurpose =", messagePurpose);
   console.log("[invoiceAndSendPreorder] body to save =", whatsappMessage);
 
-  console.log("[invoiceAndSendPreorder] waveResult =", JSON.stringify(waveResult, null, 2));
   console.log("[invoiceAndSendPreorder] paymentLink =", paymentLink);
 
   // 5) Envoi SMS + logs + mise à jour
@@ -524,7 +493,7 @@ async function invoiceAndSendPreorder({
         messageStatus: finalMessageStatus,
         actorName,
         paymentLink,
-        waveSessionId: waveResult?.paymentAttempt?.providerSessionId || null,
+        waveSessionId: null,
       },
       actorAdminId,
     });
@@ -536,10 +505,7 @@ async function invoiceAndSendPreorder({
       whatsappTo,
       paymentLinkTarget: paymentLink,
       trackedPaymentLink: paymentLink,
-      paymentRef:
-        waveResult?.payment?.providerReference ||
-        waveResult?.paymentAttempt?.providerSessionId ||
-        null,
+      paymentRef: null,
       paymentPricing,
     };
   });

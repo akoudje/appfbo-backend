@@ -6,6 +6,8 @@ const prisma = require("../prisma");
 const paymentOrchestrator = require("./payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("./payment-status.mapper");
 const { scopeWhere, pickCountryId } = require("../helpers/countryScope");
+const { computePaymentPricing } = require("./payment-pricing");
+const { normalizeCI } = require("../utils/phone");
 const {
   addPaymentTransactionLogTx,
 } = require("./payment-transaction-log.helper");
@@ -41,17 +43,56 @@ async function addLogTx(
   }
 }
 
-function buildWaveUrls(preorderId) {
-  const publicBaseUrl =
-    process.env.APP_PUBLIC_BASE_URL ||
-    process.env.ADMIN_APP_PUBLIC_URL ||
-    process.env.FRONTEND_PUBLIC_URL ||
-    "http://localhost:5173";
+function buildWaveUrls(preorderId, countryCode = "CIV") {
+  const publicWaveUrl = buildPublicWavePaymentUrl(preorderId, countryCode);
 
   return {
-    successUrl: `${publicBaseUrl}/orders/${preorderId}?tab=payment&wave=success`,
-    errorUrl: `${publicBaseUrl}/orders/${preorderId}?tab=payment&wave=error`,
+    successUrl: `${publicWaveUrl}&wave=success`,
+    errorUrl: `${publicWaveUrl}&wave=error`,
   };
+}
+
+function buildPublicWavePaymentUrl(preorderId, countryCode = "CIV") {
+  const publicBaseUrl =
+    process.env.APP_PUBLIC_BASE_URL ||
+    process.env.FRONTEND_PUBLIC_URL ||
+    process.env.ADMIN_APP_PUBLIC_URL ||
+    "http://localhost:5173";
+  const normalizedCountryCode = String(countryCode || "CIV").trim().toUpperCase();
+  const encodedOrderId = encodeURIComponent(String(preorderId || ""));
+  const encodedCountryCode = encodeURIComponent(normalizedCountryCode || "CIV");
+
+  return `${publicBaseUrl}/payment/wave/${encodedOrderId}?country=${encodedCountryCode}`;
+}
+
+async function resolvePublicWavePreorder(req, preorderId) {
+  const preorder = await prisma.preorder.findFirst({
+    where: scopeWhere(req, { id: preorderId }),
+    include: {
+      activePayment: {
+        include: {
+          attempts: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+          },
+        },
+      },
+      country: {
+        select: {
+          code: true,
+          name: true,
+        },
+      },
+    },
+  });
+
+  if (!preorder) {
+    const err = new Error("Commande introuvable");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return preorder;
 }
 
 async function resolveWaveProviderAccount(countryId) {
@@ -949,6 +990,11 @@ async function initiateWavePayment({
     where: scopeWhere(req, { id: preorderId }),
     include: {
       activePayment: true,
+      country: {
+        select: {
+          code: true,
+        },
+      },
     },
   });
 
@@ -967,7 +1013,19 @@ async function initiateWavePayment({
   }
 
   const providerAccount = await resolveWaveProviderAccount(countryId);
-  const { successUrl, errorUrl } = buildWaveUrls(preorder.id);
+  const { successUrl, errorUrl } = buildWaveUrls(
+    preorder.id,
+    preorder.country?.code || "CIV",
+  );
+  const normalizedPayerMobile = restrictPayerMobile
+    ? normalizeCI(restrictPayerMobile)
+    : null;
+
+  if (restrictPayerMobile && !normalizedPayerMobile) {
+    const err = new Error("Numero Wave invalide");
+    err.statusCode = 400;
+    throw err;
+  }
   const amountToChargeFcfa = Math.max(
     0,
     Number(
@@ -993,7 +1051,7 @@ async function initiateWavePayment({
         successUrl,
         errorUrl,
         clientReference: preorder.id,
-      restrictPayerMobile,
+        restrictPayerMobile: normalizedPayerMobile,
     });
   }
 
@@ -1078,7 +1136,7 @@ async function initiateWavePayment({
             preorderId: preorder.id,
             amountExpectedFcfa: amountToChargeFcfa,
             clientReference: preorder.id,
-            restrictPayerMobile: restrictPayerMobile || null,
+            restrictPayerMobile: normalizedPayerMobile,
             simulated: simulation,
             pricingMeta: pricingMeta || null,
           },
@@ -1252,10 +1310,10 @@ async function initiateWavePayment({
     if (providerMetadata.providerPayerPhone) {
       console.log("[payments][wave] payer phone captured at initiation", {
         preorderId: preorder.id,
-        paymentId: updatedPayment.id,
-        paymentAttemptId: attempt.id,
-        providerPayerPhone: providerMetadata.providerPayerPhone,
-      });
+      paymentId: updatedPayment.id,
+      paymentAttemptId: attempt.id,
+      providerPayerPhone: providerMetadata.providerPayerPhone,
+    });
     }
 
     return {
@@ -1270,6 +1328,59 @@ async function initiateWavePayment({
     simulated: simulation,
     ...result,
     checkoutUrl: result.paymentAttempt.checkoutUrl,
+    publicPaymentUrl: buildPublicWavePaymentUrl(
+      preorder.id,
+      preorder.country?.code || "CIV",
+    ),
+  };
+}
+
+async function getPublicWavePaymentContext({ req, preorderId }) {
+  const preorder = await resolvePublicWavePreorder(req, preorderId);
+  const paymentPricing = computePaymentPricing({
+    preorderPaymentMode: preorder.preorderPaymentMode,
+    orderTotalFcfa: preorder.totalFcfa || 0,
+  });
+  const lastAttempt = preorder.activePayment?.attempts?.[0] || null;
+
+  return {
+    ok: true,
+    data: {
+      orderId: preorder.id,
+      preorderNumber: preorder.preorderNumber || null,
+      factureReference: preorder.factureReference || null,
+      customerName: preorder.fboNomComplet || null,
+      fboNumero: preorder.fboNumero || null,
+      countryCode: preorder.country?.code || null,
+      countryName: preorder.country?.name || null,
+      status: preorder.status,
+      paymentStatus: preorder.paymentStatus,
+      paymentMode: preorder.preorderPaymentMode || null,
+      orderTotalFcfa: Number(preorder.totalFcfa || 0),
+      paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
+      serviceFeeRatePercent: paymentPricing.serviceFeeRatePercent,
+      amountToPayFcfa:
+        Number(preorder.activePayment?.amountExpectedFcfa || 0) ||
+        paymentPricing.amountToPayFcfa,
+      activePayment: preorder.activePayment
+        ? {
+            id: preorder.activePayment.id,
+            status: preorder.activePayment.status,
+            provider: preorder.activePayment.provider,
+            amountExpectedFcfa: preorder.activePayment.amountExpectedFcfa,
+            amountPaidFcfa: preorder.activePayment.amountPaidFcfa,
+            initiatedAt: preorder.activePayment.initiatedAt,
+          }
+        : null,
+      payerPhoneHint:
+        lastAttempt?.providerPayerPhone ||
+        lastAttempt?.requestPayloadJson?.restrictPayerMobile ||
+        null,
+      publicPaymentUrl: buildPublicWavePaymentUrl(
+        preorder.id,
+        preorder.country?.code || "CIV",
+      ),
+    },
   };
 }
 
@@ -1959,6 +2070,8 @@ async function listPaymentTransactionLogs({ req, preorderId, take = 200 }) {
 }
 
 module.exports = {
+  buildPublicWavePaymentUrl,
+  getPublicWavePaymentContext,
   initiateWavePayment,
   syncWavePaymentStatus,
   simulateWaveStatus,
