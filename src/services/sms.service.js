@@ -22,7 +22,9 @@ function buildPreorderSmsMessage({ preorder, totals }) {
   return [
     `Bonjour ${customer},`,
     `Votre précommande ${number} est bien enregistrée.`,
-    `Montant estimé: ${totalFmt} FCFA.`,
+    `Montant indicatif actuel: ${totalFmt} FCFA.`,
+    "Les prix affichés n'incluent pas les taxes.",
+    "Le montant final de votre facture sera confirmé par le facturier selon les informations AS400.",
     "Nous vous contacterons pour la suite.",
   ].join(" ");
 }
