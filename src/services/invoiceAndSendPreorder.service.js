@@ -109,7 +109,29 @@ function normalizeBillingGrade(value, fallback) {
   return grade;
 }
 
-async function buildInvoicePreview({ preorderId, billingGradeInput = "" }) {
+function normalizeInvoiceAmountOverride(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return null;
+  }
+
+  const normalizedValue = String(value)
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(",", ".");
+  const amount = Number(normalizedValue);
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new Error("INVALID_INVOICE_AMOUNT");
+  }
+
+  return Math.round(amount);
+}
+
+async function buildInvoicePreview({
+  preorderId,
+  billingGradeInput = "",
+  invoiceAmountOverrideInput = "",
+}) {
   const preorder = await prisma.preorder.findUnique({
     where: { id: preorderId },
     select: {
@@ -135,10 +157,15 @@ async function buildInvoicePreview({ preorderId, billingGradeInput = "" }) {
     preorder.countryId,
     effectiveGrade,
   );
+  const invoiceAmountOverrideFcfa = normalizeInvoiceAmountOverride(
+    invoiceAmountOverrideInput,
+  );
+  const effectiveInvoiceTotalFcfa =
+    invoiceAmountOverrideFcfa ?? pricingSummary.totals.totalFcfa;
 
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: preorder.preorderPaymentMode,
-    orderTotalFcfa: pricingSummary.totals.totalFcfa,
+    orderTotalFcfa: effectiveInvoiceTotalFcfa,
   });
 
   return {
@@ -147,7 +174,13 @@ async function buildInvoicePreview({ preorderId, billingGradeInput = "" }) {
     previousGrade: preorder.fboGrade,
     effectiveGrade,
     discountPercent: pricingSummary.discountPercent,
-    totals: pricingSummary.totals,
+    totals: {
+      ...pricingSummary.totals,
+      totalFcfa: effectiveInvoiceTotalFcfa,
+    },
+    pricingTotals: pricingSummary.totals,
+    invoiceAmountOverrideFcfa,
+    effectiveInvoiceTotalFcfa,
     payment: paymentPricing,
   };
 }
@@ -214,6 +247,7 @@ async function invoiceAndSendPreorder({
   whatsappToInput = "",
   invoiceNote = "",
   billingGradeInput = "",
+  invoiceAmountOverrideInput = "",
 }) {
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
@@ -262,9 +296,14 @@ async function invoiceAndSendPreorder({
     existingPreorder.countryId,
     effectiveGrade,
   );
+  const invoiceAmountOverrideFcfa = normalizeInvoiceAmountOverride(
+    invoiceAmountOverrideInput,
+  );
+  const effectiveInvoiceTotalFcfa =
+    invoiceAmountOverrideFcfa ?? pricingSummary.totals.totalFcfa;
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: existingPreorder.preorderPaymentMode,
-    orderTotalFcfa: pricingSummary.totals.totalFcfa,
+    orderTotalFcfa: effectiveInvoiceTotalFcfa,
   });
 
   // 2) Facturer la commande
@@ -310,7 +349,7 @@ async function invoiceAndSendPreorder({
         ),
         totalProduitsFcfa: pricingSummary.totals.totalProduitsFcfa || 0,
         fraisLivraisonFcfa: pricingSummary.totals.fraisLivraisonFcfa || 0,
-        totalFcfa: pricingSummary.totals.totalFcfa || 0,
+        totalFcfa: effectiveInvoiceTotalFcfa || 0,
 
         // file facturier
         assignedInvoicerId:
@@ -338,7 +377,9 @@ async function invoiceAndSendPreorder({
         previousGrade: existingPreorder.fboGrade,
         effectiveGrade,
         discountPercent: pricingSummary.discountPercent,
-        totalFcfa: pricingSummary.totals.totalFcfa || 0,
+        computedTotalFcfa: pricingSummary.totals.totalFcfa || 0,
+        invoiceAmountOverrideFcfa,
+        totalFcfa: effectiveInvoiceTotalFcfa || 0,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
         actorName,
@@ -485,7 +526,9 @@ async function invoiceAndSendPreorder({
         previousGrade: existingPreorder.fboGrade,
         effectiveGrade,
         discountPercent: pricingSummary.discountPercent,
-        totalFcfa: pricingSummary.totals.totalFcfa || 0,
+        computedTotalFcfa: pricingSummary.totals.totalFcfa || 0,
+        invoiceAmountOverrideFcfa,
+        totalFcfa: effectiveInvoiceTotalFcfa || 0,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
         messageId: savedMessage.id,
@@ -518,4 +561,5 @@ module.exports = {
   generateInvoiceRef,
   buildInvoicePreview,
   computePaymentPricing,
+  normalizeInvoiceAmountOverride,
 };

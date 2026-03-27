@@ -347,11 +347,12 @@ async function updateOrderStatus(req, res) {
 async function getInvoicePreview(req, res) {
   try {
     const { id } = req.params;
-    const { fboGrade } = req.query || {};
+    const { fboGrade, invoiceAmountFcfa } = req.query || {};
 
     const result = await buildInvoicePreview({
       preorderId: id,
       billingGradeInput: fboGrade,
+      invoiceAmountOverrideInput: invoiceAmountFcfa,
     });
 
     return res.json(result);
@@ -363,6 +364,12 @@ async function getInvoicePreview(req, res) {
     if (e.message === "INVALID_FBO_GRADE") {
       return res.status(400).json({
         message: "Le grade de facturation est invalide.",
+      });
+    }
+
+    if (e.message === "INVALID_INVOICE_AMOUNT") {
+      return res.status(400).json({
+        message: "Le montant final de facturation est invalide.",
       });
     }
 
@@ -383,7 +390,8 @@ async function invoiceOrder(req, res) {
     });
 
     const { id } = req.params;
-    const { factureReference, whatsappTo, note, fboGrade } = req.body || {};
+    const { factureReference, whatsappTo, note, fboGrade, invoiceAmountFcfa } =
+      req.body || {};
 
     const actorName = actorLabel(req);
     const actorAdminId = req.user?.id || null;
@@ -397,6 +405,7 @@ async function invoiceOrder(req, res) {
       whatsappToInput: whatsappTo,
       invoiceNote: note,
       billingGradeInput: fboGrade,
+      invoiceAmountOverrideInput: invoiceAmountFcfa,
     });
 
     return res.json(result.preorder);
@@ -422,6 +431,12 @@ async function invoiceOrder(req, res) {
     if (e.message === "INVALID_FBO_GRADE") {
       return res.status(400).json({
         message: "Le grade de facturation est invalide.",
+      });
+    }
+
+    if (e.message === "INVALID_INVOICE_AMOUNT") {
+      return res.status(400).json({
+        message: "Le montant final de facturation est invalide.",
       });
     }
 
