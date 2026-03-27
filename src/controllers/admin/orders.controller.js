@@ -212,6 +212,12 @@ async function getOrderById(req, res) {
             include: { product: true },
             orderBy: { createdAt: "asc" },
           },
+          country: {
+            select: {
+              code: true,
+              name: true,
+            },
+          },
           fbo: true,
           assignedInvoicer: {
             select: { id: true, fullName: true, email: true, role: true },
