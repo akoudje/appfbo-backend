@@ -30,6 +30,7 @@ enum OrderMessagePurpose {
   PAYMENT_LINK
   REMINDER
   PAYMENT_CONFIRMED
+  PREPARATION_STARTED
   ORDER_READY
 }
 
@@ -225,6 +226,7 @@ enum PreorderLogAction {
   VALIDATE_MANUAL_PAYMENT
   PAYMENT_CONFIRMED
 
+  LAUNCH_PREPARATION
   PREPARE
   FULFILL
   CANCEL
@@ -370,6 +372,7 @@ model AdminUser {
   assignedBillingPreorders        Preorder[] @relation("PreorderAssignedInvoicer")
   invoicedPreorders               Preorder[] @relation("PreorderInvoicedBy")
   manualPaymentValidatedPreorders Preorder[] @relation("PreorderManualPaymentValidatedBy")
+  launchedPreparationPreorders    Preorder[] @relation("PreorderPreparationLaunchedBy")
   preparedPreorders               Preorder[] @relation("PreorderPreparedBy")
   fulfilledPreorders              Preorder[] @relation("PreorderFulfilledBy")
   cancelledPreorders              Preorder[] @relation("PreorderCancelledBy")
@@ -527,14 +530,17 @@ model Preorder {
   activePayment   Payment? @relation("ActivePayment", fields: [activePaymentId], references: [id], onDelete: SetNull)
 
   // Préparation / fulfillment
+  preparationLaunchedAt DateTime?
   preparedAt  DateTime?
   fulfilledAt DateTime?
   cancelledAt DateTime?
 
+  preparationLaunchedById String?
   preparedById  String?
   fulfilledById String?
   cancelledById String?
 
+  preparationLaunchedBy AdminUser? @relation("PreorderPreparationLaunchedBy", fields: [preparationLaunchedById], references: [id], onDelete: SetNull)
   preparedByAdmin  AdminUser? @relation("PreorderPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
   fulfilledByAdmin AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
   cancelledByAdmin AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
@@ -552,6 +558,7 @@ model Preorder {
 
   deliveryTracking String?
   packingNote      String? @db.Text
+  pickupSecretCode String?
   cancelReason     String? @db.Text
 
   stockDeductedAt DateTime?
@@ -579,6 +586,8 @@ model Preorder {
   @@index([billingSlaDeadlineAt])
   @@index([invoicedById])
   @@index([manualPaymentValidatedById])
+  @@index([preparationLaunchedById])
+  @@index([preparationLaunchedAt])
   @@index([preparedById])
   @@index([fulfilledById])
   @@index([cancelledById])

@@ -4,6 +4,10 @@ const {
   invoiceAndSendPreorder,
   buildInvoicePreview,
 } = require("../../services/invoiceAndSendPreorder.service");
+const {
+  buildOrderReadySmsMessage,
+  sendPreorderNotification,
+} = require("../../services/preorder-notifications.service");
 
 const {
   scopeWhere,
@@ -167,6 +171,7 @@ async function listOrders(req, res) {
           deliveryMode: true,
           factureReference: true,
           billingWorkStatus: true,
+          preparationLaunchedAt: true,
           billingPriority: true,
           billingQueueEnteredAt: true,
           assignedAt: true,
@@ -226,6 +231,9 @@ async function getOrderById(req, res) {
             select: { id: true, fullName: true, email: true, role: true },
           },
           manualPaymentValidatedBy: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          preparationLaunchedBy: {
             select: { id: true, fullName: true, email: true, role: true },
           },
           preparedByAdmin: {
@@ -484,6 +492,13 @@ async function prepareOrder(req, res) {
       });
     }
 
+    if (!order.preparationLaunchedAt) {
+      return res.status(400).json({
+        message:
+          "La caisse doit d'abord lancer la préparation avant que le stock ne puisse traiter cette commande.",
+      });
+    }
+
     assertTransition(order.status, "READY");
 
     if (!order.items || order.items.length === 0) {
@@ -502,6 +517,10 @@ async function prepareOrder(req, res) {
     }
 
     const now = new Date();
+    const pickupSecretCode =
+      order.pickupSecretCode ||
+      String(Math.floor(100000 + Math.random() * 900000));
+    const actorName = actorLabel(req);
 
     const updated = await prisma.$transaction(async (tx) => {
       for (const item of order.items) {
@@ -550,6 +569,7 @@ async function prepareOrder(req, res) {
         data: {
           status: "READY",
           preparedAt: order.preparedAt || now,
+          pickupSecretCode,
           packingNote: packingNote
             ? String(packingNote).trim()
             : order.packingNote,
@@ -573,6 +593,23 @@ async function prepareOrder(req, res) {
 
       return saved;
     });
+
+    try {
+      await sendPreorderNotification({
+        preorder: {
+          ...order,
+          pickupSecretCode,
+        },
+        purpose: "ORDER_READY",
+        message: buildOrderReadySmsMessage({
+          preorder: order,
+          pickupSecretCode,
+        }),
+        actorName,
+      });
+    } catch (smsError) {
+      console.error("prepareOrder sms error:", smsError);
+    }
 
     return res.json(updated);
   } catch (e) {

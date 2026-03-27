@@ -1,6 +1,10 @@
 const prisma = require("../../prisma");
 const { scopeWhere } = require("../../helpers/countryScope");
 const { AdminRole } = require("../../auth/permissions");
+const {
+  buildPreparationStartedSmsMessage,
+  sendPreorderNotification,
+} = require("../../services/preorder-notifications.service");
 
 function normalizeDateStart(value) {
   if (!value) return null;
@@ -60,6 +64,7 @@ function buildOrderSummary(order) {
     amountExpectedFcfa: expectedAmount,
     paidAt: order.paidAt,
     invoicedAt: order.invoicedAt,
+    preparationLaunchedAt: order.preparationLaunchedAt,
     preparedAt: order.preparedAt,
     manualPaymentValidatedAt: order.manualPaymentValidatedAt,
     manualPaymentReference: order.manualPaymentReference,
@@ -77,6 +82,13 @@ function buildOrderSummary(order) {
           id: order.preparedByAdmin.id,
           fullName: order.preparedByAdmin.fullName,
           role: order.preparedByAdmin.role,
+        }
+      : null,
+    preparationLaunchedBy: order.preparationLaunchedBy
+      ? {
+          id: order.preparationLaunchedBy.id,
+          fullName: order.preparationLaunchedBy.fullName,
+          role: order.preparationLaunchedBy.role,
         }
       : null,
     payerPhone: getPayerPhone(order),
@@ -134,8 +146,8 @@ function aggregateByCashier(rows) {
   const summary = new Map();
 
   for (const row of rows) {
-    const cashierId = row.preparedBy?.id || "UNASSIGNED";
-    const cashierName = row.preparedBy?.fullName || "Non attribué";
+    const cashierId = row.preparationLaunchedBy?.id || "UNASSIGNED";
+    const cashierName = row.preparationLaunchedBy?.fullName || "Non attribué";
     const current = summary.get(cashierId) || {
       cashierId,
       cashierName,
@@ -155,7 +167,14 @@ async function getWorkspace(req, res) {
   try {
     const { q, paymentMode, dateFrom, dateTo, journalScope = "my" } = req.query;
     const queueWhere = scopeWhere(req, {
-      status: { in: ["INVOICED", "PAYMENT_PENDING", "PAID"] },
+      OR: [
+        { status: { in: ["INVOICED", "PAYMENT_PENDING"] } },
+        {
+          status: "PAID",
+          paymentStatus: "PAID",
+          preparationLaunchedAt: null,
+        },
+      ],
     });
 
     if (q && String(q).trim()) {
@@ -173,21 +192,28 @@ async function getWorkspace(req, res) {
     }
 
     const journalWhere = scopeWhere(req, {
-      status: { in: ["READY", "FULFILLED"] },
+      OR: [
+        {
+          status: "PAID",
+          paymentStatus: "PAID",
+          preparationLaunchedAt: { not: null },
+        },
+        { status: { in: ["READY", "FULFILLED"] } },
+      ],
     });
 
     const from = normalizeDateStart(dateFrom);
     const to = normalizeDateEnd(dateTo);
     if (from || to) {
-      journalWhere.preparedAt = {};
-      if (from) journalWhere.preparedAt.gte = from;
-      if (to) journalWhere.preparedAt.lte = to;
+      journalWhere.preparationLaunchedAt = {};
+      if (from) journalWhere.preparationLaunchedAt.gte = from;
+      if (to) journalWhere.preparationLaunchedAt.lte = to;
     }
 
     const allowConsolidated = canViewConsolidated(req.user?.role);
     const scope = allowConsolidated && journalScope === "all" ? "all" : "my";
     if (scope === "my") {
-      journalWhere.preparedById = req.user?.id || "__no_user__";
+      journalWhere.preparationLaunchedById = req.user?.id || "__no_user__";
     }
 
     const includeShape = {
@@ -208,6 +234,9 @@ async function getWorkspace(req, res) {
       preparedByAdmin: {
         select: { id: true, fullName: true, role: true },
       },
+      preparationLaunchedBy: {
+        select: { id: true, fullName: true, role: true },
+      },
     };
 
     const [queueOrders, journalOrders] = await Promise.all([
@@ -224,7 +253,11 @@ async function getWorkspace(req, res) {
       prisma.preorder.findMany({
         where: journalWhere,
         include: includeShape,
-        orderBy: [{ preparedAt: "desc" }, { paidAt: "desc" }],
+        orderBy: [
+          { preparationLaunchedAt: "desc" },
+          { preparedAt: "desc" },
+          { paidAt: "desc" },
+        ],
         take: 300,
       }),
     ]);
@@ -264,6 +297,101 @@ async function getWorkspace(req, res) {
   }
 }
 
+async function launchPreparation(req, res) {
+  try {
+    const { id } = req.params;
+    const { packingNote } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (order.status !== "PAID" || order.paymentStatus !== "PAID") {
+      return res.status(400).json({
+        message:
+          "La préparation ne peut être lancée qu'après confirmation du paiement.",
+      });
+    }
+
+    if (order.preparationLaunchedAt) {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        preparationLaunchedAt: order.preparationLaunchedAt,
+      });
+    }
+
+    const now = new Date();
+    const actorAdminId = req.user?.id || null;
+    const actorName =
+      req.user?.fullName || req.user?.email || req.user?.role || "CAISSE";
+
+    const updatedOrder = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          preparationLaunchedAt: now,
+          preparationLaunchedById: actorAdminId,
+          packingNote: packingNote
+            ? String(packingNote).trim()
+            : order.packingNote,
+        },
+      });
+
+      await tx.preorderLog.create({
+        data: {
+          preorderId: order.id,
+          action: "LAUNCH_PREPARATION",
+          note: "Commande transmise à la préparation.",
+          meta: {
+            actorName,
+            launchedAt: now.toISOString(),
+          },
+          actorAdminId,
+        },
+      });
+
+      return saved;
+    });
+
+    try {
+      await sendPreorderNotification({
+        preorder: {
+          ...order,
+          preparationLaunchedAt: now,
+        },
+        purpose: "PREPARATION_STARTED",
+        message: buildPreparationStartedSmsMessage({ preorder: order }),
+        actorName,
+      });
+    } catch (smsError) {
+      console.error("launchPreparation sms error:", smsError);
+    }
+
+    return res.json({
+      ok: true,
+      order: updatedOrder,
+    });
+  } catch (error) {
+    console.error("launchPreparation error:", error);
+    return res.status(500).json({
+      message: error.message || "Erreur serveur (launchPreparation)",
+    });
+  }
+}
+
 module.exports = {
   getWorkspace,
+  launchPreparation,
 };
