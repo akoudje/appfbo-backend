@@ -70,7 +70,6 @@ const ROLE_PERMISSIONS = {
     Permission.PREORDER_READ,
     Permission.PREORDER_UPDATE_STATUS,
     Permission.INVOICE_CREATE,
-    Permission.PAYMENT_VALIDATE,
     Permission.EXPORT_READ,
   ],
 
@@ -92,9 +91,8 @@ const ROLE_PERMISSIONS = {
   [AdminRole.COUNTER_MANAGER]: [
     Permission.COUNTRY_READ,
     Permission.PREORDER_READ,
-    Permission.PREORDER_UPDATE_STATUS,
-    Permission.INVOICE_CREATE,
     Permission.PAYMENT_VALIDATE,
+    Permission.EXPORT_READ,
   ],
 
   [AdminRole.CAISSIERE]: [
