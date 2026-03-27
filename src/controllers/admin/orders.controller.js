@@ -1,4 +1,5 @@
 const prisma = require("../../prisma");
+const { generateParcelNumber } = require("../../helpers/parcel-number");
 
 const {
   invoiceAndSendPreorder,
@@ -169,6 +170,7 @@ async function listOrders(req, res) {
           fboNomComplet: true,
           pointDeVente: true,
           deliveryMode: true,
+          parcelNumber: true,
           factureReference: true,
           billingWorkStatus: true,
           preparationLaunchedAt: true,
@@ -234,6 +236,9 @@ async function getOrderById(req, res) {
             select: { id: true, fullName: true, email: true, role: true },
           },
           preparationLaunchedBy: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+          pickupCodeVerifiedBy: {
             select: { id: true, fullName: true, email: true, role: true },
           },
           preparedByAdmin: {
@@ -517,6 +522,7 @@ async function prepareOrder(req, res) {
     }
 
     const now = new Date();
+    const parcelNumber = order.parcelNumber || generateParcelNumber(order);
     const pickupSecretCode =
       order.pickupSecretCode ||
       String(Math.floor(100000 + Math.random() * 900000));
@@ -568,6 +574,7 @@ async function prepareOrder(req, res) {
         where: { id: order.id },
         data: {
           status: "READY",
+          parcelNumber,
           preparedAt: order.preparedAt || now,
           pickupSecretCode,
           packingNote: packingNote
@@ -587,6 +594,8 @@ async function prepareOrder(req, res) {
           fromStatus: order.status,
           toStatus: "READY",
           stockDeducted: true,
+          parcelNumber,
+          pickupSecretCode,
         },
         req.user?.id || null,
       );
@@ -598,11 +607,15 @@ async function prepareOrder(req, res) {
       await sendPreorderNotification({
         preorder: {
           ...order,
+          parcelNumber,
           pickupSecretCode,
         },
         purpose: "ORDER_READY",
         message: buildOrderReadySmsMessage({
-          preorder: order,
+          preorder: {
+            ...order,
+            parcelNumber,
+          },
           pickupSecretCode,
         }),
         actorName,
@@ -623,7 +636,7 @@ async function prepareOrder(req, res) {
 async function fulfillOrder(req, res) {
   try {
     const { id } = req.params;
-    const { deliveryTracking, note } = req.body || {};
+    const { deliveryTracking, note, pickupCode } = req.body || {};
 
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
@@ -643,6 +656,23 @@ async function fulfillOrder(req, res) {
     }
 
     assertTransition(order.status, "FULFILLED");
+    const isPickupOrder = order.deliveryMode === "RETRAIT_SITE_FLP";
+    const normalizedPickupCode = String(pickupCode || "").trim();
+
+    if (isPickupOrder) {
+      if (!normalizedPickupCode) {
+        return res.status(400).json({
+          message:
+            "Le code secret présenté par le client est requis pour confirmer le retrait.",
+        });
+      }
+
+      if (normalizedPickupCode !== String(order.pickupSecretCode || "").trim()) {
+        return res.status(400).json({
+          message: "Le code secret présenté ne correspond pas à ce colis.",
+        });
+      }
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       const saved = await tx.preorder.update({
@@ -654,6 +684,12 @@ async function fulfillOrder(req, res) {
             ? String(deliveryTracking).trim()
             : order.deliveryTracking,
           internalNote: note ? String(note).trim() : order.internalNote,
+          pickupCodeVerifiedAt: isPickupOrder
+            ? order.pickupCodeVerifiedAt || new Date()
+            : order.pickupCodeVerifiedAt,
+          pickupCodeVerifiedById: isPickupOrder
+            ? order.pickupCodeVerifiedById || req.user?.id || null
+            : order.pickupCodeVerifiedById,
           fulfilledById: order.fulfilledById || req.user?.id || null,
         },
       });
@@ -667,6 +703,8 @@ async function fulfillOrder(req, res) {
           fromStatus: order.status,
           toStatus: "FULFILLED",
           deliveryTracking: saved.deliveryTracking,
+          parcelNumber: order.parcelNumber,
+          pickupCodeVerified: isPickupOrder,
         },
         req.user?.id || null,
       );

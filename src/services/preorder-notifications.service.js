@@ -11,22 +11,24 @@ function resolveNotificationPhone(preorder) {
 
 function buildPreparationStartedSmsMessage({ preorder }) {
   const customer = preorder?.fboNomComplet || "";
-  const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
+  const parcelNumber =
+    preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
   return [
     `Bonjour ${customer},`,
-    `Votre colis N° ${preorderNumber} est en cours de préparation.`,
+    `Votre colis N° ${parcelNumber} est en cours de préparation.`,
     "Nous vous informerons dès qu'il sera prêt à être retiré.",
   ].join(" ");
 }
 
 function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
   const customer = preorder?.fboNomComplet || "";
-  const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
+  const parcelNumber =
+    preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
   return [
     `Bonjour ${customer},`,
-    `Votre colis N° ${preorderNumber} est prêt à être retiré.`,
+    `Votre colis N° ${parcelNumber} est prêt à être retiré.`,
     `Code secret: ${pickupSecretCode}.`,
     "Présentez ce code au comptoir pour retirer votre colis en toute sécurité.",
   ].join(" ");

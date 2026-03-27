@@ -1,6 +1,7 @@
 const prisma = require("../../prisma");
 const { scopeWhere } = require("../../helpers/countryScope");
 const { AdminRole } = require("../../auth/permissions");
+const { generateParcelNumber } = require("../../helpers/parcel-number");
 const {
   buildPreparationStartedSmsMessage,
   sendPreorderNotification,
@@ -53,6 +54,7 @@ function buildOrderSummary(order) {
   return {
     id: order.id,
     preorderNumber: order.preorderNumber,
+    parcelNumber: order.parcelNumber,
     factureReference: order.factureReference,
     status: order.status,
     paymentStatus: order.paymentStatus,
@@ -338,9 +340,11 @@ async function launchPreparation(req, res) {
       req.user?.fullName || req.user?.email || req.user?.role || "CAISSE";
 
     const updatedOrder = await prisma.$transaction(async (tx) => {
+      const parcelNumber = order.parcelNumber || generateParcelNumber(order);
       const saved = await tx.preorder.update({
         where: { id: order.id },
         data: {
+          parcelNumber,
           preparationLaunchedAt: now,
           preparationLaunchedById: actorAdminId,
           packingNote: packingNote
@@ -357,6 +361,7 @@ async function launchPreparation(req, res) {
           meta: {
             actorName,
             launchedAt: now.toISOString(),
+            parcelNumber,
           },
           actorAdminId,
         },
@@ -369,6 +374,7 @@ async function launchPreparation(req, res) {
       await sendPreorderNotification({
         preorder: {
           ...order,
+          parcelNumber: updatedOrder.parcelNumber,
           preparationLaunchedAt: now,
         },
         purpose: "PREPARATION_STARTED",

@@ -373,6 +373,7 @@ model AdminUser {
   invoicedPreorders               Preorder[] @relation("PreorderInvoicedBy")
   manualPaymentValidatedPreorders Preorder[] @relation("PreorderManualPaymentValidatedBy")
   launchedPreparationPreorders    Preorder[] @relation("PreorderPreparationLaunchedBy")
+  pickupCodeVerifiedPreorders     Preorder[] @relation("PreorderPickupCodeVerifiedBy")
   preparedPreorders               Preorder[] @relation("PreorderPreparedBy")
   fulfilledPreorders              Preorder[] @relation("PreorderFulfilledBy")
   cancelledPreorders              Preorder[] @relation("PreorderCancelledBy")
@@ -508,6 +509,7 @@ model Preorder {
   // Facturation
   factureReference  String?
   factureWhatsappTo String?
+  parcelNumber      String? @unique
   invoicedAt        DateTime?
   invoicedById      String?
   invoicedByAdmin   AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
@@ -536,11 +538,13 @@ model Preorder {
   cancelledAt DateTime?
 
   preparationLaunchedById String?
+  pickupCodeVerifiedById  String?
   preparedById  String?
   fulfilledById String?
   cancelledById String?
 
   preparationLaunchedBy AdminUser? @relation("PreorderPreparationLaunchedBy", fields: [preparationLaunchedById], references: [id], onDelete: SetNull)
+  pickupCodeVerifiedBy AdminUser? @relation("PreorderPickupCodeVerifiedBy", fields: [pickupCodeVerifiedById], references: [id], onDelete: SetNull)
   preparedByAdmin  AdminUser? @relation("PreorderPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
   fulfilledByAdmin AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
   cancelledByAdmin AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
@@ -559,6 +563,7 @@ model Preorder {
   deliveryTracking String?
   packingNote      String? @db.Text
   pickupSecretCode String?
+  pickupCodeVerifiedAt DateTime?
   cancelReason     String? @db.Text
 
   stockDeductedAt DateTime?
@@ -588,6 +593,7 @@ model Preorder {
   @@index([manualPaymentValidatedById])
   @@index([preparationLaunchedById])
   @@index([preparationLaunchedAt])
+  @@index([pickupCodeVerifiedById])
   @@index([preparedById])
   @@index([fulfilledById])
   @@index([cancelledById])
