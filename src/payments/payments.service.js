@@ -1031,10 +1031,20 @@ async function initiateWavePayment({
     Number(
       amountFcfaOverride ??
         preorder.activePayment?.amountExpectedFcfa ??
+        computePaymentPricing({
+          preorderPaymentMode: preorder.preorderPaymentMode,
+          orderTotalFcfa: preorder.totalFcfa,
+        }).amountToPayFcfa ??
         preorder.totalFcfa ??
         0,
     ),
   );
+  const resolvedPricingMeta =
+    pricingMeta ||
+    computePaymentPricing({
+      preorderPaymentMode: preorder.preorderPaymentMode,
+      orderTotalFcfa: preorder.totalFcfa,
+    });
 
   const simulation = isWaveSimulationEnabled();
 
@@ -1126,7 +1136,8 @@ async function initiateWavePayment({
           providerResponse.providerTransactionId,
         providerPayerPhone:
           providerMetadata.providerPayerPhone ||
-          providerResponse.providerPayerPhone,
+          providerResponse.providerPayerPhone ||
+          normalizedPayerMobile,
         providerStatusLabel:
           providerMetadata.providerStatusLabel ||
           providerResponse.providerStatusLabel,
@@ -1138,7 +1149,7 @@ async function initiateWavePayment({
             clientReference: preorder.id,
             restrictPayerMobile: normalizedPayerMobile,
             simulated: simulation,
-            pricingMeta: pricingMeta || null,
+            pricingMeta: resolvedPricingMeta,
           },
         responsePayloadJson: providerResponse.raw,
         normalizedPayloadJson: {
@@ -1150,7 +1161,8 @@ async function initiateWavePayment({
             providerResponse.providerTransactionId,
           providerPayerPhone:
             providerMetadata.providerPayerPhone ||
-            providerResponse.providerPayerPhone,
+            providerResponse.providerPayerPhone ||
+            normalizedPayerMobile,
           providerStatusLabel:
             providerMetadata.providerStatusLabel ||
             providerResponse.providerStatusLabel,
@@ -1160,7 +1172,7 @@ async function initiateWavePayment({
             checkoutStatus: providerResponse.checkoutStatus,
             paymentStatus: providerResponse.paymentStatus,
             simulated: simulation,
-            pricingMeta: pricingMeta || null,
+            pricingMeta: resolvedPricingMeta,
           },
         },
       });
@@ -1225,7 +1237,7 @@ async function initiateWavePayment({
         payloadJson: {
           providerRequest: attempt.requestPayloadJson || null,
           providerResponse: providerResponse.raw || null,
-          pricingMeta: pricingMeta || null,
+          pricingMeta: resolvedPricingMeta,
         },
         actorAdminId: req.user?.id || null,
       });
@@ -1302,7 +1314,7 @@ async function initiateWavePayment({
           checkoutUrl: providerResponse.checkoutUrl,
           simulated: simulation,
           amountToChargeFcfa,
-          pricingMeta: pricingMeta || null,
+          pricingMeta: resolvedPricingMeta,
         },
         req.user?.id || null,
       );
