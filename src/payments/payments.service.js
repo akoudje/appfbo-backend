@@ -936,7 +936,13 @@ async function applyWaveMappedStateTx({
   };
 }
 
-async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
+async function initiateWavePayment({
+  req,
+  preorderId,
+  restrictPayerMobile,
+  amountFcfaOverride = null,
+  pricingMeta = null,
+}) {
   const countryId = pickCountryId(req);
 
   const preorder = await prisma.preorder.findFirst({
@@ -962,6 +968,15 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
 
   const providerAccount = await resolveWaveProviderAccount(countryId);
   const { successUrl, errorUrl } = buildWaveUrls(preorder.id);
+  const amountToChargeFcfa = Math.max(
+    0,
+    Number(
+      amountFcfaOverride ??
+        preorder.activePayment?.amountExpectedFcfa ??
+        preorder.totalFcfa ??
+        0,
+    ),
+  );
 
   const simulation = isWaveSimulationEnabled();
 
@@ -972,12 +987,12 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
       preorderId: preorder.id,
       successUrl,
     });
-  } else {
-    providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
-      amountFcfa: preorder.totalFcfa,
-      successUrl,
-      errorUrl,
-      clientReference: preorder.id,
+    } else {
+      providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
+        amountFcfa: amountToChargeFcfa,
+        successUrl,
+        errorUrl,
+        clientReference: preorder.id,
       restrictPayerMobile,
     });
   }
@@ -996,12 +1011,12 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
         data: {
           preorderId: preorder.id,
           countryId,
-          provider: "WAVE",
-          methodType: "MOBILE_MONEY",
-          status: "PENDING_CUSTOMER_ACTION",
-          amountExpectedFcfa: preorder.totalFcfa,
-          amountPaidFcfa: 0,
-          currencyCode: "XOF",
+            provider: "WAVE",
+            methodType: "MOBILE_MONEY",
+            status: "PENDING_CUSTOMER_ACTION",
+            amountExpectedFcfa: amountToChargeFcfa,
+            amountPaidFcfa: 0,
+            currencyCode: "XOF",
           providerAccountId: providerAccount.id,
           providerReference:
             providerMetadata.providerSessionId ||
@@ -1022,12 +1037,13 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
       payment = await tx.payment.update({
         where: { id: payment.id },
         data: {
-          provider: "WAVE",
-          methodType: "MOBILE_MONEY",
-          status: "PENDING_CUSTOMER_ACTION",
-          providerAccountId: providerAccount.id,
-          providerReference:
-            providerMetadata.providerSessionId ||
+            provider: "WAVE",
+            methodType: "MOBILE_MONEY",
+            status: "PENDING_CUSTOMER_ACTION",
+            amountExpectedFcfa: amountToChargeFcfa,
+            providerAccountId: providerAccount.id,
+            providerReference:
+              providerMetadata.providerSessionId ||
             providerResponse.providerSessionId,
           providerTxnId:
             providerMetadata.providerTransactionId ||
@@ -1058,13 +1074,14 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
           providerResponse.providerStatusLabel,
         checkoutUrl: providerResponse.checkoutUrl,
         providerLaunchUrl: providerResponse.providerLaunchUrl,
-        requestPayloadJson: {
-          preorderId: preorder.id,
-          amountExpectedFcfa: preorder.totalFcfa,
-          clientReference: preorder.id,
-          restrictPayerMobile: restrictPayerMobile || null,
-          simulated: simulation,
-        },
+          requestPayloadJson: {
+            preorderId: preorder.id,
+            amountExpectedFcfa: amountToChargeFcfa,
+            clientReference: preorder.id,
+            restrictPayerMobile: restrictPayerMobile || null,
+            simulated: simulation,
+            pricingMeta: pricingMeta || null,
+          },
         responsePayloadJson: providerResponse.raw,
         normalizedPayloadJson: {
           providerSessionId:
@@ -1079,15 +1096,16 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
           providerStatusLabel:
             providerMetadata.providerStatusLabel ||
             providerResponse.providerStatusLabel,
-          checkoutUrl: providerResponse.checkoutUrl,
-          providerLaunchUrl: providerResponse.providerLaunchUrl,
-          clientReference: providerResponse.clientReference,
-          checkoutStatus: providerResponse.checkoutStatus,
-          paymentStatus: providerResponse.paymentStatus,
-          simulated: simulation,
+            checkoutUrl: providerResponse.checkoutUrl,
+            providerLaunchUrl: providerResponse.providerLaunchUrl,
+            clientReference: providerResponse.clientReference,
+            checkoutStatus: providerResponse.checkoutStatus,
+            paymentStatus: providerResponse.paymentStatus,
+            simulated: simulation,
+            pricingMeta: pricingMeta || null,
+          },
         },
-      },
-    });
+      });
 
     const updatedPayment = await tx.payment.update({
       where: { id: payment.id },
@@ -1146,12 +1164,13 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
       note: simulation
         ? "Paiement Wave initié en mode simulation"
         : "Paiement Wave initié",
-      payloadJson: {
-        providerRequest: attempt.requestPayloadJson || null,
-        providerResponse: providerResponse.raw || null,
-      },
-      actorAdminId: req.user?.id || null,
-    });
+        payloadJson: {
+          providerRequest: attempt.requestPayloadJson || null,
+          providerResponse: providerResponse.raw || null,
+          pricingMeta: pricingMeta || null,
+        },
+        actorAdminId: req.user?.id || null,
+      });
 
     await addPaymentTransactionLogTx(tx, {
       preorderId: preorder.id,
@@ -1219,14 +1238,16 @@ async function initiateWavePayment({ req, preorderId, restrictPayerMobile }) {
         providerPayerPhone:
           providerMetadata.providerPayerPhone ||
           providerResponse.providerPayerPhone,
-        providerStatusLabel:
-          providerMetadata.providerStatusLabel ||
-          providerResponse.providerStatusLabel,
-        checkoutUrl: providerResponse.checkoutUrl,
-        simulated: simulation,
-      },
-      req.user?.id || null,
-    );
+          providerStatusLabel:
+            providerMetadata.providerStatusLabel ||
+            providerResponse.providerStatusLabel,
+          checkoutUrl: providerResponse.checkoutUrl,
+          simulated: simulation,
+          amountToChargeFcfa,
+          pricingMeta: pricingMeta || null,
+        },
+        req.user?.id || null,
+      );
 
     if (providerMetadata.providerPayerPhone) {
       console.log("[payments][wave] payer phone captured at initiation", {

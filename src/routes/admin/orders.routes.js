@@ -7,6 +7,11 @@ const router = express.Router();
 
 router.get("/", requirePermission(Permission.PREORDER_READ), ordersController.listOrders);
 router.get("/:id/messages", requirePermission(Permission.PREORDER_READ), ordersController.listOrderMessages);
+router.get(
+  "/:id/invoice-preview",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.getInvoicePreview,
+);
 router.get("/:id", requirePermission(Permission.PREORDER_READ), ordersController.getOrderById);
 
 router.patch(

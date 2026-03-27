@@ -24,6 +24,11 @@ const BILLING_GRADES = [
   "MANAGER",
 ];
 
+const MOBILE_MONEY_SERVICE_FEE_RATES = {
+  WAVE: 1,
+  ORANGE_MONEY: 0,
+};
+
 /**
  * Génère une référence de préfacture lisible
  * Exemple: PF-2026-AB12CD
@@ -108,17 +113,93 @@ function normalizeBillingGrade(value, fallback) {
   return grade;
 }
 
+function normalizePaymentMode(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function computePaymentPricing({ preorderPaymentMode, orderTotalFcfa }) {
+  const normalizedMode = normalizePaymentMode(preorderPaymentMode);
+  const baseTotalFcfa = Math.max(0, Number(orderTotalFcfa || 0));
+  const serviceFeeRatePercent =
+    MOBILE_MONEY_SERVICE_FEE_RATES[normalizedMode] || 0;
+  const paymentServiceFeeFcfa =
+    serviceFeeRatePercent > 0
+      ? Math.ceil(baseTotalFcfa * (serviceFeeRatePercent / 100))
+      : 0;
+
+  return {
+    paymentMode: normalizedMode || null,
+    baseTotalFcfa,
+    serviceFeeRatePercent,
+    paymentServiceFeeFcfa,
+    amountToPayFcfa: baseTotalFcfa + paymentServiceFeeFcfa,
+  };
+}
+
+async function buildInvoicePreview({ preorderId, billingGradeInput = "" }) {
+  const preorder = await prisma.preorder.findUnique({
+    where: { id: preorderId },
+    select: {
+      id: true,
+      status: true,
+      countryId: true,
+      fboGrade: true,
+      preorderPaymentMode: true,
+    },
+  });
+
+  if (!preorder) {
+    throw new Error("PREORDER_NOT_FOUND");
+  }
+
+  const effectiveGrade = normalizeBillingGrade(
+    billingGradeInput,
+    preorder.fboGrade,
+  );
+
+  const pricingSummary = await computePreorderTotalsForGrade(
+    preorder.id,
+    preorder.countryId,
+    effectiveGrade,
+  );
+
+  const paymentPricing = computePaymentPricing({
+    preorderPaymentMode: preorder.preorderPaymentMode,
+    orderTotalFcfa: pricingSummary.totals.totalFcfa,
+  });
+
+  return {
+    preorderId: preorder.id,
+    status: preorder.status,
+    previousGrade: preorder.fboGrade,
+    effectiveGrade,
+    discountPercent: pricingSummary.discountPercent,
+    totals: pricingSummary.totals,
+    payment: paymentPricing,
+  };
+}
+
 /**
  * Construit le message de facturation.
  * Si paymentLink est fourni, il sera intégré dans le message.
  */
-function buildInvoiceMessage({ preorder, invoiceRef, note, paymentLink }) {
+function buildInvoiceMessage({
+  preorder,
+  invoiceRef,
+  note,
+  paymentLink,
+  amountToPayFcfa,
+  paymentServiceFeeFcfa = 0,
+  serviceFeeRatePercent = 0,
+}) {
+  const payableAmount = Number(amountToPayFcfa ?? preorder.totalFcfa ?? 0);
+
   if (typeof whatsappService.buildInvoiceWhatsAppMessage === "function") {
     return whatsappService.buildInvoiceWhatsAppMessage({
       customerName: preorder.fboNomComplet || preorder.fbo?.nomComplet || "",
       fboNumero: preorder.fboNumero,
       invoiceRef,
-      totalFcfa: preorder.totalFcfa,
+      totalFcfa: payableAmount,
       paymentLink: paymentLink || null,
       paymentMode:
         preorder.preorderPaymentMode ||
@@ -134,7 +215,11 @@ function buildInvoiceMessage({ preorder, invoiceRef, note, paymentLink }) {
     "",
     "Votre précommande FOREVER a été facturée.",
     `Référence facture : ${invoiceRef}`,
-    `Montant : ${preorder.totalFcfa} FCFA`,
+    `Montant commande : ${preorder.totalFcfa} FCFA`,
+    paymentServiceFeeFcfa > 0
+      ? `Frais de service ${serviceFeeRatePercent}% : ${paymentServiceFeeFcfa} FCFA`
+      : null,
+    `Montant final à payer : ${payableAmount} FCFA`,
     paymentLink ? `Lien de paiement : ${paymentLink}` : null,
     note ? `Note : ${note}` : null,
     "",
@@ -199,6 +284,10 @@ async function invoiceAndSendPreorder({
     existingPreorder.countryId,
     effectiveGrade,
   );
+  const paymentPricing = computePaymentPricing({
+    preorderPaymentMode: existingPreorder.preorderPaymentMode,
+    orderTotalFcfa: pricingSummary.totals.totalFcfa,
+  });
 
   // 2) Facturer la commande
   const invoicedPreorder = await prisma.$transaction(async (tx) => {
@@ -272,6 +361,8 @@ async function invoiceAndSendPreorder({
         effectiveGrade,
         discountPercent: pricingSummary.discountPercent,
         totalFcfa: pricingSummary.totals.totalFcfa || 0,
+        paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
+        amountToPayFcfa: paymentPricing.amountToPayFcfa,
         actorName,
       },
       actorAdminId,
@@ -295,6 +386,8 @@ async function invoiceAndSendPreorder({
     waveResult = await paymentsService.initiateWavePayment({
       req,
       preorderId: invoicedPreorder.id,
+      amountFcfaOverride: paymentPricing.amountToPayFcfa,
+      pricingMeta: paymentPricing,
     });
 
     paymentLink =
@@ -311,6 +404,9 @@ async function invoiceAndSendPreorder({
     invoiceRef,
     note: invoiceNote,
     paymentLink,
+    amountToPayFcfa: paymentPricing.amountToPayFcfa,
+    paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
+    serviceFeeRatePercent: paymentPricing.serviceFeeRatePercent,
   });
 
   if (paymentLink && !String(whatsappMessage || "").includes(paymentLink)) {
@@ -421,6 +517,8 @@ async function invoiceAndSendPreorder({
         effectiveGrade,
         discountPercent: pricingSummary.discountPercent,
         totalFcfa: pricingSummary.totals.totalFcfa || 0,
+        paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
+        amountToPayFcfa: paymentPricing.amountToPayFcfa,
         messageId: savedMessage.id,
         messagePurpose,
         messageStatus: finalMessageStatus,
@@ -442,6 +540,7 @@ async function invoiceAndSendPreorder({
         waveResult?.payment?.providerReference ||
         waveResult?.paymentAttempt?.providerSessionId ||
         null,
+      paymentPricing,
     };
   });
 
@@ -451,4 +550,6 @@ async function invoiceAndSendPreorder({
 module.exports = {
   invoiceAndSendPreorder,
   generateInvoiceRef,
+  buildInvoicePreview,
+  computePaymentPricing,
 };

@@ -2,6 +2,7 @@ const prisma = require("../../prisma");
 
 const {
   invoiceAndSendPreorder,
+  buildInvoicePreview,
 } = require("../../services/invoiceAndSendPreorder.service");
 
 const {
@@ -335,6 +336,35 @@ async function updateOrderStatus(req, res) {
     message:
       "Endpoint générique désactivé. Utiliser les endpoints métier dédiés.",
   });
+}
+
+async function getInvoicePreview(req, res) {
+  try {
+    const { id } = req.params;
+    const { fboGrade } = req.query || {};
+
+    const result = await buildInvoicePreview({
+      preorderId: id,
+      billingGradeInput: fboGrade,
+    });
+
+    return res.json(result);
+  } catch (e) {
+    if (e.message === "PREORDER_NOT_FOUND") {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (e.message === "INVALID_FBO_GRADE") {
+      return res.status(400).json({
+        message: "Le grade de facturation est invalide.",
+      });
+    }
+
+    console.error("getInvoicePreview error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (getInvoicePreview)",
+    });
+  }
 }
 
 async function invoiceOrder(req, res) {
@@ -709,6 +739,7 @@ module.exports = {
   getOrderById,
   listOrderMessages,
   updateOrderStatus,
+  getInvoicePreview,
   invoiceOrder,
   prepareOrder,
   fulfillOrder,
