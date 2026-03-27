@@ -36,6 +36,7 @@ const paymentsRoutes = require("./admin/payments.routes");
 const statsRoutes = require("./admin/stats.routes");
 const settingsRoutes = require("./admin/settings.routes");
 const productsRoutes = require("./admin/products.routes");
+const cashierRoutes = require("./admin/cashier.routes");
 
 const router = express.Router();
 
@@ -95,6 +96,7 @@ router.post(
 
 router.use("/stats", statsRoutes);
 router.use("/products", productsRoutes);
+router.use("/cashier", cashierRoutes);
 
 router.get(
   "/grade-discounts",
