@@ -83,6 +83,55 @@ async function getPreorderPricingContext(preorderId, countryId) {
   };
 }
 
+async function getPreorderPricingContextForGrade(
+  preorderId,
+  countryId,
+  gradeOverride,
+) {
+  const preorder = await prisma.preorder.findFirst({
+    where: {
+      id: preorderId,
+      ...(countryId ? { countryId } : {}),
+    },
+    include: {
+      items: {
+        include: {
+          product: true,
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+      },
+      country: {
+        include: {
+          settings: true,
+        },
+      },
+    },
+  });
+
+  if (!preorder) {
+    throw new Error("PREORDER_NOT_FOUND");
+  }
+
+  const effectiveGrade = String(gradeOverride || preorder.fboGrade || "")
+    .trim()
+    .toUpperCase();
+
+  const discountPercent = await getDiscountPercentByGrade(
+    effectiveGrade,
+    preorder.countryId
+  );
+
+  return {
+    preorder: {
+      ...preorder,
+      fboGrade: effectiveGrade,
+    },
+    discountPercent,
+  };
+}
+
 function computeLineFromProduct(product, qty, discountPercent) {
   if (!product) {
     throw new Error("PRODUCT_NOT_FOUND");
@@ -252,11 +301,93 @@ async function computePreorderTotals(preorderId, countryId) {
   };
 }
 
+async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverride) {
+  const { preorder, discountPercent } = await getPreorderPricingContextForGrade(
+    preorderId,
+    countryId,
+    gradeOverride
+  );
+
+  let totalCc = 0;
+  let totalPoids = 0;
+  let totalProduitsFcfa = 0;
+
+  const computedItems = [];
+
+  for (const it of preorder.items) {
+    if (!it.product) {
+      throw new Error("PRODUCT_NOT_FOUND");
+    }
+
+    if (it.product.countryId !== preorder.countryId) {
+      throw new Error("PRODUCT_COUNTRY_MISMATCH");
+    }
+
+    const line = computeLineFromProduct(it.product, it.qty, discountPercent);
+    if (!line) continue;
+
+    totalCc += line.lineTotalCc;
+    totalPoids += line.lineTotalPoids;
+    totalProduitsFcfa += line.lineTotalFcfa;
+
+    computedItems.push({
+      productId: it.productId,
+      qty: line.qty,
+
+      productSkuSnapshot: it.product.sku || null,
+      productNameSnapshot: it.product.nom || null,
+
+      prixCatalogueFcfa: line.prixCatalogueFcfa,
+      discountPercent: line.discountPercent,
+      prixUnitaireFcfa: line.prixUnitaireFcfa,
+
+      ccUnitaire: line.ccUnitaire,
+      poidsUnitaireKg: line.poidsUnitaireKg,
+
+      lineTotalFcfa: line.lineTotalFcfa,
+      lineTotalCc: line.lineTotalCc,
+      lineTotalPoids: line.lineTotalPoids,
+
+      nom: it.product.nom,
+      sku: it.product.sku,
+      imageUrl: it.product.imageUrl || null,
+      stockQty: Number(it.product.stockQty || 0),
+      category: it.product.category,
+      details: it.product.details || null,
+    });
+  }
+
+  const fraisLivraisonFcfa = computeDeliveryFeeFcfa({
+    deliveryMode: preorder.deliveryMode,
+    totalPoidsKg: totalPoids,
+  });
+
+  const totalFcfa = totalProduitsFcfa + fraisLivraisonFcfa;
+
+  return {
+    preorder: {
+      ...preorder,
+      preorderPaymentMode: preorder?.preorderPaymentMode || null,
+    },
+    discountPercent,
+    items: computedItems,
+    totals: {
+      totalCc: round3(totalCc),
+      totalPoidsKg: round3(totalPoids),
+      totalProduitsFcfa: toInt(totalProduitsFcfa),
+      fraisLivraisonFcfa: toInt(fraisLivraisonFcfa),
+      totalFcfa: toInt(totalFcfa),
+    },
+  };
+}
+
 module.exports = {
   computePreorderTotals,
+  computePreorderTotalsForGrade,
   computeCatalogProductsForPreorder,
   getDiscountPercentByGrade,
   getPreorderPricingContext,
+  getPreorderPricingContextForGrade,
   computeDeliveryFeeFcfa,
   computeLineFromProduct,
   applyDiscount,

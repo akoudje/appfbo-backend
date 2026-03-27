@@ -347,7 +347,7 @@ async function invoiceOrder(req, res) {
     });
 
     const { id } = req.params;
-    const { factureReference, whatsappTo, note } = req.body || {};
+    const { factureReference, whatsappTo, note, fboGrade } = req.body || {};
 
     const actorName = actorLabel(req);
     const actorAdminId = req.user?.id || null;
@@ -360,6 +360,7 @@ async function invoiceOrder(req, res) {
       invoiceRefInput: factureReference,
       whatsappToInput: whatsappTo,
       invoiceNote: note,
+      billingGradeInput: fboGrade,
     });
 
     return res.json(result.preorder);
@@ -379,6 +380,12 @@ async function invoiceOrder(req, res) {
     if (e.message === "PREORDER_ID_REQUIRED") {
       return res.status(400).json({
         message: "Identifiant de commande manquant.",
+      });
+    }
+
+    if (e.message === "INVALID_FBO_GRADE") {
+      return res.status(400).json({
+        message: "Le grade de facturation est invalide.",
       });
     }
 

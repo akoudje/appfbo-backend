@@ -14,6 +14,15 @@ const prisma = require("../prisma");
 const whatsappService = require("./whatsapp.service");
 const paymentsService = require("../payments/payments.service");
 const { sendSms } = require("./sms.service");
+const { computePreorderTotalsForGrade } = require("./pricing.service");
+
+const BILLING_GRADES = [
+  "CLIENT_PRIVILEGIE",
+  "ANIMATEUR_ADJOINT",
+  "ANIMATEUR",
+  "MANAGER_ADJOINT",
+  "MANAGER",
+];
 
 /**
  * Génère une référence de préfacture lisible
@@ -83,6 +92,22 @@ function isWavePreorder(preorder) {
   );
 }
 
+function normalizeBillingGrade(value, fallback) {
+  const grade = String(value || fallback || "")
+    .trim()
+    .toUpperCase();
+
+  if (!grade) {
+    throw new Error("INVALID_FBO_GRADE");
+  }
+
+  if (!BILLING_GRADES.includes(grade)) {
+    throw new Error("INVALID_FBO_GRADE");
+  }
+
+  return grade;
+}
+
 /**
  * Construit le message de facturation.
  * Si paymentLink est fourni, il sera intégré dans le message.
@@ -130,6 +155,7 @@ async function invoiceAndSendPreorder({
   invoiceRefInput = "",
   whatsappToInput = "",
   invoiceNote = "",
+  billingGradeInput = "",
 }) {
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
@@ -164,17 +190,60 @@ async function invoiceAndSendPreorder({
     generateInvoiceRef(existingPreorder);
 
   const whatsappTo = resolveWhatsappTo(existingPreorder, whatsappToInput);
+  const effectiveGrade = normalizeBillingGrade(
+    billingGradeInput,
+    existingPreorder.fboGrade,
+  );
+  const pricingSummary = await computePreorderTotalsForGrade(
+    existingPreorder.id,
+    existingPreorder.countryId,
+    effectiveGrade,
+  );
 
   // 2) Facturer la commande
   const invoicedPreorder = await prisma.$transaction(async (tx) => {
+    for (const it of pricingSummary.items) {
+      await tx.preorderItem.update({
+        where: {
+          preorderId_productId: {
+            preorderId: existingPreorder.id,
+            productId: it.productId,
+          },
+        },
+        data: {
+          productSkuSnapshot: it.sku || null,
+          productNameSnapshot: it.nom || null,
+          prixCatalogueFcfa:
+            it.prixCatalogueFcfa != null
+              ? it.prixCatalogueFcfa
+              : it.prixUnitaireFcfa,
+          discountPercent: String(Number(it.discountPercent || 0).toFixed(2)),
+          prixUnitaireFcfa: it.prixUnitaireFcfa,
+          ccUnitaire: String(Number(it.ccUnitaire || 0).toFixed(3)),
+          poidsUnitaireKg: String(Number(it.poidsUnitaireKg || 0).toFixed(3)),
+          lineTotalFcfa: it.lineTotalFcfa,
+          lineTotalCc: String(Number(it.lineTotalCc || 0).toFixed(3)),
+          lineTotalPoids: String(Number(it.lineTotalPoids || 0).toFixed(3)),
+        },
+      });
+    }
+
     const updatedPreorder = await tx.preorder.update({
       where: { id: existingPreorder.id },
       data: {
         status: "INVOICED",
+        fboGrade: effectiveGrade,
         factureReference: invoiceRef,
         factureWhatsappTo: whatsappTo,
         invoicedAt: now,
         invoicedById: actorAdminId || existingPreorder.invoicedById || null,
+        totalCc: String(Number(pricingSummary.totals.totalCc || 0).toFixed(3)),
+        totalPoidsKg: String(
+          Number(pricingSummary.totals.totalPoidsKg || 0).toFixed(3),
+        ),
+        totalProduitsFcfa: pricingSummary.totals.totalProduitsFcfa || 0,
+        fraisLivraisonFcfa: pricingSummary.totals.fraisLivraisonFcfa || 0,
+        totalFcfa: pricingSummary.totals.totalFcfa || 0,
 
         // file facturier
         assignedInvoicerId:
@@ -199,6 +268,10 @@ async function invoiceAndSendPreorder({
       meta: {
         invoiceRef,
         whatsappTo,
+        previousGrade: existingPreorder.fboGrade,
+        effectiveGrade,
+        discountPercent: pricingSummary.discountPercent,
+        totalFcfa: pricingSummary.totals.totalFcfa || 0,
         actorName,
       },
       actorAdminId,
@@ -344,6 +417,10 @@ async function invoiceAndSendPreorder({
       meta: {
         invoiceRef,
         whatsappTo,
+        previousGrade: existingPreorder.fboGrade,
+        effectiveGrade,
+        discountPercent: pricingSummary.discountPercent,
+        totalFcfa: pricingSummary.totals.totalFcfa || 0,
         messageId: savedMessage.id,
         messagePurpose,
         messageStatus: finalMessageStatus,
