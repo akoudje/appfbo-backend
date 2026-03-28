@@ -139,7 +139,7 @@ function buildOrderSummary(order) {
   };
 }
 
-function aggregateByPaymentMode(rows) {
+function aggregateByPaymentMode(rows, amountField = "amountExpectedFcfa") {
   const summary = new Map();
 
   for (const row of rows) {
@@ -151,7 +151,13 @@ function aggregateByPaymentMode(rows) {
     };
 
     current.count += 1;
-    current.amountFcfa += Number(row.amountExpectedFcfa || row.totalFcfa || 0);
+    current.amountFcfa += Number(
+      row?.[amountField] ||
+        row?.cashierTransaction?.[amountField] ||
+        row.amountExpectedFcfa ||
+        row.totalFcfa ||
+        0,
+    );
     summary.set(key, current);
   }
 
@@ -172,39 +178,68 @@ function aggregateByCashier(rows) {
     };
 
     current.count += 1;
-    current.amountFcfa += Number(row.amountExpectedFcfa || row.totalFcfa || 0);
+    current.amountFcfa += Number(
+      row?.cashierTransaction?.amountReceivedFcfa ||
+        row.amountExpectedFcfa ||
+        row.totalFcfa ||
+        0,
+    );
     summary.set(cashierId, current);
   }
 
   return Array.from(summary.values()).sort((a, b) => b.amountFcfa - a.amountFcfa);
 }
 
+function sumAmount(rows, amountField = "amountExpectedFcfa") {
+  return rows.reduce(
+    (sum, row) =>
+      sum +
+      Number(
+        row?.[amountField] ||
+          row?.cashierTransaction?.[amountField] ||
+          row.amountExpectedFcfa ||
+          row.totalFcfa ||
+          0,
+      ),
+    0,
+  );
+}
+
 async function getWorkspace(req, res) {
   try {
     const { q, paymentMode, dateFrom, dateTo, journalScope = "my" } = req.query;
-    const queueWhere = scopeWhere(req, {
+    const searchConditions =
+      q && String(q).trim()
+        ? [
+            { fboNumero: { contains: String(q).trim(), mode: "insensitive" } },
+            { fboNomComplet: { contains: String(q).trim(), mode: "insensitive" } },
+            { factureReference: { contains: String(q).trim(), mode: "insensitive" } },
+            { preorderNumber: { contains: String(q).trim(), mode: "insensitive" } },
+            { parcelNumber: { contains: String(q).trim(), mode: "insensitive" } },
+          ]
+        : null;
+
+    const toCollectWhere = scopeWhere(req, {
       OR: [
         { status: { in: ["INVOICED", "PAYMENT_PENDING"] } },
-        {
-          status: "PAID",
-          paymentStatus: "PAID",
-          preparationLaunchedAt: null,
-        },
       ],
     });
 
-    if (q && String(q).trim()) {
-      const qs = String(q).trim();
-      queueWhere.OR = [
-        { fboNumero: { contains: qs, mode: "insensitive" } },
-        { fboNomComplet: { contains: qs, mode: "insensitive" } },
-        { factureReference: { contains: qs, mode: "insensitive" } },
-        { preorderNumber: { contains: qs, mode: "insensitive" } },
-      ];
+    const toLaunchWhere = scopeWhere(req, {
+      status: "PAID",
+      paymentStatus: "PAID",
+      preparationLaunchedAt: null,
+    });
+
+    if (searchConditions) {
+      toCollectWhere.AND = [...(toCollectWhere.AND || []), { OR: searchConditions }];
+      toLaunchWhere.AND = [...(toLaunchWhere.AND || []), { OR: searchConditions }];
     }
 
     if (paymentMode && String(paymentMode).trim()) {
-      queueWhere.preorderPaymentMode = String(paymentMode).trim().toUpperCase();
+      const normalizedMode = String(paymentMode).trim().toUpperCase();
+      toCollectWhere.preorderPaymentMode = normalizedMode;
+      toLaunchWhere.preorderPaymentMode = normalizedMode;
     }
 
     const journalWhere = scopeWhere(req, {
@@ -217,6 +252,14 @@ async function getWorkspace(req, res) {
         { status: { in: ["READY", "FULFILLED"] } },
       ],
     });
+
+    if (searchConditions) {
+      journalWhere.AND = [...(journalWhere.AND || []), { OR: searchConditions }];
+    }
+
+    if (paymentMode && String(paymentMode).trim()) {
+      journalWhere.preorderPaymentMode = String(paymentMode).trim().toUpperCase();
+    }
 
     const from = normalizeDateStart(dateFrom);
     const to = normalizeDateEnd(dateTo);
@@ -259,15 +302,20 @@ async function getWorkspace(req, res) {
       },
     };
 
-    const [queueOrders, journalOrders] = await Promise.all([
+    const [toCollectOrders, toLaunchOrders, journalOrders] = await Promise.all([
       prisma.preorder.findMany({
-        where: queueWhere,
+        where: toCollectWhere,
         include: includeShape,
         orderBy: [
-          { status: "asc" },
           { invoicedAt: "asc" },
           { createdAt: "asc" },
         ],
+        take: 300,
+      }),
+      prisma.preorder.findMany({
+        where: toLaunchWhere,
+        include: includeShape,
+        orderBy: [{ paidAt: "asc" }, { invoicedAt: "asc" }, { createdAt: "asc" }],
         take: 300,
       }),
       prisma.preorder.findMany({
@@ -275,35 +323,60 @@ async function getWorkspace(req, res) {
         include: includeShape,
         orderBy: [
           { preparationLaunchedAt: "desc" },
-          { preparedAt: "desc" },
           { paidAt: "desc" },
+          { createdAt: "desc" },
         ],
         take: 300,
       }),
     ]);
 
-    const queue = queueOrders.map(buildOrderSummary);
+    const toCollect = toCollectOrders.map(buildOrderSummary);
+    const toLaunchPreparation = toLaunchOrders.map(buildOrderSummary);
     const journal = journalOrders.map(buildOrderSummary);
+    const pendingCashRows = toCollect.filter(
+      (row) =>
+        normalizePaymentMode(row.preorderPaymentMode) === "ESPECES" &&
+        row.paymentStatus !== "PAID",
+    );
+    const pendingElectronicRows = toCollect.filter(
+      (row) =>
+        normalizePaymentMode(row.preorderPaymentMode) !== "ESPECES" &&
+        row.paymentStatus !== "PAID",
+    );
 
     return res.json({
       ok: true,
-      queue,
+      toCollect,
+      toLaunchPreparation,
       journal,
-      queueSummary: {
-        total: queue.length,
-        byPaymentMode: aggregateByPaymentMode(queue),
-        pendingCash: queue.filter(
-          (row) =>
-            normalizePaymentMode(row.preorderPaymentMode) === "ESPECES" &&
-            row.paymentStatus !== "PAID",
-        ).length,
-        readyToPrepare: queue.filter((row) => row.status === "PAID").length,
+      collectionSummary: {
+        total: toCollect.length,
+        pendingCash: pendingCashRows.length,
+        pendingElectronic: pendingElectronicRows.length,
+        expectedAmountFcfa: sumAmount(toCollect),
+        byPaymentMode: aggregateByPaymentMode(toCollect),
+      },
+      launchSummary: {
+        total: toLaunchPreparation.length,
+        amountFcfa: sumAmount(toLaunchPreparation),
+        byPaymentMode: aggregateByPaymentMode(toLaunchPreparation),
       },
       journalSummary: {
         scope,
         total: journal.length,
-        byPaymentMode: aggregateByPaymentMode(journal),
+        totalExpectedFcfa: sumAmount(journal),
+        totalReceivedFcfa: sumAmount(journal, "amountReceivedFcfa"),
+        byPaymentMode: aggregateByPaymentMode(journal, "amountReceivedFcfa"),
         byCashier: allowConsolidated ? aggregateByCashier(journal) : [],
+      },
+      financialSummary: {
+        dateFrom: from ? from.toISOString() : null,
+        dateTo: to ? to.toISOString() : null,
+        transactionsCount: journal.length,
+        totalExpectedFcfa: sumAmount(journal),
+        totalReceivedFcfa: sumAmount(journal, "amountReceivedFcfa"),
+        totalToLaunchPreparation: toLaunchPreparation.length,
+        totalPendingCollection: toCollect.length,
       },
       permissions: {
         canViewConsolidated: allowConsolidated,
