@@ -325,6 +325,7 @@ async function launchPreparation(req, res) {
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
       include: {
+        items: true,
         messages: {
           orderBy: { createdAt: "desc" },
           take: 5,
@@ -359,6 +360,23 @@ async function launchPreparation(req, res) {
 
     const updatedOrder = await prisma.$transaction(async (tx) => {
       const parcelNumber = order.parcelNumber || generateParcelNumber(order);
+
+      for (const item of order.items || []) {
+        await tx.preparationChecklistItem.upsert({
+          where: {
+            preorderId_preorderItemId: {
+              preorderId: order.id,
+              preorderItemId: item.id,
+            },
+          },
+          update: {},
+          create: {
+            preorderId: order.id,
+            preorderItemId: item.id,
+          },
+        });
+      }
+
       const saved = await tx.preorder.update({
         where: { id: order.id },
         data: {
