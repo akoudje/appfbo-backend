@@ -54,6 +54,7 @@ function buildOrderSummary(order) {
 
   return {
     id: order.id,
+    createdAt: order.createdAt,
     preorderNumber: order.preorderNumber,
     parcelNumber: order.parcelNumber,
     factureReference: order.factureReference,
