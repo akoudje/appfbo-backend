@@ -7,6 +7,7 @@ const {
 } = require("../../services/invoiceAndSendPreorder.service");
 const {
   buildOrderReadySmsMessage,
+  buildOrderFulfilledSmsMessage,
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
 
@@ -1058,6 +1059,7 @@ async function fulfillOrder(req, res) {
       String(fulfillmentMode || (isPickupOrder ? "PICKUP" : "DELIVERY"))
         .trim()
         .toUpperCase() || null;
+    const actorName = actorLabel(req);
 
     if (isPickupOrder) {
       if (!normalizedPickupCode) {
@@ -1125,6 +1127,25 @@ async function fulfillOrder(req, res) {
 
       return saved;
     });
+
+    try {
+      await sendPreorderNotification({
+        preorder: {
+          ...order,
+          ...updated,
+        },
+        purpose: "REMINDER",
+        message: buildOrderFulfilledSmsMessage({
+          preorder: {
+            ...order,
+            ...updated,
+          },
+        }),
+        actorName,
+      });
+    } catch (smsError) {
+      console.error("fulfillOrder sms error:", smsError);
+    }
 
     return res.json(updated);
   } catch (e) {

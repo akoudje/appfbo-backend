@@ -34,6 +34,18 @@ function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
   ].join(" ");
 }
 
+function buildOrderFulfilledSmsMessage({ preorder }) {
+  const customer = preorder?.fboNomComplet || "";
+  const parcelNumber =
+    preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
+
+  return [
+    `Bonjour ${customer},`,
+    `Le retrait de votre colis N° ${parcelNumber} a été confirmé.`,
+    "Merci pour votre confiance.",
+  ].join(" ");
+}
+
 async function persistNotificationResult({
   preorderId,
   purpose,
@@ -131,5 +143,6 @@ module.exports = {
   resolveNotificationPhone,
   buildPreparationStartedSmsMessage,
   buildOrderReadySmsMessage,
+  buildOrderFulfilledSmsMessage,
   sendPreorderNotification,
 };
