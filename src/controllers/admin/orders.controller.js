@@ -166,6 +166,8 @@ async function listOrders(req, res) {
       billingQueueEnteredAt: "billingQueueEnteredAt",
       billingPriority: "billingPriority",
       assignedAt: "assignedAt",
+      billingLastActivityAt: "billingLastActivityAt",
+      billingEscalatedAt: "billingEscalatedAt",
     };
     const sortField = sortMap[String(sort || "").trim()] || "createdAt";
     const sortDir = dir === "asc" ? "asc" : "desc";
