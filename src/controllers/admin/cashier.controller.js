@@ -48,6 +48,7 @@ function canViewConsolidated(role) {
 
 function buildOrderSummary(order) {
   const latestAttempt = order?.activePayment?.attempts?.[0] || null;
+  const latestCashierTx = order?.cashierTransactions?.[0] || null;
   const expectedAmount =
     Number(order?.activePayment?.amountExpectedFcfa || 0) || Number(order?.totalFcfa || 0);
 
@@ -94,6 +95,19 @@ function buildOrderSummary(order) {
         }
       : null,
     payerPhone: getPayerPhone(order),
+    cashierTransaction: latestCashierTx
+      ? {
+          id: latestCashierTx.id,
+          paymentMode: latestCashierTx.paymentMode,
+          amountExpectedFcfa: latestCashierTx.amountExpectedFcfa,
+          amountReceivedFcfa: latestCashierTx.amountReceivedFcfa,
+          providerReference: latestCashierTx.providerReference,
+          receiptNumber: latestCashierTx.receiptNumber,
+          cashDeskLabel: latestCashierTx.cashDeskLabel,
+          preparationLaunchedAt: latestCashierTx.preparationLaunchedAt,
+          createdAt: latestCashierTx.createdAt,
+        }
+      : null,
     latestAttempt: latestAttempt
       ? {
           id: latestAttempt.id,
@@ -233,6 +247,10 @@ async function getWorkspace(req, res) {
       manualPaymentValidatedBy: {
         select: { id: true, fullName: true, role: true },
       },
+      cashierTransactions: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
       preparedByAdmin: {
         select: { id: true, fullName: true, role: true },
       },
@@ -366,6 +384,20 @@ async function launchPreparation(req, res) {
           actorAdminId,
         },
       });
+
+      const latestCashierTx = await tx.cashierTransaction.findFirst({
+        where: { preorderId: order.id },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (latestCashierTx) {
+        await tx.cashierTransaction.update({
+          where: { id: latestCashierTx.id },
+          data: {
+            preparationLaunchedAt: now,
+          },
+        });
+      }
 
       return saved;
     });

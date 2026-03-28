@@ -127,6 +127,11 @@ function normalizeInvoiceAmountOverride(value) {
   return Math.round(amount);
 }
 
+function normalizeAdjustmentReason(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
 async function buildInvoicePreview({
   preorderId,
   billingGradeInput = "",
@@ -157,6 +162,7 @@ async function buildInvoicePreview({
     preorder.countryId,
     effectiveGrade,
   );
+  const indicativeTotalFcfa = Number(preorder.totalFcfa || 0);
   const invoiceAmountOverrideFcfa = normalizeInvoiceAmountOverride(
     invoiceAmountOverrideInput,
   );
@@ -173,6 +179,7 @@ async function buildInvoicePreview({
     status: preorder.status,
     previousGrade: preorder.fboGrade,
     effectiveGrade,
+    indicativeTotalFcfa,
     discountPercent: pricingSummary.discountPercent,
     totals: {
       ...pricingSummary.totals,
@@ -181,6 +188,9 @@ async function buildInvoicePreview({
     pricingTotals: pricingSummary.totals,
     invoiceAmountOverrideFcfa,
     effectiveInvoiceTotalFcfa,
+    requiresAdjustmentReason:
+      preorder.fboGrade !== effectiveGrade ||
+      effectiveInvoiceTotalFcfa !== Number(pricingSummary.totals.totalFcfa || 0),
     payment: paymentPricing,
   };
 }
@@ -248,6 +258,7 @@ async function invoiceAndSendPreorder({
   invoiceNote = "",
   billingGradeInput = "",
   invoiceAmountOverrideInput = "",
+  billingAdjustmentReasonInput = "",
 }) {
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
@@ -281,15 +292,21 @@ async function invoiceAndSendPreorder({
     throw new Error("PREORDER_NOT_INVOICEABLE");
   }
 
-  const invoiceRef =
-    String(invoiceRefInput || "").trim() ||
-    existingPreorder.factureReference ||
-    generateInvoiceRef(existingPreorder);
+  const invoiceRef = String(invoiceRefInput || "").trim();
+  if (!invoiceRef) {
+    throw new Error("INVOICE_REFERENCE_REQUIRED");
+  }
 
   const whatsappTo = resolveWhatsappTo(existingPreorder, whatsappToInput);
   const effectiveGrade = normalizeBillingGrade(
     billingGradeInput,
-    existingPreorder.fboGrade,
+    existingPreorder.billingGrade || existingPreorder.fboGrade,
+  );
+  const indicativeTotalFcfa = Number(
+    existingPreorder.as400InvoiceTotalFcfa ??
+      existingPreorder.indicativeTotalFcfa ??
+      existingPreorder.totalFcfa ??
+      0,
   );
   const pricingSummary = await computePreorderTotalsForGrade(
     existingPreorder.id,
@@ -301,6 +318,15 @@ async function invoiceAndSendPreorder({
   );
   const effectiveInvoiceTotalFcfa =
     invoiceAmountOverrideFcfa ?? pricingSummary.totals.totalFcfa;
+  const billingAdjustmentReason = normalizeAdjustmentReason(
+    billingAdjustmentReasonInput,
+  );
+  const requiresAdjustmentReason =
+    existingPreorder.fboGrade !== effectiveGrade ||
+    effectiveInvoiceTotalFcfa !== Number(pricingSummary.totals.totalFcfa || 0);
+  if (requiresAdjustmentReason && !billingAdjustmentReason) {
+    throw new Error("BILLING_ADJUSTMENT_REASON_REQUIRED");
+  }
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: existingPreorder.preorderPaymentMode,
     orderTotalFcfa: effectiveInvoiceTotalFcfa,
@@ -338,9 +364,13 @@ async function invoiceAndSendPreorder({
       where: { id: existingPreorder.id },
       data: {
         status: "INVOICED",
-        fboGrade: effectiveGrade,
+        billingGrade: effectiveGrade,
         factureReference: invoiceRef,
         factureWhatsappTo: whatsappTo,
+        indicativeTotalFcfa,
+        computedGradeTotalFcfa: pricingSummary.totals.totalFcfa || 0,
+        as400InvoiceTotalFcfa: effectiveInvoiceTotalFcfa || 0,
+        billingAdjustmentReason,
         invoicedAt: now,
         invoicedById: actorAdminId || existingPreorder.invoicedById || null,
         totalCc: String(Number(pricingSummary.totals.totalCc || 0).toFixed(3)),
@@ -376,10 +406,12 @@ async function invoiceAndSendPreorder({
         whatsappTo,
         previousGrade: existingPreorder.fboGrade,
         effectiveGrade,
+        indicativeTotalFcfa,
         discountPercent: pricingSummary.discountPercent,
         computedTotalFcfa: pricingSummary.totals.totalFcfa || 0,
         invoiceAmountOverrideFcfa,
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
+        billingAdjustmentReason,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
         actorName,
@@ -525,10 +557,12 @@ async function invoiceAndSendPreorder({
         whatsappTo,
         previousGrade: existingPreorder.fboGrade,
         effectiveGrade,
+        indicativeTotalFcfa,
         discountPercent: pricingSummary.discountPercent,
         computedTotalFcfa: pricingSummary.totals.totalFcfa || 0,
         invoiceAmountOverrideFcfa,
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
+        billingAdjustmentReason,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
         messageId: savedMessage.id,

@@ -66,6 +66,25 @@ async function addLogTx(tx, preorderId, action, note, meta, actorAdminId = null)
   });
 }
 
+async function ensurePreparationChecklist(tx, preorder) {
+  const items = Array.isArray(preorder?.items) ? preorder.items : [];
+  for (const item of items) {
+    await tx.preparationChecklistItem.upsert({
+      where: {
+        preorderId_preorderItemId: {
+          preorderId: preorder.id,
+          preorderItemId: item.id,
+        },
+      },
+      update: {},
+      create: {
+        preorderId: preorder.id,
+        preorderItemId: item.id,
+      },
+    });
+  }
+}
+
 function actorLabel(req) {
   return (
     req.user?.fullName ||
@@ -166,6 +185,10 @@ async function listOrders(req, res) {
           paymentProvider: true,
           totalFcfa: true,
           fboGrade: true,
+          billingGrade: true,
+          indicativeTotalFcfa: true,
+          computedGradeTotalFcfa: true,
+          as400InvoiceTotalFcfa: true,
           fboNumero: true,
           fboNomComplet: true,
           pointDeVente: true,
@@ -271,6 +294,14 @@ async function getOrderById(req, res) {
             },
             orderBy: { createdAt: "desc" },
           },
+          cashierTransactions: {
+            orderBy: { createdAt: "desc" },
+            include: {
+              cashier: {
+                select: { id: true, fullName: true, email: true, role: true },
+              },
+            },
+          },
           paymentTransactionLogs: {
             orderBy: { createdAt: "desc" },
             take: 200,
@@ -303,12 +334,93 @@ async function getOrderById(req, res) {
             },
             orderBy: { createdAt: "desc" },
           },
+          preparationItems: {
+            orderBy: { createdAt: "asc" },
+            include: {
+              preorderItem: {
+                include: {
+                  product: true,
+                },
+              },
+              checkedBy: {
+                select: { id: true, fullName: true, email: true, role: true },
+              },
+            },
+          },
+          preparationAnomalies: {
+            orderBy: [{ resolvedAt: "asc" }, { createdAt: "desc" }],
+            include: {
+              preorderItem: {
+                include: {
+                  product: true,
+                },
+              },
+              createdBy: {
+                select: { id: true, fullName: true, email: true, role: true },
+              },
+              resolvedBy: {
+                select: { id: true, fullName: true, email: true, role: true },
+              },
+            },
+          },
         },
       },
     );
 
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (["PAID", "READY", "FULFILLED"].includes(order.status) && order.items?.length) {
+      await prisma.$transaction(async (tx) => {
+        await ensurePreparationChecklist(tx, order);
+      });
+
+      const hydratedOrder = await safeFindUniqueScoped(
+        prisma.preorder,
+        req,
+        id,
+        {},
+        {
+          include: {
+            items: {
+              include: { product: true },
+              orderBy: { createdAt: "asc" },
+            },
+            country: { select: { code: true, name: true } },
+            fbo: true,
+            assignedInvoicer: { select: { id: true, fullName: true, email: true, role: true } },
+            invoicedByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
+            manualPaymentValidatedBy: { select: { id: true, fullName: true, email: true, role: true } },
+            preparationLaunchedBy: { select: { id: true, fullName: true, email: true, role: true } },
+            pickupCodeVerifiedBy: { select: { id: true, fullName: true, email: true, role: true } },
+            preparedByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
+            fulfilledByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
+            cancelledByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
+            activePayment: { include: { attempts: { orderBy: { createdAt: "desc" } }, refunds: { orderBy: { createdAt: "desc" } } } },
+            payments: { include: { attempts: { orderBy: { createdAt: "desc" } }, refunds: { orderBy: { createdAt: "desc" } } }, orderBy: { createdAt: "desc" } },
+            cashierTransactions: { orderBy: { createdAt: "desc" }, include: { cashier: { select: { id: true, fullName: true, email: true, role: true } } } },
+            paymentTransactionLogs: { orderBy: { createdAt: "desc" }, take: 200, include: { actorAdmin: { select: { id: true, fullName: true, email: true, role: true } } } },
+            logs: { orderBy: { createdAt: "desc" }, include: { actorAdmin: { select: { id: true, fullName: true, email: true, role: true } } } },
+            stockMovements: { orderBy: { createdAt: "desc" }, include: { product: { select: { id: true, sku: true, nom: true } }, createdByAdmin: { select: { id: true, fullName: true, email: true, role: true } } } },
+            messages: { include: { events: { orderBy: { createdAt: "desc" } } }, orderBy: { createdAt: "desc" } },
+            preparationItems: {
+              orderBy: { createdAt: "asc" },
+              include: { preorderItem: { include: { product: true } }, checkedBy: { select: { id: true, fullName: true, email: true, role: true } } },
+            },
+            preparationAnomalies: {
+              orderBy: [{ resolvedAt: "asc" }, { createdAt: "desc" }],
+              include: {
+                preorderItem: { include: { product: true } },
+                createdBy: { select: { id: true, fullName: true, email: true, role: true } },
+                resolvedBy: { select: { id: true, fullName: true, email: true, role: true } },
+              },
+            },
+          },
+        },
+      );
+
+      return res.json(hydratedOrder);
     }
 
     return res.json(order);
@@ -403,7 +515,14 @@ async function invoiceOrder(req, res) {
     });
 
     const { id } = req.params;
-    const { factureReference, whatsappTo, note, fboGrade, invoiceAmountFcfa } =
+    const {
+      factureReference,
+      whatsappTo,
+      note,
+      fboGrade,
+      invoiceAmountFcfa,
+      billingAdjustmentReason,
+    } =
       req.body || {};
 
     const actorName = actorLabel(req);
@@ -419,6 +538,7 @@ async function invoiceOrder(req, res) {
       invoiceNote: note,
       billingGradeInput: fboGrade,
       invoiceAmountOverrideInput: invoiceAmountFcfa,
+      billingAdjustmentReasonInput: billingAdjustmentReason,
     });
 
     return res.json(result.preorder);
@@ -450,6 +570,19 @@ async function invoiceOrder(req, res) {
     if (e.message === "INVALID_INVOICE_AMOUNT") {
       return res.status(400).json({
         message: "Le montant final de facturation est invalide.",
+      });
+    }
+
+    if (e.message === "INVOICE_REFERENCE_REQUIRED") {
+      return res.status(400).json({
+        message: "La référence AS400 est obligatoire pour facturer la précommande.",
+      });
+    }
+
+    if (e.message === "BILLING_ADJUSTMENT_REASON_REQUIRED") {
+      return res.status(400).json({
+        message:
+          "Le motif d'ajustement est obligatoire si le grade retenu ou le montant AS400 diffère du calcul applicatif.",
       });
     }
 
@@ -518,6 +651,39 @@ async function prepareOrder(req, res) {
         alreadyDone: true,
         status: order.status,
         message: "Le stock a déjà été décrémenté pour cette commande.",
+      });
+    }
+
+    const unresolvedBlockingAnomalies = await prisma.preparationAnomaly.count({
+      where: {
+        preorderId: order.id,
+        blocking: true,
+        resolvedAt: null,
+      },
+    });
+
+    if (unresolvedBlockingAnomalies > 0) {
+      return res.status(400).json({
+        message:
+          "Impossible de marquer le colis prêt tant qu'une anomalie bloquante de préparation n'est pas résolue.",
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await ensurePreparationChecklist(tx, order);
+    });
+
+    const checklistItems = await prisma.preparationChecklistItem.findMany({
+      where: { preorderId: order.id },
+    });
+
+    const allChecked =
+      checklistItems.length > 0 && checklistItems.every((item) => item.checked);
+
+    if (!allChecked) {
+      return res.status(400).json({
+        message:
+          "Toutes les lignes de checklist doivent être cochées avant de marquer le colis prêt.",
       });
     }
 
@@ -633,10 +799,238 @@ async function prepareOrder(req, res) {
   }
 }
 
+async function updatePreparationChecklistItem(req, res) {
+  try {
+    const { id } = req.params;
+    const { itemId, checked, note } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const targetItem = order.items.find((item) => item.id === itemId);
+    if (!targetItem) {
+      return res.status(404).json({ message: "Ligne de commande introuvable" });
+    }
+
+    const checkedValue = Boolean(checked);
+    const saved = await prisma.$transaction(async (tx) => {
+      await ensurePreparationChecklist(tx, order);
+
+      return tx.preparationChecklistItem.upsert({
+        where: {
+          preorderId_preorderItemId: {
+            preorderId: order.id,
+            preorderItemId: targetItem.id,
+          },
+        },
+        update: {
+          checked: checkedValue,
+          checkedAt: checkedValue ? new Date() : null,
+          checkedById: checkedValue ? req.user?.id || null : null,
+          note: note ? String(note).trim() : null,
+        },
+        create: {
+          preorderId: order.id,
+          preorderItemId: targetItem.id,
+          checked: checkedValue,
+          checkedAt: checkedValue ? new Date() : null,
+          checkedById: checkedValue ? req.user?.id || null : null,
+          note: note ? String(note).trim() : null,
+        },
+        include: {
+          preorderItem: {
+            include: { product: true },
+          },
+          checkedBy: {
+            select: { id: true, fullName: true, email: true, role: true },
+          },
+        },
+      });
+    });
+
+    return res.json(saved);
+  } catch (e) {
+    console.error("updatePreparationChecklistItem error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (updatePreparationChecklistItem)",
+    });
+  }
+}
+
+async function bulkUpdatePreparationChecklist(req, res) {
+  try {
+    const { id } = req.params;
+    const { checked } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: { items: true },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const checkedValue = Boolean(checked);
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      await ensurePreparationChecklist(tx, order);
+
+      for (const item of order.items) {
+        await tx.preparationChecklistItem.update({
+          where: {
+            preorderId_preorderItemId: {
+              preorderId: order.id,
+              preorderItemId: item.id,
+            },
+          },
+          data: {
+            checked: checkedValue,
+            checkedAt: checkedValue ? now : null,
+            checkedById: checkedValue ? req.user?.id || null : null,
+          },
+        });
+      }
+    });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("bulkUpdatePreparationChecklist error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (bulkUpdatePreparationChecklist)",
+    });
+  }
+}
+
+async function createPreparationAnomaly(req, res) {
+  try {
+    const { id } = req.params;
+    const { itemId, kind, note, blocking = true } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: { items: true },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const normalizedKind = String(kind || "").trim().toUpperCase();
+    const normalizedNote = String(note || "").trim();
+    if (!normalizedKind || !normalizedNote) {
+      return res.status(400).json({
+        message: "Le type d'anomalie et la note sont obligatoires.",
+      });
+    }
+
+    if (itemId && !order.items.some((item) => item.id === itemId)) {
+      return res.status(404).json({ message: "Ligne de commande introuvable" });
+    }
+
+    const saved = await prisma.preparationAnomaly.create({
+      data: {
+        preorderId: order.id,
+        preorderItemId: itemId || null,
+        kind: normalizedKind,
+        note: normalizedNote,
+        blocking: Boolean(blocking),
+        createdById: req.user?.id || null,
+      },
+      include: {
+        preorderItem: { include: { product: true } },
+        createdBy: {
+          select: { id: true, fullName: true, email: true, role: true },
+        },
+        resolvedBy: {
+          select: { id: true, fullName: true, email: true, role: true },
+        },
+      },
+    });
+
+    return res.status(201).json(saved);
+  } catch (e) {
+    console.error("createPreparationAnomaly error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (createPreparationAnomaly)",
+    });
+  }
+}
+
+async function resolvePreparationAnomaly(req, res) {
+  try {
+    const { id, anomalyId } = req.params;
+    const { resolutionNote } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: { id: true },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const anomaly = await prisma.preparationAnomaly.findFirst({
+      where: {
+        id: anomalyId,
+        preorderId: order.id,
+      },
+    });
+
+    if (!anomaly) {
+      return res.status(404).json({ message: "Anomalie introuvable" });
+    }
+
+    const saved = await prisma.preparationAnomaly.update({
+      where: { id: anomaly.id },
+      data: {
+        resolvedAt: anomaly.resolvedAt || new Date(),
+        resolvedById: anomaly.resolvedById || req.user?.id || null,
+        resolutionNote: resolutionNote
+          ? String(resolutionNote).trim()
+          : anomaly.resolutionNote,
+      },
+      include: {
+        preorderItem: { include: { product: true } },
+        createdBy: {
+          select: { id: true, fullName: true, email: true, role: true },
+        },
+        resolvedBy: {
+          select: { id: true, fullName: true, email: true, role: true },
+        },
+      },
+    });
+
+    return res.json(saved);
+  } catch (e) {
+    console.error("resolvePreparationAnomaly error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (resolvePreparationAnomaly)",
+    });
+  }
+}
+
 async function fulfillOrder(req, res) {
   try {
     const { id } = req.params;
-    const { deliveryTracking, note, pickupCode } = req.body || {};
+    const {
+      deliveryTracking,
+      note,
+      pickupCode,
+      pickupPointLabel,
+      deliveryCarrier,
+      fulfillmentMode,
+    } = req.body || {};
 
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
@@ -658,6 +1052,10 @@ async function fulfillOrder(req, res) {
     assertTransition(order.status, "FULFILLED");
     const isPickupOrder = order.deliveryMode === "RETRAIT_SITE_FLP";
     const normalizedPickupCode = String(pickupCode || "").trim();
+    const normalizedFulfillmentMode =
+      String(fulfillmentMode || (isPickupOrder ? "PICKUP" : "DELIVERY"))
+        .trim()
+        .toUpperCase() || null;
 
     if (isPickupOrder) {
       if (!normalizedPickupCode) {
@@ -683,6 +1081,13 @@ async function fulfillOrder(req, res) {
           deliveryTracking: deliveryTracking
             ? String(deliveryTracking).trim()
             : order.deliveryTracking,
+          fulfillmentMode: normalizedFulfillmentMode,
+          pickupPointLabel: pickupPointLabel
+            ? String(pickupPointLabel).trim()
+            : order.pickupPointLabel,
+          deliveryCarrier: deliveryCarrier
+            ? String(deliveryCarrier).trim()
+            : order.deliveryCarrier,
           internalNote: note ? String(note).trim() : order.internalNote,
           pickupCodeVerifiedAt: isPickupOrder
             ? order.pickupCodeVerifiedAt || new Date()
@@ -705,6 +1110,13 @@ async function fulfillOrder(req, res) {
           deliveryTracking: saved.deliveryTracking,
           parcelNumber: order.parcelNumber,
           pickupCodeVerified: isPickupOrder,
+          fulfillmentMode: normalizedFulfillmentMode,
+          pickupPointLabel: pickupPointLabel
+            ? String(pickupPointLabel).trim()
+            : order.pickupPointLabel,
+          deliveryCarrier: deliveryCarrier
+            ? String(deliveryCarrier).trim()
+            : order.deliveryCarrier,
         },
         req.user?.id || null,
       );
@@ -837,6 +1249,10 @@ module.exports = {
   updateOrderStatus,
   getInvoicePreview,
   invoiceOrder,
+  updatePreparationChecklistItem,
+  bulkUpdatePreparationChecklist,
+  createPreparationAnomaly,
+  resolvePreparationAnomaly,
   prepareOrder,
   fulfillOrder,
   cancelOrder,

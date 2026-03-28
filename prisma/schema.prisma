@@ -385,6 +385,10 @@ model AdminUser {
   stockMovements StockMovement[]
   preorderLogs   PreorderLog[]
   paymentTransactionLogs PaymentTransactionLog[]
+  cashierTransactions CashierTransaction[] @relation("CashierTransactionCashier")
+  checkedPreparationItems PreparationChecklistItem[]
+  createdPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyCreatedBy")
+  resolvedPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyResolvedBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
   auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
 
@@ -506,6 +510,7 @@ model Preorder {
   fboNumero     String
   fboNomComplet String
   fboGrade      Grade
+  billingGrade  Grade?
   pointDeVente  String
 
   // Livraison
@@ -517,6 +522,9 @@ model Preorder {
   totalProduitsFcfa  Int     @default(0)
   fraisLivraisonFcfa Int     @default(0)
   totalFcfa          Int     @default(0)
+  indicativeTotalFcfa Int?
+  computedGradeTotalFcfa Int?
+  as400InvoiceTotalFcfa Int?
 
   // File / répartition facturiers
   billingWorkStatus     BillingWorkStatus @default(NONE)
@@ -536,6 +544,7 @@ model Preorder {
   // Facturation
   factureReference  String?
   factureWhatsappTo String?
+  billingAdjustmentReason String? @db.Text
   parcelNumber      String? @unique
   invoicedAt        DateTime?
   invoicedById      String?
@@ -588,6 +597,9 @@ model Preorder {
   internalNote String? @db.Text
 
   deliveryTracking String?
+  fulfillmentMode String?
+  pickupPointLabel String?
+  deliveryCarrier String?
   packingNote      String? @db.Text
   pickupSecretCode String?
   pickupCodeVerifiedAt DateTime?
@@ -604,6 +616,9 @@ model Preorder {
   logs           PreorderLog[]
   messages       OrderMessage[]
   payments       Payment[]       @relation("PreorderPayments")
+  cashierTransactions CashierTransaction[]
+  preparationItems PreparationChecklistItem[]
+  preparationAnomalies PreparationAnomaly[]
   paymentTransactionLogs PaymentTransactionLog[]
   stockMovements StockMovement[]
 
@@ -626,6 +641,34 @@ model Preorder {
   @@index([cancelledById])
   @@index([factureReference])
   @@index([activePaymentId])
+}
+
+model CashierTransaction {
+  id String @id @default(cuid())
+
+  preorderId String
+  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  cashierId String?
+  cashier AdminUser? @relation("CashierTransactionCashier", fields: [cashierId], references: [id], onDelete: SetNull)
+
+  paymentMode String
+  amountExpectedFcfa Int
+  amountReceivedFcfa Int?
+  providerReference String?
+  payerPhone String?
+  receiptNumber String?
+  cashDeskLabel String?
+  receiptPrintedAt DateTime?
+  preparationLaunchedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([preorderId, createdAt])
+  @@index([cashierId, createdAt])
+  @@index([paymentMode, createdAt])
+  @@index([preparationLaunchedAt])
 }
 
 model PreorderItem {
@@ -656,8 +699,66 @@ model PreorderItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  preparationChecklistItems PreparationChecklistItem[]
+  preparationAnomalies PreparationAnomaly[]
+
   @@unique([preorderId, productId])
   @@index([productId])
+}
+
+model PreparationChecklistItem {
+  id String @id @default(cuid())
+
+  preorderId String
+  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  preorderItemId String
+  preorderItem PreorderItem @relation(fields: [preorderItemId], references: [id], onDelete: Cascade)
+
+  checked Boolean @default(false)
+  checkedAt DateTime?
+  checkedById String?
+  checkedBy AdminUser? @relation(fields: [checkedById], references: [id], onDelete: SetNull)
+
+  note String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([preorderId, preorderItemId])
+  @@index([preorderId, checked])
+  @@index([checkedById])
+}
+
+model PreparationAnomaly {
+  id String @id @default(cuid())
+
+  preorderId String
+  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  preorderItemId String?
+  preorderItem PreorderItem? @relation(fields: [preorderItemId], references: [id], onDelete: SetNull)
+
+  kind String
+  note String @db.Text
+  blocking Boolean @default(true)
+
+  resolvedAt DateTime?
+  resolvedById String?
+  resolvedBy AdminUser? @relation("PreparationAnomalyResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolutionNote String? @db.Text
+
+  createdById String?
+  createdBy AdminUser? @relation("PreparationAnomalyCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([preorderId, createdAt])
+  @@index([preorderId, resolvedAt])
+  @@index([preorderItemId])
+  @@index([createdById])
+  @@index([resolvedById])
 }
 
 model PreorderLog {

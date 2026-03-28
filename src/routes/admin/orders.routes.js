@@ -33,6 +33,30 @@ router.post(
 );
 
 router.post(
+  "/:id/preparation/checklist",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.updatePreparationChecklistItem,
+);
+
+router.post(
+  "/:id/preparation/checklist/bulk",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.bulkUpdatePreparationChecklist,
+);
+
+router.post(
+  "/:id/preparation/anomalies",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.createPreparationAnomaly,
+);
+
+router.post(
+  "/:id/preparation/anomalies/:anomalyId/resolve",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.resolvePreparationAnomaly,
+);
+
+router.post(
   "/:id/fulfill",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.fulfillOrder,
