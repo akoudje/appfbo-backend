@@ -1004,6 +1004,16 @@ async function initiateWavePayment({
     throw err;
   }
 
+  if (
+    preorder.status === "PAID" ||
+    preorder.paymentStatus === "PAID" ||
+    preorder.activePayment?.status === "SUCCEEDED"
+  ) {
+    const err = new Error("Paiement deja confirme pour cette commande");
+    err.statusCode = 409;
+    throw err;
+  }
+
   if (!["INVOICED", "PAYMENT_PENDING"].includes(preorder.status)) {
     const err = new Error(
       `Impossible d'initier Wave depuis le statut ${preorder.status}`,
