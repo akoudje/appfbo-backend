@@ -332,6 +332,7 @@ model Country {
   updatedAt    DateTime @updatedAt
 
   settings                CountrySettings?
+  marketingContent        CountryMarketingContent?
   products                Product[]
   preorders               Preorder[]
   gradeDiscounts          GradeDiscount[]
@@ -348,10 +349,39 @@ model CountrySettings {
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
   minCartFcfa Int @default(0)
+  supportPhone String?
+  pickupAddress String? @db.Text
+  enableWave Boolean @default(true)
+  enableOrangeMoney Boolean @default(true)
+  enableCash Boolean @default(true)
+  enableDelivery Boolean @default(true)
+  enablePickup Boolean @default(true)
+  currencyLabel String? @default("FCFA")
+  pricingDisclaimer String? @db.Text
+  themePrimaryColor String?
+  themeSecondaryColor String?
+  themeDarkColor String?
+  themeLogoPath String?
+  themeSliderEnabled Boolean @default(true)
+  themeSidePanelsEnabled Boolean @default(true)
 
   // Paramètres opérationnels facturation
   maxActiveBillingPerInvoicer Int @default(5)
   billingClaimTimeoutMin      Int @default(15)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CountryMarketingContent {
+  id String @id @default(cuid())
+
+  countryId String @unique
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  slidesJson Json?
+  sidePanelsJson Json?
+  publishingJson Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

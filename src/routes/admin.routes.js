@@ -37,6 +37,7 @@ const statsRoutes = require("./admin/stats.routes");
 const settingsRoutes = require("./admin/settings.routes");
 const productsRoutes = require("./admin/products.routes");
 const cashierRoutes = require("./admin/cashier.routes");
+const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 
 const router = express.Router();
 
@@ -141,5 +142,17 @@ router.patch(
 );
 
 router.use("/country-settings", settingsRoutes);
+
+router.get(
+  "/marketing-campaigns",
+  requirePermission(Permission.COUNTRY_READ),
+  marketingCampaignsController.getMarketingCampaigns,
+);
+
+router.put(
+  "/marketing-campaigns",
+  requirePermission(Permission.COUNTRY_WRITE),
+  marketingCampaignsController.updateMarketingCampaigns,
+);
 
 module.exports = router;
