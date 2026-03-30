@@ -12,6 +12,7 @@ const adminAuthRoutes = require("./routes/adminAuth.routes");
 
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
+const publicConfigRoutes = require("./routes/public-config.routes.js");
 const paymentsRoutes = require("./routes/payments.routes");
 const webhooksRoutes = require("./routes/webhooks.routes");
 const smsRoutes = require("./routes/sms.routes");
@@ -97,6 +98,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
    ========================================================= */
 app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
+app.use("/api/public-config", publicConfigRoutes);
 
 /* =========================================================
    Routes de paiement (webhooks, etc.)
