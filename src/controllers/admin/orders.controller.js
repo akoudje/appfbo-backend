@@ -939,7 +939,7 @@ async function replaceBillingOrderItem(req, res) {
       await addLogTx(
         tx,
         order.id,
-        "BILLING_ITEM_REPLACED",
+        "REPRICE",
         note
           ? String(note).trim()
           : "Remplacement produit demandé par facturation",
@@ -1051,7 +1051,7 @@ async function resendInvoiceSms(req, res) {
       await addLogTx(
         tx,
         order.id,
-        "BILLING_SMS_RESENT",
+        "WAIT_CUSTOMER_DATA",
         "SMS de facture renvoyé au client",
         {
           toPhone: destination,
