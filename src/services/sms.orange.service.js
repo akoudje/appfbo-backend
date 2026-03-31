@@ -5,6 +5,7 @@ const { normalizeCI } = require("../utils/phone");
 const DEFAULT_TOKEN_URL = "https://api.orange.com/oauth/v3/token";
 const ORANGE_SMS_API_BASE_URL = "https://api.orange.com/smsmessaging/v1";
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_SMS_LENGTH = 160;
 
 let tokenCache = {
   accessToken: null,
@@ -42,6 +43,10 @@ function buildClientCorrelator() {
 
 function buildOrangeSmsUrl(senderAddress) {
   return `${ORANGE_SMS_API_BASE_URL}/outbound/${encodeURIComponent(senderAddress)}/requests`;
+}
+
+function clampSmsContent(message = "") {
+  return String(message || "").slice(0, MAX_SMS_LENGTH);
 }
 
 function buildOrangeError(error, fallbackMessage) {
@@ -130,6 +135,7 @@ async function postOrangeSms({
   const senderAddress = requireEnv("ORANGE_SENDER_ADDRESS");
   const senderNumber = requireEnv("ORANGE_SENDER_NUMBER");
   const accessToken = await getAccessToken();
+  const normalizedMessage = clampSmsContent(message);
 
   try {
     const response = await axios.post(
@@ -140,7 +146,7 @@ async function postOrangeSms({
           senderAddress,
           senderName: senderNumber,
           outboundSMSTextMessage: {
-            message: String(message || ""),
+            message: normalizedMessage,
           },
           clientCorrelator,
         },
@@ -215,6 +221,8 @@ async function sendText({ phone, message, clientCorrelator }) {
 }
 
 module.exports = {
+  MAX_SMS_LENGTH,
+  clampSmsContent,
   OrangeApiError,
   getAccessToken,
   send,

@@ -217,6 +217,22 @@ async function getWorkspace(req, res) {
             { factureReference: { contains: String(q).trim(), mode: "insensitive" } },
             { preorderNumber: { contains: String(q).trim(), mode: "insensitive" } },
             { parcelNumber: { contains: String(q).trim(), mode: "insensitive" } },
+            {
+              activePayment: {
+                attempts: {
+                  some: {
+                    providerPayerPhone: { contains: String(q).trim(), mode: "insensitive" },
+                  },
+                },
+              },
+            },
+            {
+              cashierTransactions: {
+                some: {
+                  receiptNumber: { contains: String(q).trim(), mode: "insensitive" },
+                },
+              },
+            },
           ]
         : null;
 

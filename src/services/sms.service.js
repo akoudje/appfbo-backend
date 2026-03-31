@@ -5,6 +5,8 @@ const axios = require("axios");
 
 const { normalizeCI } = require("../utils/phone");
 const {
+  MAX_SMS_LENGTH,
+  clampSmsContent,
   getAccessToken,
   sendText,
 } = require("./sms.orange.service");
@@ -40,6 +42,7 @@ function orangeConfigured() {
 
 async function sendSms({ to, message, callbackData = null }) {
   const toAddress = normalizePhone(to);
+  const normalizedMessage = clampSmsContent(message);
 
   if (!toAddress) {
     return {
@@ -67,12 +70,13 @@ async function sendSms({ to, message, callbackData = null }) {
     console.log("[sms][orange] send requested", {
       to: `tel:${toAddress}`,
       senderAddress: process.env.ORANGE_SENDER_ADDRESS,
-      messageLength: String(message || "").length,
+      messageLength: normalizedMessage.length,
+      maxLength: MAX_SMS_LENGTH,
     });
 
     const smsResult = await sendText({
       phone: toAddress,
-      message: String(message || ""),
+      message: normalizedMessage,
       clientCorrelator: callbackData
         ? `app_${Date.now()}_${String(callbackData).slice(0, 40)}`
         : undefined,

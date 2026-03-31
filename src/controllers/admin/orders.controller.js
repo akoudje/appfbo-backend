@@ -106,7 +106,9 @@ async function listOrders(req, res) {
       sort = "createdAt",
       dir = "desc",
       paymentStatus,
+      preorderPaymentMode,
       billingWorkStatus,
+      billingPriority,
       assignedOnly,
       assignedToMe,
       invoicerId,
@@ -128,7 +130,9 @@ async function listOrders(req, res) {
 
     if (status) where.status = status;
     if (paymentStatus) where.paymentStatus = paymentStatus;
+    if (preorderPaymentMode) where.preorderPaymentMode = String(preorderPaymentMode).trim().toUpperCase();
     if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
+    if (billingPriority) where.billingPriority = String(billingPriority).trim().toUpperCase();
 
     if (String(assignedToMe) === "true") {
       where.assignedInvoicerId = req.user?.id || "__no_user__";
@@ -146,6 +150,8 @@ async function listOrders(req, res) {
         { fboNumero: { contains: qs, mode: "insensitive" } },
         { fboNomComplet: { contains: qs, mode: "insensitive" } },
         { factureReference: { contains: qs, mode: "insensitive" } },
+        { preorderNumber: { contains: qs, mode: "insensitive" } },
+        { parcelNumber: { contains: qs, mode: "insensitive" } },
       ];
     }
 
@@ -205,6 +211,11 @@ async function listOrders(req, res) {
           assignedAt: true,
           billingSlaDeadlineAt: true,
           createdAt: true,
+          updatedAt: true,
+          preorderNumber: true,
+          paidAt: true,
+          preparedAt: true,
+          fulfilledAt: true,
           assignedInvoicerId: true,
           assignedInvoicer: {
             select: {

@@ -37,6 +37,7 @@ const statsRoutes = require("./admin/stats.routes");
 const settingsRoutes = require("./admin/settings.routes");
 const productsRoutes = require("./admin/products.routes");
 const cashierRoutes = require("./admin/cashier.routes");
+const stockRoutes = require("./admin/stock.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 
 const router = express.Router();
@@ -98,6 +99,7 @@ router.post(
 router.use("/stats", statsRoutes);
 router.use("/products", productsRoutes);
 router.use("/cashier", cashierRoutes);
+router.use("/stock", stockRoutes);
 
 router.get(
   "/grade-discounts",
