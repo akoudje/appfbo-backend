@@ -796,10 +796,16 @@ async function replaceBillingOrderItem(req, res) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
 
-    if (order.status !== "SUBMITTED") {
+    const editableStatuses = new Set([
+      "SUBMITTED",
+      "INVOICED",
+      "PAYMENT_PENDING",
+      "PAYMENT_PROOF_RECEIVED",
+    ]);
+    if (!editableStatuses.has(String(order.status || "").toUpperCase())) {
       return res.status(400).json({
         message:
-          "Remplacement autorisé uniquement sur une commande soumise (avant facturation).",
+          "Remplacement autorisé uniquement avant paiement confirmé.",
       });
     }
 
@@ -889,6 +895,8 @@ async function replaceBillingOrderItem(req, res) {
         });
       }
 
+      const mustResetInvoiceFlow = String(order.status || "").toUpperCase() !== "SUBMITTED";
+
       await tx.preorder.update({
         where: { id: order.id },
         data: {
@@ -899,6 +907,32 @@ async function replaceBillingOrderItem(req, res) {
           totalFcfa: summary.totals.totalFcfa || 0,
           as400InvoiceTotalFcfa: summary.totals.totalFcfa || 0,
           computedGradeTotalFcfa: summary.totals.totalFcfa || 0,
+          ...(mustResetInvoiceFlow
+            ? {
+                status: "SUBMITTED",
+                paymentStatus: "UNPAID",
+                activePaymentId: null,
+                paymentProvider: null,
+                paidAt: null,
+                factureReference: null,
+                invoicedAt: null,
+                manualPaymentReference: null,
+                manualPaymentProofUrl: null,
+                manualPaymentProofNote: null,
+                manualPaymentReceivedAt: null,
+                manualPaymentValidatedAt: null,
+                manualPaymentValidatedById: null,
+                billingAdjustmentReason: null,
+                whatsappMessage: null,
+                lastWhatsappMessageId: null,
+                lastWhatsappStatus: null,
+                lastWhatsappStatusAt: null,
+                paymentLinkClickedAt: null,
+                paymentLinkClickCount: 0,
+                billingWorkStatus: "IN_PROGRESS",
+                billingLastActivityAt: new Date(),
+              }
+            : {}),
         },
       });
 
@@ -920,6 +954,7 @@ async function replaceBillingOrderItem(req, res) {
           replacementProductName: replacement.nom || null,
           qty: targetItem.qty || 0,
           totalFcfaAfter: summary.totals.totalFcfa || 0,
+          requiresReinvoice: mustResetInvoiceFlow,
         },
         req.user?.id || null,
       );
@@ -945,6 +980,105 @@ async function replaceBillingOrderItem(req, res) {
     return res
       .status(e.statusCode || 500)
       .json({ message: e.message || "Erreur serveur (replaceBillingOrderItem)" });
+  }
+}
+
+async function resendInvoiceSms(req, res) {
+  try {
+    const { id } = req.params;
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        preorderNumber: true,
+        status: true,
+        factureWhatsappTo: true,
+        whatsappMessage: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const latestMessage = await prisma.orderMessage.findFirst({
+      where: {
+        preorderId: order.id,
+        purpose: { in: ["INVOICE", "PAYMENT_LINK", "REMINDER"] },
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        body: true,
+        toPhone: true,
+      },
+    });
+
+    const smsBody =
+      String(order.whatsappMessage || "").trim() ||
+      String(latestMessage?.body || "").trim();
+    const destination =
+      String(order.factureWhatsappTo || "").trim() ||
+      String(latestMessage?.toPhone || "").trim();
+
+    if (!smsBody) {
+      return res.status(400).json({
+        message:
+          "Aucun message de facture disponible. Générez une facture avant renvoi.",
+      });
+    }
+
+    if (!destination) {
+      return res.status(400).json({
+        message:
+          "Aucun numéro destinataire disponible pour renvoyer le SMS.",
+      });
+    }
+
+    const actorName = actorLabel(req);
+    const sendResult = await sendPreorderNotification({
+      preorder: {
+        ...order,
+        factureWhatsappTo: destination,
+      },
+      purpose: "REMINDER",
+      message: smsBody,
+      actorName,
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await addLogTx(
+        tx,
+        order.id,
+        "BILLING_SMS_RESENT",
+        "SMS de facture renvoyé au client",
+        {
+          toPhone: destination,
+          sent: Boolean(sendResult?.sent),
+          messageId: sendResult?.messageId || null,
+          providerMessageId: sendResult?.providerMessageId || null,
+          errorCode: sendResult?.errorCode || null,
+          errorMessage: sendResult?.errorMessage || null,
+        },
+        req.user?.id || null,
+      );
+    });
+
+    return res.json({
+      ok: true,
+      sent: Boolean(sendResult?.sent),
+      toPhone: destination,
+      messageId: sendResult?.messageId || null,
+      providerMessageId: sendResult?.providerMessageId || null,
+      errorCode: sendResult?.errorCode || null,
+      errorMessage: sendResult?.errorMessage || null,
+    });
+  } catch (e) {
+    console.error("resendInvoiceSms error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (resendInvoiceSms)" });
   }
 }
 
@@ -1627,6 +1761,7 @@ module.exports = {
   getInvoicePreview,
   invoiceOrder,
   replaceBillingOrderItem,
+  resendInvoiceSms,
   updatePreparationChecklistItem,
   bulkUpdatePreparationChecklist,
   createPreparationAnomaly,

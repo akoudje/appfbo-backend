@@ -38,6 +38,12 @@ router.post(
 );
 
 router.post(
+  "/:id/resend-invoice-sms",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.resendInvoiceSms,
+);
+
+router.post(
   "/:id/prepare",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.prepareOrder,
