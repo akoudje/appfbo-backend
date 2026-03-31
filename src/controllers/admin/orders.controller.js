@@ -96,6 +96,66 @@ function actorLabel(req) {
   );
 }
 
+function toAscii(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .trim();
+}
+
+function escapePdfText(value) {
+  return toAscii(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+}
+
+function createSimplePdf(lines = []) {
+  const top = 800;
+  const step = 14;
+  const maxLines = 48;
+  const clippedLines = lines.slice(0, maxLines);
+  if (lines.length > maxLines) {
+    clippedLines.push("... (suite non affichee)");
+  }
+
+  const streamBody = clippedLines
+    .map((line, index) => {
+      const y = top - index * step;
+      return `BT /F1 11 Tf 40 ${y} Td (${escapePdfText(line)}) Tj ET`;
+    })
+    .join("\n");
+
+  const stream = `${streamBody}\n`;
+  const streamLength = Buffer.byteLength(stream, "utf8");
+
+  const objects = [
+    "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+    "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
+    `4 0 obj\n<< /Length ${streamLength} >>\nstream\n${stream}endstream\nendobj\n`,
+    "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+  ];
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const obj of objects) {
+    offsets.push(Buffer.byteLength(pdf, "utf8"));
+    pdf += obj;
+  }
+
+  const xrefStart = Buffer.byteLength(pdf, "utf8");
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (let i = 1; i < offsets.length; i += 1) {
+    pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+
+  return Buffer.from(pdf, "utf8");
+}
+
 async function listOrders(req, res) {
   try {
     const {
@@ -152,6 +212,22 @@ async function listOrders(req, res) {
         { factureReference: { contains: qs, mode: "insensitive" } },
         { preorderNumber: { contains: qs, mode: "insensitive" } },
         { parcelNumber: { contains: qs, mode: "insensitive" } },
+        {
+          activePayment: {
+            attempts: {
+              some: {
+                providerPayerPhone: { contains: qs, mode: "insensitive" },
+              },
+            },
+          },
+        },
+        {
+          cashierTransactions: {
+            some: {
+              receiptNumber: { contains: qs, mode: "insensitive" },
+            },
+          },
+        },
       ];
     }
 
@@ -192,6 +268,7 @@ async function listOrders(req, res) {
           status: true,
           paymentStatus: true,
           paymentProvider: true,
+          preorderPaymentMode: true,
           totalFcfa: true,
           fboGrade: true,
           billingGrade: true,
@@ -473,6 +550,92 @@ async function listOrderMessages(req, res) {
     return res.status(500).json({
       message: "Erreur serveur (listOrderMessages)",
     });
+  }
+}
+
+async function getDeliveryNotePdf(req, res) {
+  try {
+    const { id } = req.params;
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        preorderNumber: true,
+        parcelNumber: true,
+        fboNomComplet: true,
+        fboNumero: true,
+        totalFcfa: true,
+        deliveryMode: true,
+        fulfillmentMode: true,
+        pickupPointLabel: true,
+        deliveryCarrier: true,
+        items: {
+          select: {
+            id: true,
+            qty: true,
+            productSkuSnapshot: true,
+            productNameSnapshot: true,
+            product: {
+              select: {
+                sku: true,
+                nom: true,
+              },
+            },
+          },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const nowLabel = new Date().toLocaleString("fr-FR", {
+      dateStyle: "short",
+      timeStyle: "short",
+    });
+    const itemCount = Array.isArray(order.items) ? order.items.length : 0;
+    const unitCount = (order.items || []).reduce(
+      (sum, item) => sum + Number(item?.qty || 0),
+      0,
+    );
+
+    const lines = [
+      "BON DE LIVRAISON",
+      "",
+      `Colis: ${order.parcelNumber || "-"}`,
+      `Precommande: ${order.preorderNumber || order.id || "-"}`,
+      `Client: ${order.fboNomComplet || "-"} (FBO ${order.fboNumero || "-"})`,
+      `Date impression: ${nowLabel}`,
+      `Mode remise: ${order.fulfillmentMode || order.deliveryMode || "-"}`,
+      `Point retrait: ${order.pickupPointLabel || "-"}`,
+      `Transporteur: ${order.deliveryCarrier || "-"}`,
+      `Total commande: ${Number(order.totalFcfa || 0)} FCFA`,
+      "",
+      "Produits:",
+      "SKU | Nom | Qt",
+      "-----------------------------------------------",
+      ...(order.items || []).map((item) => {
+        const sku = item?.productSkuSnapshot || item?.product?.sku || "-";
+        const nom = item?.productNameSnapshot || item?.product?.nom || "Produit";
+        const qty = Number(item?.qty || 0);
+        return `${sku} | ${nom} | ${qty}`;
+      }),
+      "-----------------------------------------------",
+      `Lignes: ${itemCount} | Unites: ${unitCount}`,
+    ];
+
+    const pdfBuffer = createSimplePdf(lines);
+    const fileName = `bon-livraison-${order.parcelNumber || order.preorderNumber || order.id}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Length", String(pdfBuffer.length));
+    return res.send(pdfBuffer);
+  } catch (e) {
+    console.error("getDeliveryNotePdf error:", e);
+    return res.status(500).json({ message: "Erreur serveur (getDeliveryNotePdf)" });
   }
 }
 
@@ -1280,6 +1443,7 @@ module.exports = {
   listOrders,
   getOrderById,
   listOrderMessages,
+  getDeliveryNotePdf,
   updateOrderStatus,
   getInvoicePreview,
   invoiceOrder,

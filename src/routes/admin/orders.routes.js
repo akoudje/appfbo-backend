@@ -8,6 +8,11 @@ const router = express.Router();
 router.get("/", requirePermission(Permission.PREORDER_READ), ordersController.listOrders);
 router.get("/:id/messages", requirePermission(Permission.PREORDER_READ), ordersController.listOrderMessages);
 router.get(
+  "/:id/delivery-note.pdf",
+  requirePermission(Permission.PREORDER_READ),
+  ordersController.getDeliveryNotePdf,
+);
+router.get(
   "/:id/invoice-preview",
   requirePermission(Permission.INVOICE_CREATE),
   ordersController.getInvoicePreview,
