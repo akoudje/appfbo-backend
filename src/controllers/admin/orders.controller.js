@@ -5,6 +5,7 @@ const {
   invoiceAndSendPreorder,
   buildInvoicePreview,
 } = require("../../services/invoiceAndSendPreorder.service");
+const { computePreorderTotals } = require("../../services/pricing.service");
 const {
   buildOrderReadySmsMessage,
   buildOrderFulfilledSmsMessage,
@@ -769,6 +770,184 @@ async function invoiceOrder(req, res) {
   }
 }
 
+async function replaceBillingOrderItem(req, res) {
+  try {
+    const { id, itemId } = req.params;
+    const { replacementProductId, note } = req.body || {};
+
+    const nextProductId = String(replacementProductId || "").trim();
+    if (!nextProductId) {
+      return res
+        .status(400)
+        .json({ message: "replacementProductId est obligatoire." });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: {
+          include: { product: true },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (order.status !== "SUBMITTED") {
+      return res.status(400).json({
+        message:
+          "Remplacement autorisé uniquement sur une commande soumise (avant facturation).",
+      });
+    }
+
+    const targetItem = (order.items || []).find((it) => it.id === itemId);
+    if (!targetItem) {
+      return res.status(404).json({ message: "Ligne de commande introuvable" });
+    }
+
+    const replacement = await prisma.product.findFirst({
+      where: scopeWhere(req, {
+        id: nextProductId,
+        actif: true,
+      }),
+      select: {
+        id: true,
+        sku: true,
+        nom: true,
+      },
+    });
+
+    if (!replacement) {
+      return res
+        .status(404)
+        .json({ message: "Produit de remplacement introuvable" });
+    }
+
+    if (replacement.id === targetItem.productId) {
+      return res.status(400).json({
+        message: "Le produit de remplacement doit être différent du produit actuel.",
+      });
+    }
+
+    const updatedOrder = await prisma.$transaction(async (tx) => {
+      await tx.preorderItem.update({
+        where: { id: targetItem.id },
+        data: {
+          productId: replacement.id,
+        },
+      });
+
+      const summary = await computePreorderTotals(order.id, order.countryId);
+
+      const refreshedItems = await tx.preorderItem.findMany({
+        where: { preorderId: order.id },
+        orderBy: { createdAt: "asc" },
+      });
+
+      const queuesByProductId = new Map();
+      for (const line of summary.items || []) {
+        const key = String(line.productId);
+        const existing = queuesByProductId.get(key) || [];
+        existing.push(line);
+        queuesByProductId.set(key, existing);
+      }
+
+      for (const dbItem of refreshedItems) {
+        const key = String(dbItem.productId);
+        const queue = queuesByProductId.get(key) || [];
+        if (!queue.length) continue;
+
+        const sameQtyIdx = queue.findIndex(
+          (line) => Number(line.qty || 0) === Number(dbItem.qty || 0),
+        );
+        const matched =
+          sameQtyIdx >= 0 ? queue.splice(sameQtyIdx, 1)[0] : queue.shift();
+        queuesByProductId.set(key, queue);
+        if (!matched) continue;
+
+        await tx.preorderItem.update({
+          where: { id: dbItem.id },
+          data: {
+            productSkuSnapshot: matched.productSkuSnapshot || null,
+            productNameSnapshot: matched.productNameSnapshot || null,
+            prixCatalogueFcfa: matched.prixCatalogueFcfa || 0,
+            discountPercent: String(matched.discountPercent || "0.00"),
+            prixUnitaireFcfa: matched.prixUnitaireFcfa || 0,
+            ccUnitaire: String(Number(matched.ccUnitaire || 0).toFixed(3)),
+            poidsUnitaireKg: String(
+              Number(matched.poidsUnitaireKg || 0).toFixed(3),
+            ),
+            lineTotalFcfa: matched.lineTotalFcfa || 0,
+            lineTotalCc: String(Number(matched.lineTotalCc || 0).toFixed(3)),
+            lineTotalPoids: String(
+              Number(matched.lineTotalPoids || 0).toFixed(3),
+            ),
+          },
+        });
+      }
+
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
+          totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
+          totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
+          fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
+          totalFcfa: summary.totals.totalFcfa || 0,
+          as400InvoiceTotalFcfa: summary.totals.totalFcfa || 0,
+          computedGradeTotalFcfa: summary.totals.totalFcfa || 0,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "BILLING_ITEM_REPLACED",
+        note
+          ? String(note).trim()
+          : "Remplacement produit demandé par facturation",
+        {
+          preorderItemId: targetItem.id,
+          previousProductId: targetItem.productId,
+          previousProductSku: targetItem.productSkuSnapshot || targetItem.product?.sku || null,
+          previousProductName:
+            targetItem.productNameSnapshot || targetItem.product?.nom || null,
+          replacementProductId: replacement.id,
+          replacementProductSku: replacement.sku || null,
+          replacementProductName: replacement.nom || null,
+          qty: targetItem.qty || 0,
+          totalFcfaAfter: summary.totals.totalFcfa || 0,
+        },
+        req.user?.id || null,
+      );
+
+      return tx.preorder.findFirst({
+        where: { id: order.id },
+        include: {
+          items: {
+            include: { product: true },
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+    });
+
+    return res.json({
+      ok: true,
+      message: "Produit remplacé avec succès.",
+      order: updatedOrder,
+    });
+  } catch (e) {
+    console.error("replaceBillingOrderItem error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (replaceBillingOrderItem)" });
+  }
+}
+
 async function prepareOrder(req, res) {
   try {
     const { id } = req.params;
@@ -1447,6 +1626,7 @@ module.exports = {
   updateOrderStatus,
   getInvoicePreview,
   invoiceOrder,
+  replaceBillingOrderItem,
   updatePreparationChecklistItem,
   bulkUpdatePreparationChecklist,
   createPreparationAnomaly,

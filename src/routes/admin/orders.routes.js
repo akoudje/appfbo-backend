@@ -32,6 +32,12 @@ router.post(
 );
 
 router.post(
+  "/:id/billing/items/:itemId/replace",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.replaceBillingOrderItem,
+);
+
+router.post(
   "/:id/prepare",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.prepareOrder,
