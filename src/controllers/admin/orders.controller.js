@@ -5,7 +5,10 @@ const {
   invoiceAndSendPreorder,
   buildInvoicePreview,
 } = require("../../services/invoiceAndSendPreorder.service");
-const { computePreorderTotals } = require("../../services/pricing.service");
+const {
+  computePreorderTotals,
+  computeLineFromProduct,
+} = require("../../services/pricing.service");
 const {
   buildOrderReadySmsMessage,
   buildOrderFulfilledSmsMessage,
@@ -850,46 +853,34 @@ async function replaceBillingOrderItem(req, res) {
     const updatedOrder = await prisma.$transaction(async (tx) => {
       const refreshedItems = await tx.preorderItem.findMany({
         where: { preorderId: order.id },
+        include: { product: true },
         orderBy: { createdAt: "asc" },
       });
 
-      const queuesByProductId = new Map();
-      for (const line of summary.items || []) {
-        const key = String(line.productId);
-        const existing = queuesByProductId.get(key) || [];
-        existing.push(line);
-        queuesByProductId.set(key, existing);
-      }
-
       for (const dbItem of refreshedItems) {
-        const key = String(dbItem.productId);
-        const queue = queuesByProductId.get(key) || [];
-        if (!queue.length) continue;
-
-        const sameQtyIdx = queue.findIndex(
-          (line) => Number(line.qty || 0) === Number(dbItem.qty || 0),
+        const computed = computeLineFromProduct(
+          dbItem.product,
+          dbItem.qty,
+          summary.discountPercent || 0,
         );
-        const matched =
-          sameQtyIdx >= 0 ? queue.splice(sameQtyIdx, 1)[0] : queue.shift();
-        queuesByProductId.set(key, queue);
-        if (!matched) continue;
+        if (!computed) continue;
 
         await tx.preorderItem.update({
           where: { id: dbItem.id },
           data: {
-            productSkuSnapshot: matched.productSkuSnapshot || null,
-            productNameSnapshot: matched.productNameSnapshot || null,
-            prixCatalogueFcfa: matched.prixCatalogueFcfa || 0,
-            discountPercent: String(matched.discountPercent || "0.00"),
-            prixUnitaireFcfa: matched.prixUnitaireFcfa || 0,
-            ccUnitaire: String(Number(matched.ccUnitaire || 0).toFixed(3)),
+            productSkuSnapshot: dbItem.product?.sku || null,
+            productNameSnapshot: dbItem.product?.nom || null,
+            prixCatalogueFcfa: computed.prixCatalogueFcfa || 0,
+            discountPercent: String(computed.discountPercent || "0.00"),
+            prixUnitaireFcfa: computed.prixUnitaireFcfa || 0,
+            ccUnitaire: String(Number(computed.ccUnitaire || 0).toFixed(3)),
             poidsUnitaireKg: String(
-              Number(matched.poidsUnitaireKg || 0).toFixed(3),
+              Number(computed.poidsUnitaireKg || 0).toFixed(3),
             ),
-            lineTotalFcfa: matched.lineTotalFcfa || 0,
-            lineTotalCc: String(Number(matched.lineTotalCc || 0).toFixed(3)),
+            lineTotalFcfa: computed.lineTotalFcfa || 0,
+            lineTotalCc: String(Number(computed.lineTotalCc || 0).toFixed(3)),
             lineTotalPoids: String(
-              Number(matched.lineTotalPoids || 0).toFixed(3),
+              Number(computed.lineTotalPoids || 0).toFixed(3),
             ),
           },
         });
