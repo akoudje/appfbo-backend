@@ -17,18 +17,20 @@ function normalizePhone(raw = "") {
 
 function buildPreorderSmsMessage({ preorder, totals }) {
   const number = preorder?.preorderNumber || "-";
-  const customer = preorder?.fboNomComplet || "";
   const total = Number(totals?.totalFcfa ?? preorder?.totalFcfa ?? 0);
   const totalFmt = new Intl.NumberFormat("fr-FR").format(total);
+  const candidates = [
+    `FOREVER Precommande ${number} enregistree. Total indicatif:${totalFmt}F. Vous recevrez la facture avec les details de paiement.`,
+    `Precommande ${number} enregistree. Total indicatif:${totalFmt}F. La facture vous sera envoyee.`,
+    `Precommande ${number} enregistree. Total:${totalFmt}F.`,
+  ];
 
-  return [
-    `Bonjour ${customer},`,
-    `Votre précommande ${number} est bien enregistrée.`,
-    `Montant indicatif actuel: ${totalFmt} FCFA.`,
-    "Les prix affichés n'incluent pas les taxes.",
-    "Le montant final de votre facture sera confirmé par le facturier selon les informations AS400.",
-    "Nous vous contacterons pour la suite.",
-  ].join(" ");
+  for (const raw of candidates) {
+    const text = String(raw || "").replace(/\s+/g, " ").trim();
+    if (text.length <= MAX_SMS_LENGTH) return text;
+  }
+
+  return String(candidates[0]).slice(0, MAX_SMS_LENGTH);
 }
 
 function orangeConfigured() {

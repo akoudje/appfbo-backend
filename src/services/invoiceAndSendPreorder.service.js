@@ -14,6 +14,7 @@ const prisma = require("../prisma");
 const whatsappService = require("./whatsapp.service");
 const paymentsService = require("../payments/payments.service");
 const { sendSms } = require("./sms.service");
+const { MAX_SMS_LENGTH } = require("./sms.orange.service");
 const { computePreorderTotalsForGrade } = require("./pricing.service");
 const { computePaymentPricing } = require("../payments/payment-pricing");
 
@@ -132,6 +133,21 @@ function normalizeAdjustmentReason(value) {
   return normalized || null;
 }
 
+function compactText(value = "") {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstSmsCandidate(candidates = [], maxLength = MAX_SMS_LENGTH) {
+  for (const raw of candidates) {
+    const candidate = compactText(raw);
+    if (!candidate) continue;
+    if (candidate.length <= maxLength) return candidate;
+  }
+  return compactText(candidates[0] || "").slice(0, maxLength);
+}
+
 async function buildInvoicePreview({
   preorderId,
   billingGradeInput = "",
@@ -209,40 +225,36 @@ function buildInvoiceMessage({
   serviceFeeRatePercent = 0,
 }) {
   const payableAmount = Number(amountToPayFcfa ?? preorder.totalFcfa ?? 0);
+  const ref = compactText(invoiceRef || preorder?.factureReference || "-")
+    .replace(/\s+/g, "")
+    .slice(0, 24);
+  const amountFmt = new Intl.NumberFormat("fr-FR").format(
+    Math.max(0, Math.round(payableAmount || 0)),
+  );
+  const normalizedLink = compactText(paymentLink || "");
+  const normalizedMode = String(
+    preorder?.preorderPaymentMode ||
+      preorder?.paymentMode ||
+      preorder?.paymentProvider ||
+      "",
+  )
+    .trim()
+    .toUpperCase();
+  const isCashFlow = normalizedMode.includes("ESPE") || normalizedMode === "MANUAL";
 
-  if (typeof whatsappService.buildInvoiceWhatsAppMessage === "function") {
-    return whatsappService.buildInvoiceWhatsAppMessage({
-      customerName: preorder.fboNomComplet || preorder.fbo?.nomComplet || "",
-      fboNumero: preorder.fboNumero,
-      invoiceRef,
-      totalFcfa: payableAmount,
-      paymentLink: paymentLink || null,
-      paymentMode:
-        preorder.preorderPaymentMode ||
-        preorder.paymentMode ||
-        preorder.paymentProvider ||
-        null,
-      note: note || "",
-    });
+  if (normalizedLink && !isCashFlow) {
+    return firstSmsCandidate([
+      `FOREVER Ref:${ref} Total:${amountFmt}F Lien:${normalizedLink}`,
+      `Ref:${ref} Total:${amountFmt}F ${normalizedLink}`,
+      `Ref:${ref} ${normalizedLink}`,
+    ]);
   }
 
-  return [
-    `Bonjour ${preorder.fboNomComplet || ""},`,
-    "",
-    "Votre précommande FOREVER a été facturée.",
-    `Référence facture : ${invoiceRef}`,
-    `Montant commande : ${preorder.totalFcfa} FCFA`,
-    paymentServiceFeeFcfa > 0
-      ? `Frais de service ${serviceFeeRatePercent}% : ${paymentServiceFeeFcfa} FCFA`
-      : null,
-    `Montant final à payer : ${payableAmount} FCFA`,
-    paymentLink ? `Lien de paiement : ${paymentLink}` : null,
-    note ? `Note : ${note}` : null,
-    "",
-    "Merci.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return firstSmsCandidate([
+    `FOREVER Ref:${ref} Total:${amountFmt}F Paiement en caisse FLP.`,
+    `Ref:${ref} Total:${amountFmt}F Paiement caisse.`,
+    `Ref:${ref} Facture disponible.`,
+  ]);
 }
 
 /**
@@ -452,17 +464,6 @@ async function invoiceAndSendPreorder({
     serviceFeeRatePercent: paymentPricing.serviceFeeRatePercent,
   });
 
-  if (paymentLink && !String(whatsappMessage || "").includes(paymentLink)) {
-    whatsappMessage = [
-      String(whatsappMessage || "").trim(),
-      "",
-      "Lien de paiement Wave :",
-      paymentLink,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
   // 🔍 Logs déplacés ici (correct)
   console.log("[invoiceAndSendPreorder] messagePurpose =", messagePurpose);
   console.log("[invoiceAndSendPreorder] body to save =", whatsappMessage);
@@ -593,6 +594,7 @@ async function invoiceAndSendPreorder({
 module.exports = {
   invoiceAndSendPreorder,
   generateInvoiceRef,
+  buildInvoiceMessage,
   buildInvoicePreview,
   computePaymentPricing,
   normalizeInvoiceAmountOverride,

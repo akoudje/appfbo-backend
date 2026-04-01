@@ -4,6 +4,7 @@ const { AdminRole } = require("../../auth/permissions");
 
 const {
   invoiceAndSendPreorder,
+  buildInvoiceMessage,
   buildInvoicePreview,
 } = require("../../services/invoiceAndSendPreorder.service");
 const {
@@ -994,6 +995,12 @@ async function resendInvoiceSms(req, res) {
         id: true,
         preorderNumber: true,
         status: true,
+        fboNomComplet: true,
+        fboNumero: true,
+        factureReference: true,
+        totalFcfa: true,
+        preorderPaymentMode: true,
+        paymentProvider: true,
         factureWhatsappTo: true,
         whatsappMessage: true,
       },
@@ -1013,12 +1020,22 @@ async function resendInvoiceSms(req, res) {
         id: true,
         body: true,
         toPhone: true,
+        paymentLinkTarget: true,
+        paymentLinkTracked: true,
       },
     });
 
-    const smsBody =
-      String(order.whatsappMessage || "").trim() ||
-      String(latestMessage?.body || "").trim();
+    const paymentLink = String(
+      latestMessage?.paymentLinkTracked ||
+        latestMessage?.paymentLinkTarget ||
+        "",
+    ).trim();
+    const smsBody = buildInvoiceMessage({
+      preorder: order,
+      invoiceRef: order.factureReference || order.preorderNumber || "-",
+      paymentLink: paymentLink || null,
+      amountToPayFcfa: order.totalFcfa || 0,
+    });
     const destination =
       String(order.factureWhatsappTo || "").trim() ||
       String(latestMessage?.toPhone || "").trim();
