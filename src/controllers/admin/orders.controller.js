@@ -1,5 +1,6 @@
 const prisma = require("../../prisma");
 const { generateParcelNumber } = require("../../helpers/parcel-number");
+const { AdminRole } = require("../../auth/permissions");
 
 const {
   invoiceAndSendPreorder,
@@ -97,6 +98,14 @@ function actorLabel(req) {
     req.user?.id ||
     req.user?.role ||
     "admin"
+  );
+}
+
+function isGlobalAdminRole(role) {
+  const normalized = String(role || "").trim().toUpperCase();
+  return (
+    normalized === AdminRole.SUPER_ADMIN ||
+    normalized === AdminRole.TECH_ADMIN
   );
 }
 
@@ -1074,6 +1083,131 @@ async function resendInvoiceSms(req, res) {
   }
 }
 
+async function switchWaveToManualPayment(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!isGlobalAdminRole(req.user?.role)) {
+      return res.status(403).json({
+        message: "Seuls les administrateurs globaux peuvent changer ce mode de paiement.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        status: true,
+        paymentStatus: true,
+        preorderPaymentMode: true,
+        paymentProvider: true,
+        activePaymentId: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const paymentMode = String(order.preorderPaymentMode || "").toUpperCase();
+    const provider = String(order.paymentProvider || "").toUpperCase();
+    const isWave = paymentMode === "WAVE" || provider === "WAVE";
+    if (!isWave) {
+      return res.status(400).json({
+        message: "La commande n'est pas en mode Wave.",
+      });
+    }
+
+    if (["PAID", "READY", "FULFILLED", "CANCELLED"].includes(String(order.status || "").toUpperCase())) {
+      return res.status(400).json({
+        message: "Impossible de changer le mode de paiement sur une commande déjà soldée ou clôturée.",
+      });
+    }
+
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      if (order.activePaymentId) {
+        const active = await tx.payment.findUnique({
+          where: { id: order.activePaymentId },
+          select: { id: true, status: true, cancelledAt: true },
+        });
+        const currentStatus = String(active?.status || "").toUpperCase();
+        if (
+          active &&
+          !["SUCCEEDED", "PAID", "REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED"].includes(
+            currentStatus,
+          )
+        ) {
+          await tx.payment.update({
+            where: { id: active.id },
+            data: {
+              status: "CANCELLED",
+              cancelledAt: active.cancelledAt || now,
+            },
+          });
+        }
+      }
+
+      const nextStatus =
+        String(order.status || "").toUpperCase() === "PAYMENT_PENDING"
+          ? "INVOICED"
+          : order.status;
+
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          preorderPaymentMode: "ESPECES",
+          paymentProvider: "MANUAL",
+          paymentStatus:
+            String(order.paymentStatus || "").toUpperCase() === "PAID"
+              ? order.paymentStatus
+              : "UNPAID",
+          status: nextStatus,
+          activePaymentId: null,
+          paidAt: null,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "WAIT_CUSTOMER_DATA",
+        "Bascule du mode de paiement Wave vers paiement à la caisse",
+        {
+          fromPreorderPaymentMode: order.preorderPaymentMode || null,
+          toPreorderPaymentMode: "ESPECES",
+          fromPaymentProvider: order.paymentProvider || null,
+          toPaymentProvider: "MANUAL",
+          fromStatus: order.status || null,
+          toStatus: nextStatus || null,
+        },
+        req.user?.id || null,
+      );
+    });
+
+    const updated = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: {
+          include: { product: true },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+
+    return res.json({
+      ok: true,
+      message: "Mode de paiement basculé en paiement à la caisse.",
+      order: updated,
+    });
+  } catch (e) {
+    console.error("switchWaveToManualPayment error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (switchWaveToManualPayment)" });
+  }
+}
+
 async function prepareOrder(req, res) {
   try {
     const { id } = req.params;
@@ -1754,6 +1888,7 @@ module.exports = {
   invoiceOrder,
   replaceBillingOrderItem,
   resendInvoiceSms,
+  switchWaveToManualPayment,
   updatePreparationChecklistItem,
   bulkUpdatePreparationChecklist,
   createPreparationAnomaly,

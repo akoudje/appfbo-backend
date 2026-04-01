@@ -44,6 +44,12 @@ router.post(
 );
 
 router.post(
+  "/:id/switch-payment-to-manual",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.switchWaveToManualPayment,
+);
+
+router.post(
   "/:id/prepare",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.prepareOrder,
