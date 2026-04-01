@@ -349,6 +349,7 @@ model CountrySettings {
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
   minCartFcfa Int @default(0)
+  maxQtyPerProduct Int @default(10)
   supportPhone String?
   pickupAddress String? @db.Text
   enableWave Boolean @default(true)

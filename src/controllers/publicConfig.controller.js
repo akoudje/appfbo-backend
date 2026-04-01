@@ -28,6 +28,7 @@ async function getStorefrontConfig(req, res) {
         where: { countryId },
         select: {
           minCartFcfa: true,
+          maxQtyPerProduct: true,
           supportPhone: true,
           pickupAddress: true,
           enableWave: true,
@@ -58,6 +59,7 @@ async function getStorefrontConfig(req, res) {
     return res.json({
       countryCode: req.country?.code || null,
       minCartFcfa: settings?.minCartFcfa ?? 100,
+      maxQtyPerProduct: settings?.maxQtyPerProduct ?? 10,
       supportPhone: settings?.supportPhone ?? null,
       pickupAddress: settings?.pickupAddress ?? null,
       payments: {

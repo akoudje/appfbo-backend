@@ -10,6 +10,7 @@ async function getCountrySettings(req, res) {
         id: true,
         countryId: true,
         minCartFcfa: true,
+        maxQtyPerProduct: true,
         supportPhone: true,
         pickupAddress: true,
         enableWave: true,
@@ -38,6 +39,7 @@ async function getCountrySettings(req, res) {
         countryId,
         countryCode: req.country?.code || null,
         minCartFcfa: 100,
+        maxQtyPerProduct: 10,
         supportPhone: null,
         pickupAddress: null,
         enableWave: true,
@@ -76,6 +78,7 @@ async function updateCountrySettings(req, res) {
     const countryId = pickCountryId(req);
     const {
       minCartFcfa,
+      maxQtyPerProduct,
       supportPhone,
       pickupAddress,
       enableWave,
@@ -103,6 +106,14 @@ async function updateCountrySettings(req, res) {
         return res.status(400).json({ message: "minCartFcfa invalide" });
       }
       data.minCartFcfa = parsed;
+    }
+
+    if (maxQtyPerProduct !== undefined) {
+      const parsed = Number.parseInt(maxQtyPerProduct, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 999) {
+        return res.status(400).json({ message: "maxQtyPerProduct invalide" });
+      }
+      data.maxQtyPerProduct = parsed;
     }
 
     if (maxActiveBillingPerInvoicer !== undefined) {
@@ -179,6 +190,8 @@ async function updateCountrySettings(req, res) {
           countryId,
           minCartFcfa:
             data.minCartFcfa !== undefined ? data.minCartFcfa : 100,
+          maxQtyPerProduct:
+            data.maxQtyPerProduct !== undefined ? data.maxQtyPerProduct : 10,
           supportPhone: data.supportPhone ?? null,
           pickupAddress: data.pickupAddress ?? null,
           enableWave: data.enableWave !== undefined ? data.enableWave : true,
@@ -213,6 +226,7 @@ async function updateCountrySettings(req, res) {
         id: true,
         countryId: true,
         minCartFcfa: true,
+        maxQtyPerProduct: true,
         supportPhone: true,
         pickupAddress: true,
         enableWave: true,

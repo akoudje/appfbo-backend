@@ -237,6 +237,15 @@ async function setItems(req, res) {
 
     const preorder = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id: preorderId }),
+      include: {
+        country: {
+          include: {
+            settings: {
+              select: { maxQtyPerProduct: true },
+            },
+          },
+        },
+      },
     });
 
     if (!preorder) {
@@ -247,10 +256,18 @@ async function setItems(req, res) {
       return res.status(400).json({ error: "Preorder not editable" });
     }
 
+    const maxQtyPerProduct = Math.max(
+      1,
+      Number(preorder?.country?.settings?.maxQtyPerProduct || 10),
+    );
+
     const normalized = items
       .map((it) => ({
         productId: String(it.productId || "").trim(),
-        qty: Math.max(parseInt(it.qty || 0, 10), 0),
+        qty: Math.max(
+          0,
+          Math.min(parseInt(it.qty || 0, 10), maxQtyPerProduct),
+        ),
       }))
       .filter((it) => it.productId && it.qty > 0);
 
