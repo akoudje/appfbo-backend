@@ -1103,6 +1103,7 @@ async function resendInvoiceSms(req, res) {
 async function resendConfirmationSms(req, res) {
   try {
     const { id } = req.params;
+    const globalAdmin = isGlobalAdminRole(req.user?.role);
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
       select: {
@@ -1113,6 +1114,10 @@ async function resendConfirmationSms(req, res) {
         fboNomComplet: true,
         fboNumero: true,
         pickupSecretCode: true,
+        factureReference: true,
+        totalFcfa: true,
+        preorderPaymentMode: true,
+        paymentProvider: true,
         factureWhatsappTo: true,
       },
     });
@@ -1122,7 +1127,7 @@ async function resendConfirmationSms(req, res) {
     }
 
     const normalizedStatus = String(order.status || "").toUpperCase();
-    if (!["READY", "FULFILLED"].includes(normalizedStatus)) {
+    if (!["READY", "FULFILLED"].includes(normalizedStatus) && !globalAdmin) {
       return res.status(400).json({
         message:
           "Le renvoi du SMS de confirmation est disponible uniquement pour les commandes READY ou FULFILLED.",
@@ -1132,16 +1137,49 @@ async function resendConfirmationSms(req, res) {
     const actorName = actorLabel(req);
     const payloadOrder = { ...order };
 
-    const purpose = normalizedStatus === "READY" ? "ORDER_READY" : "REMINDER";
-    const smsMessage =
-      normalizedStatus === "READY"
-        ? buildOrderReadySmsMessage({
-            preorder: payloadOrder,
-            pickupSecretCode: order.pickupSecretCode || "-",
-          })
-        : buildOrderFulfilledSmsMessage({
-            preorder: payloadOrder,
-          });
+    let purpose = normalizedStatus === "READY" ? "ORDER_READY" : "REMINDER";
+    let smsMessage;
+
+    if (normalizedStatus === "READY") {
+      smsMessage = buildOrderReadySmsMessage({
+        preorder: payloadOrder,
+        pickupSecretCode: order.pickupSecretCode || "-",
+      });
+    } else if (normalizedStatus === "FULFILLED") {
+      smsMessage = buildOrderFulfilledSmsMessage({
+        preorder: payloadOrder,
+      });
+    } else {
+      const latestMessage = await prisma.orderMessage.findFirst({
+        where: { preorderId: order.id },
+        orderBy: { createdAt: "desc" },
+        select: {
+          body: true,
+          purpose: true,
+          paymentLinkTracked: true,
+          paymentLinkTarget: true,
+        },
+      });
+
+      purpose = latestMessage?.purpose || "REMINDER";
+      smsMessage =
+        buildInvoiceMessage({
+          preorder: payloadOrder,
+          invoiceRef: order.factureReference || order.preorderNumber || "-",
+          paymentLink:
+            latestMessage?.paymentLinkTracked ||
+            latestMessage?.paymentLinkTarget ||
+            null,
+          amountToPayFcfa: order.totalFcfa || 0,
+        }) ||
+        String(latestMessage?.body || "").trim();
+    }
+
+    if (!String(smsMessage || "").trim()) {
+      return res.status(400).json({
+        message: "Aucun message SMS disponible pour cette commande.",
+      });
+    }
 
     const sendResult = await sendPreorderNotification({
       preorder: payloadOrder,
