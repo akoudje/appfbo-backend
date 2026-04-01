@@ -838,16 +838,16 @@ async function replaceBillingOrderItem(req, res) {
       });
     }
 
+    await prisma.preorderItem.update({
+      where: { id: targetItem.id },
+      data: {
+        productId: replacement.id,
+      },
+    });
+
+    const summary = await computePreorderTotals(order.id, order.countryId);
+
     const updatedOrder = await prisma.$transaction(async (tx) => {
-      await tx.preorderItem.update({
-        where: { id: targetItem.id },
-        data: {
-          productId: replacement.id,
-        },
-      });
-
-      const summary = await computePreorderTotals(order.id, order.countryId);
-
       const refreshedItems = await tx.preorderItem.findMany({
         where: { preorderId: order.id },
         orderBy: { createdAt: "asc" },
@@ -895,7 +895,8 @@ async function replaceBillingOrderItem(req, res) {
         });
       }
 
-      const mustResetInvoiceFlow = String(order.status || "").toUpperCase() !== "SUBMITTED";
+      const mustResetInvoiceFlow =
+        String(order.status || "").toUpperCase() !== "SUBMITTED";
 
       await tx.preorder.update({
         where: { id: order.id },
