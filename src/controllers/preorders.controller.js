@@ -8,9 +8,11 @@ const {
 const {
   buildPreorderSmsMessage,
   normalizePhone,
-  sendSms,
   fetchSmsStatus,
 } = require("../services/sms.service");
+const {
+  sendPreorderNotification,
+} = require("../services/preorder-notifications.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 
@@ -477,21 +479,27 @@ async function submit(req, res) {
       totals: summary.totals,
     });
 
-    const smsResult = await sendSms({
-      to: smsTo,
+    const notificationResult = await sendPreorderNotification({
+      preorder: {
+        ...summary.preorder,
+        factureWhatsappTo: smsTo,
+      },
+      purpose: "INVOICE",
       message: smsMessage,
-      callbackData: preorderId,
+      actorName: "SYSTEM",
+      toPhone: smsTo,
     });
-    console.log("[preorders][submit] sms dispatch result", {
+    console.log("[preorders][submit] notification dispatch result", {
       preorderId,
       smsTo,
-      accepted: smsResult.accepted,
-      provider: smsResult.provider,
-      error: smsResult.errorMessage || null,
+      sent: notificationResult.sent,
+      channel: notificationResult.channel,
+      provider: notificationResult.provider,
+      error: notificationResult.errorMessage || null,
     });
 
-    const persistedMessageStatus = smsResult.accepted ? "SENT" : "FAILED";
-    const uiSmsStatus = smsResult.accepted ? "sent" : "failed";
+    const persistedMessageStatus = notificationResult.sent ? "SENT" : "FAILED";
+    const uiSmsStatus = notificationResult.sent ? "sent" : "failed";
 
     await prisma.$transaction(async (tx) => {
       for (const it of summary.items) {
@@ -539,7 +547,7 @@ async function submit(req, res) {
           whatsappMessage: smsMessage,
           lastWhatsappStatus: persistedMessageStatus,
           lastWhatsappStatusAt: now,
-          lastWhatsappMessageId: smsResult.providerMessageId || null,
+          lastWhatsappMessageId: notificationResult.providerMessageId || null,
           submittedAt: now,
         },
       });
@@ -560,8 +568,10 @@ async function submit(req, res) {
             itemsCount: summary.items.length,
             smsTo,
             smsStatus: uiSmsStatus,
-            smsProvider: smsResult.provider,
-            smsError: smsResult.errorMessage || null,
+            smsProvider: notificationResult.provider,
+            smsError: notificationResult.errorMessage || null,
+            notificationChannel: notificationResult.channel || null,
+            notificationAttempts: notificationResult.attempts || [],
           },
         },
       });
@@ -588,8 +598,10 @@ async function submit(req, res) {
       totals: summary.totals,
       smsTo,
       smsStatus: uiSmsStatus,
-      smsLastError: smsResult.errorMessage || null,
-      smsLastSentAt: smsResult.accepted ? now.toISOString() : null,
+      smsLastError: notificationResult.errorMessage || null,
+      smsLastSentAt: notificationResult.sent ? now.toISOString() : null,
+      notificationChannel: notificationResult.channel || null,
+      notificationAttempts: notificationResult.attempts || [],
     });
   } catch (e) {
     return res.status(500).json({ error: e.message || "Erreur submit" });
@@ -637,21 +649,27 @@ async function notifySms(req, res) {
       });
 
     const now = new Date();
-    const smsResult = await sendSms({
-      to: smsTo,
+    const notificationResult = await sendPreorderNotification({
+      preorder: {
+        ...preorder,
+        factureWhatsappTo: smsTo,
+      },
+      purpose: "REMINDER",
       message: smsMessage,
-      callbackData: preorderId,
+      actorName: "SYSTEM",
+      toPhone: smsTo,
     });
-    console.log("[preorders][notifySms] sms dispatch result", {
+    console.log("[preorders][notifySms] notification dispatch result", {
       preorderId,
       smsTo,
-      accepted: smsResult.accepted,
-      provider: smsResult.provider,
-      error: smsResult.errorMessage || null,
+      sent: notificationResult.sent,
+      channel: notificationResult.channel,
+      provider: notificationResult.provider,
+      error: notificationResult.errorMessage || null,
     });
 
-    const persistedMessageStatus = smsResult.accepted ? "SENT" : "FAILED";
-    const uiSmsStatus = smsResult.accepted ? "sent" : "failed";
+    const persistedMessageStatus = notificationResult.sent ? "SENT" : "FAILED";
+    const uiSmsStatus = notificationResult.sent ? "sent" : "failed";
 
     await prisma.$transaction(async (tx) => {
       await tx.preorder.update({
@@ -661,7 +679,7 @@ async function notifySms(req, res) {
           whatsappMessage: smsMessage,
           lastWhatsappStatus: persistedMessageStatus,
           lastWhatsappStatusAt: now,
-          lastWhatsappMessageId: smsResult.providerMessageId || null,
+          lastWhatsappMessageId: notificationResult.providerMessageId || null,
         },
       });
 
@@ -675,8 +693,10 @@ async function notifySms(req, res) {
           meta: {
             smsTo,
             smsStatus: uiSmsStatus,
-            smsProvider: smsResult.provider,
-            smsError: smsResult.errorMessage || null,
+            smsProvider: notificationResult.provider,
+            smsError: notificationResult.errorMessage || null,
+            notificationChannel: notificationResult.channel || null,
+            notificationAttempts: notificationResult.attempts || [],
           },
         },
       });
@@ -686,8 +706,10 @@ async function notifySms(req, res) {
       preorderId: preorder.id,
       smsTo,
       smsStatus: uiSmsStatus,
-      smsLastError: smsResult.errorMessage || null,
-      smsLastSentAt: smsResult.accepted ? now.toISOString() : null,
+      smsLastError: notificationResult.errorMessage || null,
+      smsLastSentAt: notificationResult.sent ? now.toISOString() : null,
+      notificationChannel: notificationResult.channel || null,
+      notificationAttempts: notificationResult.attempts || [],
     });
   } catch (e) {
     return res.status(500).json({ error: e.message || "Erreur notifySms" });

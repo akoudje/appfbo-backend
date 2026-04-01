@@ -22,7 +22,9 @@ datasource db {
 //
 
 enum OrderMessageChannel {
+  SMS
   WHATSAPP
+  EMAIL
 }
 
 enum OrderMessagePurpose {

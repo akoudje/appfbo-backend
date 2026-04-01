@@ -11,12 +11,11 @@
 // - garantit l'injection du lien de paiement dans le message final
 
 const prisma = require("../prisma");
-const whatsappService = require("./whatsapp.service");
 const paymentsService = require("../payments/payments.service");
-const { sendSms } = require("./sms.service");
 const { MAX_SMS_LENGTH } = require("./sms.orange.service");
 const { computePreorderTotalsForGrade } = require("./pricing.service");
 const { computePaymentPricing } = require("../payments/payment-pricing");
+const { sendPreorderNotification } = require("./preorder-notifications.service");
 
 const BILLING_GRADES = [
   "CLIENT_PRIVILEGIE",
@@ -470,73 +469,30 @@ async function invoiceAndSendPreorder({
 
   console.log("[invoiceAndSendPreorder] paymentLink =", paymentLink);
 
-  // 5) Envoi SMS + logs + mise à jour
-  const finalResult = await prisma.$transaction(async (tx) => {
-    const createdMessage = await tx.orderMessage.create({
-      data: {
-        preorderId: invoicedPreorder.id,
-        purpose: messagePurpose,
-        status: "QUEUED",
-        toPhone: whatsappTo,
-        provider: "ORANGE",
-        paymentLinkTarget: paymentLink,
-        paymentLinkTracked: paymentLink,
-        createdBy: actorName,
-        body: whatsappMessage,
-      },
-    });
+  // 5) Envoi notification (fallback SMS -> WhatsApp -> Email) + logs + mise à jour
+  const notificationResult = await sendPreorderNotification({
+    preorder: {
+      ...invoicedPreorder,
+      factureWhatsappTo: whatsappTo,
+    },
+    purpose: messagePurpose,
+    message: whatsappMessage,
+    actorName,
+    toPhone: whatsappTo,
+    paymentLinkTarget: paymentLink,
+    paymentLinkTracked: paymentLink,
+  });
 
-    let sendResult = {
-      accepted: false,
-      provider: "ORANGE",
-      providerMessageId: null,
-      rawPayload: null,
-      errorCode: "NO_DESTINATION",
-      errorMessage: "Aucun numero de destination disponible pour cette precommande.",
-    };
+  console.log("[invoiceAndSendPreorder] billingMessage =", whatsappMessage);
 
-    if (whatsappTo) {
-      sendResult = await sendSms({
-        to: whatsappTo,
-        message: whatsappMessage,
-        callbackData: invoicedPreorder.id,
-      });
-    }
+  const finalMessageStatus = notificationResult.sent ? "SENT" : "FAILED";
 
-    console.log("[invoiceAndSendPreorder] billingMessage =", whatsappMessage);
-
-    const finalMessageStatus = sendResult.accepted ? "SENT" : "FAILED";
-
-    const savedMessage = await tx.orderMessage.update({
-      where: { id: createdMessage.id },
-      data: {
-        status: finalMessageStatus,
-        provider: sendResult.provider || "ORANGE",
-        providerMessageId: sendResult.providerMessageId || null,
-        sentAt: sendResult.accepted ? now : null,
-        failedAt: sendResult.accepted ? null : now,
-        lastStatusAt: now,
-        errorCode: sendResult.errorCode || null,
-        errorMessage: sendResult.errorMessage || null,
-      },
-    });
-
-    await tx.orderMessageEvent.create({
-      data: {
-        orderMessageId: savedMessage.id,
-        status: finalMessageStatus,
-        rawPayload: sendResult.rawPayload || null,
-        note: sendResult.accepted
-          ? "Message SMS de facturation envoye."
-          : "Echec de l'envoi SMS de facturation.",
-      },
-    });
-
-    const updatedPreorder = await tx.preorder.update({
+  const updatedPreorder = await prisma.$transaction(async (tx) => {
+    const nextPreorder = await tx.preorder.update({
       where: { id: invoicedPreorder.id },
       data: {
         whatsappMessage,
-        lastWhatsappMessageId: savedMessage.id,
+        lastWhatsappMessageId: notificationResult.providerMessageId || null,
         lastWhatsappStatus: finalMessageStatus,
         lastWhatsappStatusAt: now,
         billingLastActivityAt: now,
@@ -546,13 +502,13 @@ async function invoiceAndSendPreorder({
     await createPreorderLog(tx, {
       preorderId: invoicedPreorder.id,
       action: "INVOICE",
-      note: sendResult.accepted
+      note: notificationResult.sent
         ? paymentLink
-          ? "Precommande facturee, paiement Wave initie et SMS envoye."
-          : "Precommande facturee et SMS envoye."
+          ? "Precommande facturee, paiement Wave initie et notification envoyee."
+          : "Precommande facturee et notification envoyee."
         : paymentLink
-          ? "Precommande facturee, paiement Wave initie, mais envoi SMS en echec."
-          : "Precommande facturee, mais envoi SMS en echec.",
+          ? "Precommande facturee, paiement Wave initie, mais echec de notification."
+          : "Precommande facturee, mais echec de notification.",
       meta: {
         invoiceRef,
         whatsappTo,
@@ -566,9 +522,11 @@ async function invoiceAndSendPreorder({
         billingAdjustmentReason,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
-        messageId: savedMessage.id,
+        messageId: notificationResult.messageId || null,
         messagePurpose,
         messageStatus: finalMessageStatus,
+        notificationChannel: notificationResult.channel || null,
+        notificationAttempts: notificationResult.attempts || [],
         actorName,
         paymentLink,
         waveSessionId: null,
@@ -576,17 +534,25 @@ async function invoiceAndSendPreorder({
       actorAdminId,
     });
 
-    return {
-      preorder: updatedPreorder,
-      billingMessage: savedMessage,
-      whatsappStatus: finalMessageStatus,
-      whatsappTo,
-      paymentLinkTarget: paymentLink,
-      trackedPaymentLink: paymentLink,
-      paymentRef: null,
-      paymentPricing,
-    };
+    return nextPreorder;
   });
+
+  const finalResult = {
+    preorder: updatedPreorder,
+    billingMessage: notificationResult.messageId
+      ? await prisma.orderMessage.findUnique({
+          where: { id: notificationResult.messageId },
+        })
+      : null,
+    whatsappStatus: finalMessageStatus,
+    whatsappTo,
+    paymentLinkTarget: paymentLink,
+    trackedPaymentLink: paymentLink,
+    paymentRef: null,
+    paymentPricing,
+    notificationChannel: notificationResult.channel || null,
+    notificationAttempts: notificationResult.attempts || [],
+  };
 
   return finalResult;
 }
