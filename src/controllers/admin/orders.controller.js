@@ -1100,6 +1100,99 @@ async function resendInvoiceSms(req, res) {
   }
 }
 
+async function resendConfirmationSms(req, res) {
+  try {
+    const { id } = req.params;
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        status: true,
+        preorderNumber: true,
+        parcelNumber: true,
+        fboNomComplet: true,
+        fboNumero: true,
+        pickupSecretCode: true,
+        factureWhatsappTo: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const normalizedStatus = String(order.status || "").toUpperCase();
+    if (!["READY", "FULFILLED"].includes(normalizedStatus)) {
+      return res.status(400).json({
+        message:
+          "Le renvoi du SMS de confirmation est disponible uniquement pour les commandes READY ou FULFILLED.",
+      });
+    }
+
+    const actorName = actorLabel(req);
+    const payloadOrder = { ...order };
+
+    const purpose = normalizedStatus === "READY" ? "ORDER_READY" : "REMINDER";
+    const smsMessage =
+      normalizedStatus === "READY"
+        ? buildOrderReadySmsMessage({
+            preorder: payloadOrder,
+            pickupSecretCode: order.pickupSecretCode || "-",
+          })
+        : buildOrderFulfilledSmsMessage({
+            preorder: payloadOrder,
+          });
+
+    const sendResult = await sendPreorderNotification({
+      preorder: payloadOrder,
+      purpose,
+      message: smsMessage,
+      actorName,
+    });
+
+    if (sendResult?.skipped) {
+      return res.status(400).json({
+        message:
+          "Aucun numéro client disponible pour envoyer le SMS de confirmation.",
+      });
+    }
+
+    await prisma.preorderLog.create({
+      data: {
+        preorderId: order.id,
+        action: "WAIT_CUSTOMER_DATA",
+        note: "Renvoi SMS de confirmation",
+        meta: {
+          purpose,
+          sent: Boolean(sendResult?.sent),
+          toPhone: sendResult?.toPhone || null,
+          messageId: sendResult?.messageId || null,
+          providerMessageId: sendResult?.providerMessageId || null,
+          errorCode: sendResult?.errorCode || null,
+          errorMessage: sendResult?.errorMessage || null,
+        },
+        actorAdminId: req.user?.id || null,
+      },
+    });
+
+    return res.json({
+      ok: true,
+      purpose,
+      sent: Boolean(sendResult?.sent),
+      toPhone: sendResult?.toPhone || null,
+      messageId: sendResult?.messageId || null,
+      providerMessageId: sendResult?.providerMessageId || null,
+      errorCode: sendResult?.errorCode || null,
+      errorMessage: sendResult?.errorMessage || null,
+    });
+  } catch (e) {
+    console.error("resendConfirmationSms error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (resendConfirmationSms)" });
+  }
+}
+
 async function switchWaveToManualPayment(req, res) {
   try {
     const { id } = req.params;
@@ -1905,6 +1998,7 @@ module.exports = {
   invoiceOrder,
   replaceBillingOrderItem,
   resendInvoiceSms,
+  resendConfirmationSms,
   switchWaveToManualPayment,
   updatePreparationChecklistItem,
   bulkUpdatePreparationChecklist,

@@ -50,6 +50,12 @@ router.post(
 );
 
 router.post(
+  "/:id/resend-confirmation-sms",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.resendConfirmationSms,
+);
+
+router.post(
   "/:id/prepare",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.prepareOrder,
