@@ -12,6 +12,12 @@ function readIntEnv(name, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function readBoolEnv(name, fallback = false) {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  if (!raw) return fallback;
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 async function seedSuperAdmin(defaultCountryId) {
   const email = process.env.SEED_SUPER_ADMIN_EMAIL || "admin@forverver.ci";
   const passwordRaw = process.env.SEED_SUPER_ADMIN_PASSWORD || "Test1234!";
@@ -83,7 +89,7 @@ async function main() {
     .trim()
     .toUpperCase();
 
-  const minCartFcfa = readIntEnv("DEFAULT_MIN_CART_FCFA", 100);
+  const minCartFcfa = readIntEnv("DEFAULT_MIN_CART_FCFA", 36000);
   const maxActiveBillingPerInvoicer = readIntEnv(
     "DEFAULT_MAX_ACTIVE_BILLING_PER_INVOICER",
     5,
@@ -92,6 +98,7 @@ async function main() {
     "DEFAULT_BILLING_CLAIM_TIMEOUT_MIN",
     15,
   );
+  const forceSettingsUpdate = readBoolEnv("SEED_FORCE_SETTINGS_UPDATE", false);
 
   const countriesToSeed = [
     { code: "CIV", name: "Cote d'Ivoire", currencyCode: "XOF" },
@@ -134,11 +141,13 @@ async function main() {
 
     await prisma.countrySettings.upsert({
       where: { countryId: country.id },
-      update: {
-        minCartFcfa,
-        maxActiveBillingPerInvoicer,
-        billingClaimTimeoutMin,
-      },
+      update: forceSettingsUpdate
+        ? {
+            minCartFcfa,
+            maxActiveBillingPerInvoicer,
+            billingClaimTimeoutMin,
+          }
+        : {},
       create: {
         countryId: country.id,
         minCartFcfa,
