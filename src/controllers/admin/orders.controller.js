@@ -197,9 +197,18 @@ async function listOrders(req, res) {
 
     const where = scopeWhere(req);
     const includeDrafts = String(req.query.includeDrafts) === "true";
+    const includeCancelled = String(req.query.includeCancelled) === "true";
 
-    if (!status && !includeDrafts) {
-      where.status = { not: "DRAFT" };
+    if (!status) {
+      const excludedStatuses = [];
+      if (!includeDrafts) excludedStatuses.push("DRAFT");
+      if (!includeCancelled) excludedStatuses.push("CANCELLED");
+
+      if (excludedStatuses.length === 1) {
+        where.status = { not: excludedStatuses[0] };
+      } else if (excludedStatuses.length > 1) {
+        where.status = { notIn: excludedStatuses };
+      }
     }
 
     if (status) where.status = status;
