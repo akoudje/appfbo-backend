@@ -59,7 +59,11 @@ function attachCountry(req, country) {
 
 async function resolveCountry(req, res, next) {
   try {
-    const countryCode = normalizeCountryCode(req.header("X-Country"));
+    const countryCode = normalizeCountryCode(
+      req.header("X-Country") ||
+        req.query?.country ||
+        req.query?.countryCode,
+    );
     if (!countryCode) return res.status(400).json({ message: "Country required" });
 
     const country = await findCountryByCode(countryCode);

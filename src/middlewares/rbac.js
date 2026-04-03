@@ -18,8 +18,10 @@ function parseJsonHeader(raw) {
 function getBearerToken(req) {
   const raw = req.header("Authorization") || "";
   const [type, token] = raw.split(" ");
-  if (type?.toLowerCase() !== "bearer") return null;
-  return token || null;
+  if (type?.toLowerCase() === "bearer" && token) return token;
+
+  const queryToken = String(req.query?.access_token || "").trim();
+  return queryToken || null;
 }
 
 function parseUserFromJwt(req) {

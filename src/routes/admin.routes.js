@@ -39,6 +39,7 @@ const productsRoutes = require("./admin/products.routes");
 const cashierRoutes = require("./admin/cashier.routes");
 const stockRoutes = require("./admin/stock.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
+const eventsController = require("../controllers/admin/events.controller");
 
 const router = express.Router();
 
@@ -46,6 +47,11 @@ router.use(resolveCountry, requireAuth, requireCountryScope);
 
 router.use("/orders", ordersRoutes);
 router.use("/orders", paymentsRoutes);
+router.get(
+  "/events/stream",
+  requirePermission(Permission.PREORDER_READ),
+  eventsController.stream,
+);
 
 // alias "preorders" pour compatibilite
 router.get(

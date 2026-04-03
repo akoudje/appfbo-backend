@@ -6,6 +6,7 @@ const {
   buildPreparationStartedSmsMessage,
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
+const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 
 function normalizeDateStart(value) {
   if (!value) return null;
@@ -525,6 +526,16 @@ async function launchPreparation(req, res) {
       console.error("launchPreparation sms error:", smsError);
     }
 
+    publishRealtimeEvent({
+      countryId: order.countryId || req.countryId,
+      eventKey: "preparation_queue_new",
+      orderId: order.id,
+      meta: {
+        status: "PAID",
+        preparationLaunchedAt: now.toISOString(),
+      },
+    });
+
     return res.json({
       ok: true,
       order: updatedOrder,
@@ -536,6 +547,7 @@ async function launchPreparation(req, res) {
     });
   }
 }
+
 
 module.exports = {
   getWorkspace,

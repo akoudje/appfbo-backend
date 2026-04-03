@@ -13,6 +13,7 @@ const {
 const {
   sendPreorderNotification,
 } = require("../services/preorder-notifications.service");
+const { publishRealtimeEvent } = require("../services/realtime-events.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 
@@ -346,6 +347,16 @@ async function setItems(req, res) {
           },
         },
       });
+    });
+
+    publishRealtimeEvent({
+      countryId: req.countryId,
+      eventKey: "billing_queue_new",
+      orderId: preorderId,
+      meta: {
+        status: "SUBMITTED",
+        billingWorkStatus: "QUEUED",
+      },
     });
 
     return res.json({

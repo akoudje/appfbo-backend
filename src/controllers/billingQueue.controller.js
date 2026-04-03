@@ -2,6 +2,7 @@
 // Contrôleur pour gérer la file de précommandes à facturer
 
 const billingQueueService = require("../services/billingQueue.service");
+const { publishRealtimeEvent } = require("../services/realtime-events.service");
 
 async function claimNext(req, res) {
   try {
@@ -65,6 +66,15 @@ async function releaseWork(req, res) {
       reason,
     });
 
+    publishRealtimeEvent({
+      countryId,
+      eventKey: "billing_queue_new",
+      orderId: id,
+      meta: {
+        billingWorkStatus: "RELEASED",
+      },
+    });
+
     return res.json(result);
   } catch (e) {
     console.error("releaseWork error:", e);
@@ -88,6 +98,15 @@ async function escalateWork(req, res) {
       userId,
       countryId,
       reason,
+    });
+
+    publishRealtimeEvent({
+      countryId,
+      eventKey: "billing_escalated_new",
+      orderId: id,
+      meta: {
+        billingWorkStatus: "ESCALATED",
+      },
     });
 
     return res.json(result);

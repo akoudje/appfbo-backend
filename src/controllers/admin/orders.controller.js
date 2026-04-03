@@ -16,6 +16,7 @@ const {
   buildOrderFulfilledSmsMessage,
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
+const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 
 const {
   scopeWhere,
@@ -739,6 +740,16 @@ async function invoiceOrder(req, res) {
       billingGradeInput: fboGrade,
       invoiceAmountOverrideInput: invoiceAmountFcfa,
       billingAdjustmentReasonInput: billingAdjustmentReason,
+    });
+
+    publishRealtimeEvent({
+      countryId: result?.preorder?.countryId || req.countryId,
+      eventKey: "cashier_collect_new",
+      orderId: result?.preorder?.id || id,
+      meta: {
+        status: result?.preorder?.status || "INVOICED",
+        paymentStatus: result?.preorder?.paymentStatus || null,
+      },
     });
 
     return res.json(result.preorder);

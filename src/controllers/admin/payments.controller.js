@@ -1,5 +1,6 @@
 const prisma = require("../../prisma");
 const { scopeWhere } = require("../../helpers/countryScope");
+const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 
 const ALLOWED = {
   DRAFT: ["CANCELLED"],
@@ -160,6 +161,16 @@ async function markManualPaymentPending(req, res) {
       return saved;
     });
 
+    publishRealtimeEvent({
+      countryId: order.countryId || req.countryId,
+      eventKey: "cashier_launch_new",
+      orderId: order.id,
+      meta: {
+        status: "PAID",
+        paymentStatus: "PAID",
+      },
+    });
+
     return res.json(updated);
   } catch (e) {
     console.error("markManualPaymentPending error:", e);
@@ -256,6 +267,16 @@ async function validateManualPayment(req, res) {
       });
 
       return saved;
+    });
+
+    publishRealtimeEvent({
+      countryId: order.countryId || req.countryId,
+      eventKey: "cashier_launch_new",
+      orderId: order.id,
+      meta: {
+        status: "PAID",
+        paymentStatus: "PAID",
+      },
     });
 
     return res.json(updated);
