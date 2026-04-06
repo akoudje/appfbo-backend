@@ -6,8 +6,15 @@ const router = express.Router();
 
 const paymentsController = require("../payments/payments.controller");
 const { orangeSmsDlrWebhook } = require("../controllers/smsWebhook.controller");
+const { createRateLimiter } = require("../middlewares/rateLimit");
 
-router.post("/wave", paymentsController.waveWebhook);
-router.post("/orange-sms/dlr", orangeSmsDlrWebhook);
+const genericWebhookLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 240,
+  keyPrefix: "public-webhook",
+});
+
+router.post("/wave", genericWebhookLimiter, paymentsController.waveWebhook);
+router.post("/orange-sms/dlr", genericWebhookLimiter, orangeSmsDlrWebhook);
 
 module.exports = router;

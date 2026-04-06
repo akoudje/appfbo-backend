@@ -27,6 +27,13 @@ function normalizeNumeroFbo(v) {
   return String(v || "").trim();
 }
 
+function normalizeEmail(v = "") {
+  const email = String(v || "").trim().toLowerCase();
+  if (!email) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "__INVALID_EMAIL__";
+  return email;
+}
+
 function mapSmsStatus(rawStatus) {
   const s = String(rawStatus || "").trim().toUpperCase();
   if (["SENT", "DELIVERED", "READ"].includes(s)) return "sent";
@@ -65,6 +72,7 @@ async function createDraft(req, res) {
     const {
       numeroFbo,
       nomComplet,
+      email,
       grade,
       pointDeVente,
       paymentMode = null,
@@ -86,6 +94,14 @@ async function createDraft(req, res) {
     const normalizedNomComplet = String(nomComplet).trim().toUpperCase();
     const normalizedPointDeVente = String(pointDeVente).trim().toUpperCase();
     const normalizedGrade = String(grade || "").trim().toUpperCase();
+    const hasEmailField = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
+    const normalizedEmail = normalizeEmail(email);
+
+    if (normalizedEmail === "__INVALID_EMAIL__") {
+      return res.status(400).json({
+        error: "Format email invalide",
+      });
+    }
 
     const normalizedPaymentMode = paymentMode
       ? String(paymentMode).trim().toUpperCase()
@@ -114,12 +130,14 @@ async function createDraft(req, res) {
       where: { numeroFbo: normalizedNumeroFbo },
       update: {
         nomComplet: normalizedNomComplet,
+        ...(hasEmailField ? { email: normalizedEmail } : {}),
         grade: normalizedGrade,
         pointDeVente: normalizedPointDeVente,
       },
       create: {
         numeroFbo: normalizedNumeroFbo,
         nomComplet: normalizedNomComplet,
+        email: normalizedEmail,
         grade: normalizedGrade,
         pointDeVente: normalizedPointDeVente,
       },
@@ -152,6 +170,7 @@ async function createDraft(req, res) {
           fboId: fbo.id,
           fboNumero: fbo.numeroFbo,
           fboNomComplet: fbo.nomComplet,
+          fboEmail: fbo.email || null,
           fboGrade: fbo.grade,
           pointDeVente: fbo.pointDeVente,
 
@@ -176,6 +195,7 @@ async function createDraft(req, res) {
           meta: {
             fboId: fbo.id,
             numeroFbo: fbo.numeroFbo,
+            email: fbo.email || null,
             preorderPaymentMode: normalizedPaymentMode,
             deliveryMode: normalizedDeliveryMode,
             preorderNumber,

@@ -20,6 +20,11 @@ function getBearerToken(req) {
   const [type, token] = raw.split(" ");
   if (type?.toLowerCase() === "bearer" && token) return token;
 
+  // Désactivé par défaut en production (risque de fuite via logs/proxy).
+  if (String(process.env.ALLOW_QUERY_TOKEN_AUTH || "").toLowerCase() !== "true") {
+    return null;
+  }
+
   const queryToken = String(req.query?.access_token || "").trim();
   return queryToken || null;
 }
@@ -48,6 +53,11 @@ function parseUserFromJwt(req) {
 }
 
 function parseUserFromHeaders(req) {
+  // Fallback legacy strictement opt-in (dev only).
+  if (String(process.env.ALLOW_HEADER_AUTH || "").toLowerCase() !== "true") {
+    return null;
+  }
+
   const headerUser = parseJsonHeader(req.header("X-Admin-User"));
   if (headerUser && headerUser.role) return headerUser;
 
@@ -81,7 +91,7 @@ function requireAuth(req, res, next) {
     return next();
   }
 
-  // 2) fallback headers (transition)
+  // 2) fallback headers (transition, uniquement si explicitement autorisé)
   const headerUser = parseUserFromHeaders(req);
   if (!headerUser) return res.status(401).json({ message: "Unauthorized" });
 

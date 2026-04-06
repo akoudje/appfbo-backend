@@ -19,6 +19,30 @@ const smsRoutes = require("./routes/sms.routes");
 
 
 const app = express();
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+
+app.use((req, res, next) => {
+  const rid =
+    req.get("x-request-id") ||
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  req.requestId = rid;
+  res.setHeader("X-Request-Id", rid);
+  next();
+});
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  // HSTS activé si l'app est exposée en HTTPS via reverse-proxy.
+  if (String(req.protocol || "").toLowerCase() === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  }
+  next();
+});
 
 /* =========================================================
    CORS
@@ -62,7 +86,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Country"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Country", "X-Request-Id"],
 };
 
 app.use(cors(corsOptions));
@@ -128,8 +152,25 @@ app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 app.use((req, res) => res.status(404).json({ error: "Not Found" }));
 
 app.use((err, req, res, next) => {
-  console.error("Server error:", err);
-  res.status(500).json({ error: err.message || "Server Error" });
+  console.error("Server error:", {
+    requestId: req.requestId || null,
+    method: req.method,
+    path: req.originalUrl,
+    message: err?.message || "Unknown error",
+  });
+
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd) {
+    return res.status(500).json({
+      error: "Internal Server Error",
+      requestId: req.requestId || null,
+    });
+  }
+
+  return res.status(500).json({
+    error: err.message || "Server Error",
+    requestId: req.requestId || null,
+  });
 });
 
 /* =========================================================

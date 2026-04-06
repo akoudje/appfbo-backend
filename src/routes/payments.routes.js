@@ -7,6 +7,13 @@ const router = express.Router();
 const paymentsController = require("../payments/payments.controller");
 const { requireAuth } = require("../middlewares/rbac");
 const { resolveCountry } = require("../middlewares/resolveCountry");
+const { createRateLimiter } = require("../middlewares/rateLimit");
+
+const webhookLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 240,
+  keyPrefix: "wave-webhook",
+});
 
 router.get(
   "/wave/public/:orderId/context",
@@ -59,6 +66,7 @@ router.get(
 // Provider webhook
 router.post(
   "/wave/webhook",
+  webhookLimiter,
   paymentsController.waveWebhook
 );
 

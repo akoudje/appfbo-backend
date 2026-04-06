@@ -3,15 +3,24 @@
 const express = require("express");
 const { adminLogin, adminMe, seedSuperAdmin } = require("../controllers/adminAuth.controller");
 const { requireAuth } = require("../middlewares/rbac");
+const { createRateLimiter } = require("../middlewares/rateLimit");
 
 const router = express.Router();
 
-router.post("/login", adminLogin);
+const authLoginLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  keyPrefix: "admin-login",
+});
+
+router.post("/login", authLoginLimiter, adminLogin);
 
 // GET /me (protégé)
 router.get("/me", requireAuth, adminMe);
 
-// OPTIONNEL: bootstrap, à désactiver après usage
-router.post("/seed-super-admin", seedSuperAdmin);
+// OPTIONNEL: bootstrap, désactivé par défaut en production
+if (String(process.env.ENABLE_SEED_SUPER_ADMIN || "").toLowerCase() === "true") {
+  router.post("/seed-super-admin", seedSuperAdmin);
+}
 
 module.exports = router;

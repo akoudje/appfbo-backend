@@ -311,6 +311,7 @@ model Fbo {
   id           String @id @default(cuid())
   numeroFbo    String @unique
   nomComplet   String
+  email        String?
   grade        Grade
   pointDeVente String
 
@@ -542,6 +543,7 @@ model Preorder {
   // Snapshot FBO
   fboNumero     String
   fboNomComplet String
+  fboEmail      String?
   fboGrade      Grade
   billingGrade  Grade?
   pointDeVente  String
