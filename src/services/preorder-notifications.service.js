@@ -253,17 +253,24 @@ async function sendPreorderNotification({
   const resolvedPhone = toPhone || resolveNotificationPhone(preorder);
   const resolvedWhatsapp = toWhatsapp || resolvedPhone;
   const resolvedEmail = resolveNotificationEmail(preorder, toEmail);
-  const channels = [
-    { channel: "SMS", to: resolvedPhone },
-    { channel: "WHATSAPP", to: resolvedWhatsapp },
-    { channel: "EMAIL", to: resolvedEmail },
-  ];
+
+  const hasSmsIntent = Boolean(resolvedPhone);
+  const channels = hasSmsIntent
+    ? [
+        { channel: "SMS", to: resolvedPhone },
+        { channel: "EMAIL", to: resolvedEmail },
+      ]
+    : [
+        { channel: "WHATSAPP", to: resolvedWhatsapp },
+        { channel: "EMAIL", to: resolvedEmail },
+      ];
 
   if (!resolvedPhone && !resolvedWhatsapp && !resolvedEmail) {
     return { sent: false, skipped: true, reason: "NO_DESTINATION" };
   }
 
   const attempts = [];
+  let firstSuccess = null;
   for (const item of channels) {
     if (!item.to) continue;
 
@@ -299,22 +306,40 @@ async function sendPreorderNotification({
       errorMessage: sendResult.errorMessage || null,
     };
     attempts.push(attempt);
-
-    if (sendResult.accepted) {
-      return {
-        sent: true,
-        skipped: false,
+    if (sendResult.accepted && !firstSuccess) {
+      firstSuccess = {
         channel: item.channel,
         toPhone: item.channel === "EMAIL" ? null : item.to,
         toEmail: item.channel === "EMAIL" ? item.to : null,
         messageId: savedMessage.id,
         provider: sendResult.provider || null,
         providerMessageId: sendResult.providerMessageId || null,
-        errorCode: null,
-        errorMessage: null,
-        attempts,
       };
     }
+  }
+
+  const smsSent = attempts.some((a) => a.channel === "SMS" && a.sent);
+  const whatsappSent = attempts.some((a) => a.channel === "WHATSAPP" && a.sent);
+  const emailSent = attempts.some((a) => a.channel === "EMAIL" && a.sent);
+  const anySent = attempts.some((a) => a.sent);
+
+  if (anySent) {
+    return {
+      sent: true,
+      skipped: false,
+      channel: firstSuccess?.channel || null,
+      toPhone: firstSuccess?.toPhone || resolvedPhone || null,
+      toEmail: firstSuccess?.toEmail || resolvedEmail || null,
+      messageId: firstSuccess?.messageId || null,
+      provider: firstSuccess?.provider || null,
+      providerMessageId: firstSuccess?.providerMessageId || null,
+      errorCode: null,
+      errorMessage: null,
+      attempts,
+      smsSent,
+      whatsappSent,
+      emailSent,
+    };
   }
 
   return {
@@ -331,6 +356,9 @@ async function sendPreorderNotification({
       attempts[attempts.length - 1]?.errorMessage ||
       "Toutes les tentatives de notification ont échoué.",
     attempts,
+    smsSent: false,
+    whatsappSent: false,
+    emailSent: false,
   };
 }
 

@@ -520,17 +520,20 @@ async function submit(req, res) {
       actorName: "SYSTEM",
       toPhone: smsTo,
     });
+    const smsDispatched = Boolean(notificationResult?.smsSent);
     console.log("[preorders][submit] notification dispatch result", {
       preorderId,
       smsTo,
       sent: notificationResult.sent,
+      smsSent: smsDispatched,
+      emailSent: Boolean(notificationResult?.emailSent),
       channel: notificationResult.channel,
       provider: notificationResult.provider,
       error: notificationResult.errorMessage || null,
     });
 
-    const persistedMessageStatus = notificationResult.sent ? "SENT" : "FAILED";
-    const uiSmsStatus = notificationResult.sent ? "sent" : "failed";
+    const persistedMessageStatus = smsDispatched ? "SENT" : "FAILED";
+    const uiSmsStatus = smsDispatched ? "sent" : "failed";
 
     await prisma.$transaction(async (tx) => {
       for (const it of summary.items) {
@@ -630,7 +633,7 @@ async function submit(req, res) {
       smsTo,
       smsStatus: uiSmsStatus,
       smsLastError: notificationResult.errorMessage || null,
-      smsLastSentAt: notificationResult.sent ? now.toISOString() : null,
+      smsLastSentAt: smsDispatched ? now.toISOString() : null,
       notificationChannel: notificationResult.channel || null,
       notificationAttempts: notificationResult.attempts || [],
     });
@@ -690,17 +693,20 @@ async function notifySms(req, res) {
       actorName: "SYSTEM",
       toPhone: smsTo,
     });
+    const smsDispatched = Boolean(notificationResult?.smsSent);
     console.log("[preorders][notifySms] notification dispatch result", {
       preorderId,
       smsTo,
       sent: notificationResult.sent,
+      smsSent: smsDispatched,
+      emailSent: Boolean(notificationResult?.emailSent),
       channel: notificationResult.channel,
       provider: notificationResult.provider,
       error: notificationResult.errorMessage || null,
     });
 
-    const persistedMessageStatus = notificationResult.sent ? "SENT" : "FAILED";
-    const uiSmsStatus = notificationResult.sent ? "sent" : "failed";
+    const persistedMessageStatus = smsDispatched ? "SENT" : "FAILED";
+    const uiSmsStatus = smsDispatched ? "sent" : "failed";
 
     await prisma.$transaction(async (tx) => {
       await tx.preorder.update({
@@ -718,7 +724,7 @@ async function notifySms(req, res) {
         data: {
           preorderId: preorder.id,
           action: "PAYMENT_PENDING",
-          note: notificationResult.sent
+          note: smsDispatched
             ? "SMS renvoyé"
             : "Échec du renvoi SMS",
           meta: {
@@ -738,7 +744,7 @@ async function notifySms(req, res) {
       smsTo,
       smsStatus: uiSmsStatus,
       smsLastError: notificationResult.errorMessage || null,
-      smsLastSentAt: notificationResult.sent ? now.toISOString() : null,
+      smsLastSentAt: smsDispatched ? now.toISOString() : null,
       notificationChannel: notificationResult.channel || null,
       notificationAttempts: notificationResult.attempts || [],
     });

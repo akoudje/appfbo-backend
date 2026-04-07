@@ -1085,6 +1085,7 @@ async function resendInvoiceSms(req, res) {
       message: smsBody,
       actorName,
     });
+    const smsDispatched = Boolean(sendResult?.smsSent);
 
     await prisma.$transaction(async (tx) => {
       await tx.preorder.update({
@@ -1092,7 +1093,7 @@ async function resendInvoiceSms(req, res) {
         data: {
           factureWhatsappTo: destination,
           whatsappMessage: smsBody,
-          lastWhatsappStatus: sendResult?.sent ? "SENT" : "FAILED",
+          lastWhatsappStatus: smsDispatched ? "SENT" : "FAILED",
           lastWhatsappStatusAt: now,
           lastWhatsappMessageId: sendResult?.providerMessageId || null,
         },
@@ -1232,11 +1233,12 @@ async function resendConfirmationSms(req, res) {
     }
 
     const now = new Date();
+    const smsDispatched = Boolean(sendResult?.smsSent);
     await prisma.$transaction(async (tx) => {
       await tx.preorder.update({
         where: { id: order.id },
         data: {
-          lastWhatsappStatus: sendResult?.sent ? "SENT" : "FAILED",
+          lastWhatsappStatus: smsDispatched ? "SENT" : "FAILED",
           lastWhatsappStatusAt: now,
           lastWhatsappMessageId: sendResult?.providerMessageId || null,
         },

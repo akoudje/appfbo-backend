@@ -485,7 +485,7 @@ async function invoiceAndSendPreorder({
 
   console.log("[invoiceAndSendPreorder] billingMessage =", whatsappMessage);
 
-  const finalMessageStatus = notificationResult.sent ? "SENT" : "FAILED";
+  const finalMessageStatus = notificationResult?.smsSent ? "SENT" : "FAILED";
 
   const updatedPreorder = await prisma.$transaction(async (tx) => {
     const nextPreorder = await tx.preorder.update({
@@ -502,13 +502,13 @@ async function invoiceAndSendPreorder({
     await createPreorderLog(tx, {
       preorderId: invoicedPreorder.id,
       action: "INVOICE",
-      note: notificationResult.sent
+      note: notificationResult?.smsSent
         ? paymentLink
-          ? "Precommande facturee, paiement Wave initie et notification envoyee."
-          : "Precommande facturee et notification envoyee."
+          ? "Precommande facturee, paiement Wave initie et SMS envoye."
+          : "Precommande facturee et SMS envoye."
         : paymentLink
-          ? "Precommande facturee, paiement Wave initie, mais echec de notification."
-          : "Precommande facturee, mais echec de notification.",
+          ? "Precommande facturee, paiement Wave initie, mais echec SMS."
+          : "Precommande facturee, mais echec SMS.",
       meta: {
         invoiceRef,
         whatsappTo,
