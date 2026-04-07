@@ -1,8 +1,17 @@
 // src/services/email.service.js
 //
-// Service email minimaliste:
-// - mode "non configure" explicite (pas de faux positifs)
-// - mode simulation optionnel via EMAIL_SIMULATE=true
+// Provider SMTP réel (Brevo/SendGrid/SMTP classique) + mode simulation optionnel.
+
+let nodemailer = null;
+try {
+  // eslint-disable-next-line global-require
+  nodemailer = require("nodemailer");
+} catch (_) {
+  nodemailer = null;
+}
+
+let transporter = null;
+let cachedTransportConfigKey = null;
 
 function normalizeEmail(value = "") {
   const email = String(value || "").trim().toLowerCase();
@@ -11,8 +20,83 @@ function normalizeEmail(value = "") {
   return email;
 }
 
-function emailConfigured() {
-  return String(process.env.EMAIL_SIMULATE || "").trim().toLowerCase() === "true";
+function parseBool(value, fallback = false) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
+
+function emailSimulateEnabled() {
+  return parseBool(process.env.EMAIL_SIMULATE, false);
+}
+
+function getSmtpConfig() {
+  const host = String(process.env.SMTP_HOST || "").trim();
+  const portRaw = String(process.env.SMTP_PORT || "").trim();
+  const user = String(process.env.SMTP_USER || "").trim();
+  const pass = String(process.env.SMTP_PASS || "").trim();
+  const secure = parseBool(process.env.SMTP_SECURE, false);
+  const requireTls = parseBool(process.env.SMTP_REQUIRE_TLS, false);
+
+  const port = Number.parseInt(portRaw || (secure ? "465" : "587"), 10);
+
+  return {
+    host,
+    port: Number.isFinite(port) ? port : secure ? 465 : 587,
+    secure,
+    requireTls,
+    user,
+    pass,
+  };
+}
+
+function smtpConfigured() {
+  const cfg = getSmtpConfig();
+  return Boolean(cfg.host && cfg.user && cfg.pass && cfg.port);
+}
+
+function getFromEnvelope() {
+  const fromEmail = normalizeEmail(process.env.SMTP_FROM_EMAIL || "");
+  const fromName = String(process.env.SMTP_FROM_NAME || "FOREVER").trim();
+
+  if (!fromEmail) return null;
+  if (!fromName) return fromEmail;
+  return `${fromName} <${fromEmail}>`;
+}
+
+function getTransportConfigKey(cfg) {
+  return [
+    cfg.host,
+    cfg.port,
+    cfg.secure,
+    cfg.requireTls,
+    cfg.user,
+    Boolean(cfg.pass),
+  ].join("|");
+}
+
+function ensureTransporter() {
+  if (!smtpConfigured()) return null;
+  if (!nodemailer) return null;
+
+  const cfg = getSmtpConfig();
+  const key = getTransportConfigKey(cfg);
+
+  if (transporter && cachedTransportConfigKey === key) return transporter;
+
+  transporter = nodemailer.createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    requireTLS: cfg.requireTls,
+    auth: {
+      user: cfg.user,
+      pass: cfg.pass,
+    },
+  });
+  cachedTransportConfigKey = key;
+
+  return transporter;
 }
 
 async function sendEmail({ to, subject, body, metadata = {} }) {
@@ -28,15 +112,76 @@ async function sendEmail({ to, subject, body, metadata = {} }) {
     };
   }
 
-  if (!emailConfigured()) {
+  const from = getFromEnvelope();
+  if (!from && !emailSimulateEnabled()) {
     return {
       accepted: false,
-      provider: "EMAIL",
+      provider: "SMTP",
+      providerMessageId: null,
+      rawPayload: null,
+      errorCode: "SMTP_FROM_NOT_CONFIGURED",
+      errorMessage: "SMTP_FROM_EMAIL est requis pour l'envoi réel.",
+    };
+  }
+
+  if (smtpConfigured() && nodemailer) {
+    try {
+      const mailer = ensureTransporter();
+      if (!mailer) {
+        throw new Error("SMTP_TRANSPORT_UNAVAILABLE");
+      }
+
+      const messageId = `appfbo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const info = await mailer.sendMail({
+        from,
+        to: normalizedTo,
+        subject: String(subject || "").trim() || "Notification commande FOREVER",
+        text: String(body || ""),
+        headers: {
+          "X-AppFbo-PreorderId": String(metadata?.preorderId || ""),
+          "X-AppFbo-Message-Id": messageId,
+        },
+      });
+
+      return {
+        accepted: true,
+        provider: "SMTP",
+        providerMessageId: info?.messageId || messageId,
+        rawPayload: {
+          envelope: info?.envelope || null,
+          response: info?.response || null,
+          accepted: info?.accepted || [],
+          rejected: info?.rejected || [],
+        },
+        errorCode: null,
+        errorMessage: null,
+      };
+    } catch (error) {
+      return {
+        accepted: false,
+        provider: "SMTP",
+        providerMessageId: null,
+        rawPayload: {
+          name: error?.name || null,
+          code: error?.code || null,
+          response: error?.response || null,
+          responseCode: error?.responseCode || null,
+        },
+        errorCode: error?.code || "SMTP_SEND_FAILED",
+        errorMessage: error?.message || "Échec d'envoi SMTP.",
+      };
+    }
+  }
+
+  if (!emailSimulateEnabled()) {
+    return {
+      accepted: false,
+      provider: "SMTP",
       providerMessageId: null,
       rawPayload: null,
       errorCode: "EMAIL_PROVIDER_NOT_CONFIGURED",
       errorMessage:
-        "Provider email non configuré. Activez EMAIL_SIMULATE=true ou configurez un provider SMTP.",
+        "Provider email non configuré. Définissez SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM_EMAIL.",
     };
   }
 
@@ -65,4 +210,3 @@ module.exports = {
   normalizeEmail,
   sendEmail,
 };
-
