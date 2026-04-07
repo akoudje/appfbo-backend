@@ -21,6 +21,13 @@ function mapDeliveryToPersistedStatus(deliveryStatus) {
   return null;
 }
 
+function mapDeliveryToMessageStatus(deliveryStatus) {
+  if (deliveryStatus === "delivered") return "DELIVERED";
+  if (deliveryStatus === "failed") return "FAILED";
+  if (deliveryStatus === "pending") return "SENT";
+  return null;
+}
+
 function readCallbackPreorderId(rawCallbackData) {
   if (!rawCallbackData) return null;
   const txt = String(rawCallbackData).trim();
@@ -154,6 +161,7 @@ async function orangeSmsDlrWebhook(req, res) {
     }
 
     const persistedStatus = mapDeliveryToPersistedStatus(parsed.deliveryStatus);
+    const messageStatus = mapDeliveryToMessageStatus(parsed.deliveryStatus);
     const now = new Date();
 
     await prisma.$transaction(async (tx) => {
@@ -166,6 +174,59 @@ async function orangeSmsDlrWebhook(req, res) {
             parsed.providerMessageId || undefined,
         },
       });
+
+      let relatedMessage = await tx.orderMessage.findFirst({
+        where: {
+          preorderId: preorder.id,
+          channel: "SMS",
+          ...(parsed.providerMessageId
+            ? { providerMessageId: parsed.providerMessageId }
+            : {}),
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!relatedMessage) {
+        relatedMessage = await tx.orderMessage.findFirst({
+          where: {
+            preorderId: preorder.id,
+            channel: "SMS",
+          },
+          orderBy: { createdAt: "desc" },
+        });
+      }
+
+      if (relatedMessage && messageStatus) {
+        await tx.orderMessage.update({
+          where: { id: relatedMessage.id },
+          data: {
+            status: messageStatus,
+            lastStatusAt: now,
+            deliveredAt:
+              messageStatus === "DELIVERED"
+                ? relatedMessage.deliveredAt || now
+                : relatedMessage.deliveredAt,
+            failedAt:
+              messageStatus === "FAILED"
+                ? relatedMessage.failedAt || now
+                : relatedMessage.failedAt,
+            errorCode: messageStatus === "FAILED" ? "SMS_DELIVERY_FAILED" : null,
+            errorMessage:
+              messageStatus === "FAILED"
+                ? parsed.providerStatus || "Échec de distribution SMS"
+                : null,
+          },
+        });
+
+        await tx.orderMessageEvent.create({
+          data: {
+            orderMessageId: relatedMessage.id,
+            status: messageStatus,
+            rawPayload: parsed.rawPayload || null,
+            note: `Webhook Orange: ${parsed.providerStatus || parsed.deliveryStatus || "unknown"}`,
+          },
+        });
+      }
 
       await tx.preorderLog.create({
         data: {

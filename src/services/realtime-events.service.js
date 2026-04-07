@@ -1,6 +1,20 @@
 const listeners = new Map();
 let nextListenerId = 1;
 
+const stats = {
+  connectedTotal: 0,
+  disconnectedTotal: 0,
+  publishedTotal: 0,
+  deliveredTotal: 0,
+  droppedTotal: 0,
+  lastPublishedAt: null,
+  lastDisconnectAt: null,
+  disconnectReasons: {},
+};
+
+const playbackAuditBuffer = [];
+const MAX_AUDIT_EVENTS = 500;
+
 function sendSse(res, payload, eventName = "message") {
   try {
     if (!res || res.writableEnded || res.destroyed) return false;
@@ -32,6 +46,7 @@ function subscribeRealtimeEvents({ req, res }) {
   res.flushHeaders?.();
 
   listeners.set(listenerId, listener);
+  stats.connectedTotal += 1;
 
   sendSse(
     res,
@@ -44,15 +59,20 @@ function subscribeRealtimeEvents({ req, res }) {
     "connected",
   );
 
-  const cleanup = () => {
+  const cleanup = (reason = "unknown") => {
+    if (!listeners.has(listenerId)) return;
     listeners.delete(listenerId);
+    stats.disconnectedTotal += 1;
+    stats.lastDisconnectAt = new Date().toISOString();
+    const key = String(reason || "unknown").toLowerCase();
+    stats.disconnectReasons[key] = (stats.disconnectReasons[key] || 0) + 1;
   };
 
-  req.on("close", cleanup);
-  req.on("end", cleanup);
-  req.on("error", cleanup);
-  res.on("close", cleanup);
-  res.on("error", cleanup);
+  req.on("close", () => cleanup("req_close"));
+  req.on("end", () => cleanup("req_end"));
+  req.on("error", () => cleanup("req_error"));
+  res.on("close", () => cleanup("res_close"));
+  res.on("error", () => cleanup("res_error"));
 }
 
 function publishRealtimeEvent(event = {}) {
@@ -64,6 +84,8 @@ function publishRealtimeEvent(event = {}) {
     meta: event.meta || null,
     at: event.at || new Date().toISOString(),
   };
+  stats.publishedTotal += 1;
+  stats.lastPublishedAt = payload.at;
 
   for (const [listenerId, listener] of listeners.entries()) {
     if (!listener?.res || listener.res.writableEnded || listener.res.destroyed) {
@@ -82,8 +104,46 @@ function publishRealtimeEvent(event = {}) {
     const ok = sendSse(listener.res, payload, "alert");
     if (!ok) {
       listeners.delete(listenerId);
+      stats.droppedTotal += 1;
+    } else {
+      stats.deliveredTotal += 1;
     }
   }
+}
+
+function recordAlertPlayback(event = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    eventKey: String(event.eventKey || "unknown"),
+    orderId: event.orderId || null,
+    countryId: event.countryId || null,
+    workspace: event.workspace || null,
+    played: Boolean(event.played),
+    reason: event.reason ? String(event.reason) : null,
+    actorAdminId: event.actorAdminId || null,
+  };
+
+  playbackAuditBuffer.unshift(entry);
+  if (playbackAuditBuffer.length > MAX_AUDIT_EVENTS) {
+    playbackAuditBuffer.length = MAX_AUDIT_EVENTS;
+  }
+
+  return entry;
+}
+
+function getRealtimeHealth() {
+  return {
+    activeListeners: listeners.size,
+    listeners: Array.from(listeners.values()).map((item) => ({
+      id: item.id,
+      userId: item.userId,
+      countryId: item.countryId,
+      connectedAt: new Date(item.createdAt).toISOString(),
+      connectedForMs: Math.max(0, Date.now() - Number(item.createdAt || Date.now())),
+    })),
+    stats: { ...stats },
+    recentPlaybackAudit: playbackAuditBuffer.slice(0, 50),
+  };
 }
 
 const heartbeatTimer = setInterval(() => {
@@ -105,4 +165,6 @@ if (typeof heartbeatTimer.unref === "function") {
 module.exports = {
   subscribeRealtimeEvents,
   publishRealtimeEvent,
+  recordAlertPlayback,
+  getRealtimeHealth,
 };

@@ -1075,6 +1075,7 @@ async function resendInvoiceSms(req, res) {
     }
 
     const actorName = actorLabel(req);
+    const now = new Date();
     const sendResult = await sendPreorderNotification({
       preorder: {
         ...order,
@@ -1086,6 +1087,17 @@ async function resendInvoiceSms(req, res) {
     });
 
     await prisma.$transaction(async (tx) => {
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          factureWhatsappTo: destination,
+          whatsappMessage: smsBody,
+          lastWhatsappStatus: sendResult?.sent ? "SENT" : "FAILED",
+          lastWhatsappStatusAt: now,
+          lastWhatsappMessageId: sendResult?.providerMessageId || null,
+        },
+      });
+
       await addLogTx(
         tx,
         order.id,
@@ -1219,24 +1231,36 @@ async function resendConfirmationSms(req, res) {
       });
     }
 
-    await prisma.preorderLog.create({
-      data: {
-        preorderId: order.id,
-        action: "WAIT_CUSTOMER_DATA",
-        note: "Renvoi notification de confirmation",
-        meta: {
-          purpose,
-          sent: Boolean(sendResult?.sent),
-          channel: sendResult?.channel || null,
-          attempts: sendResult?.attempts || [],
-          toPhone: sendResult?.toPhone || null,
-          messageId: sendResult?.messageId || null,
-          providerMessageId: sendResult?.providerMessageId || null,
-          errorCode: sendResult?.errorCode || null,
-          errorMessage: sendResult?.errorMessage || null,
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          lastWhatsappStatus: sendResult?.sent ? "SENT" : "FAILED",
+          lastWhatsappStatusAt: now,
+          lastWhatsappMessageId: sendResult?.providerMessageId || null,
         },
-        actorAdminId: req.user?.id || null,
-      },
+      });
+
+      await tx.preorderLog.create({
+        data: {
+          preorderId: order.id,
+          action: "WAIT_CUSTOMER_DATA",
+          note: "Renvoi notification de confirmation",
+          meta: {
+            purpose,
+            sent: Boolean(sendResult?.sent),
+            channel: sendResult?.channel || null,
+            attempts: sendResult?.attempts || [],
+            toPhone: sendResult?.toPhone || null,
+            messageId: sendResult?.messageId || null,
+            providerMessageId: sendResult?.providerMessageId || null,
+            errorCode: sendResult?.errorCode || null,
+            errorMessage: sendResult?.errorMessage || null,
+          },
+          actorAdminId: req.user?.id || null,
+        },
+      });
     });
 
     return res.json({

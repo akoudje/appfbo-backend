@@ -2,6 +2,20 @@ const prisma = require("../prisma");
 const { sendSms } = require("./sms.service");
 const whatsappService = require("./whatsapp.service");
 const { normalizeEmail, sendEmail } = require("./email.service");
+const { MAX_SMS_LENGTH } = require("./sms.orange.service");
+
+function compactText(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function firstSmsCandidate(candidates = [], maxLength = MAX_SMS_LENGTH) {
+  for (const raw of candidates) {
+    const candidate = compactText(raw);
+    if (!candidate) continue;
+    if (candidate.length <= maxLength) return candidate;
+  }
+  return compactText(candidates[0] || "").slice(0, maxLength);
+}
 
 function resolveNotificationPhone(preorder) {
   return (
@@ -25,11 +39,11 @@ function buildPreparationStartedSmsMessage({ preorder }) {
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
-  return [
-    `Bonjour ${customer},`,
-    `Votre colis N° ${parcelNumber} est en cours de préparation.`,
-    "Nous vous informerons dès qu'il sera prêt à être retiré.",
-  ].join(" ");
+  return firstSmsCandidate([
+    `Bonjour ${customer}, colis ${parcelNumber} en préparation. Nous vous informons dès qu'il est prêt.`,
+    `Colis ${parcelNumber} en préparation. Notification quand il sera prêt.`,
+    `Colis ${parcelNumber} en préparation.`,
+  ]);
 }
 
 function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
@@ -37,12 +51,11 @@ function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
-  return [
-    `Bonjour ${customer},`,
-    `Votre colis N° ${parcelNumber} est prêt à être retiré.`,
-    `Code secret: ${pickupSecretCode}.`,
-    "Présentez ce code au comptoir pour retirer votre colis en toute sécurité.",
-  ].join(" ");
+  return firstSmsCandidate([
+    `Bonjour ${customer}, colis ${parcelNumber} prêt. Code retrait: ${pickupSecretCode}. Présentez-le au comptoir.`,
+    `Colis ${parcelNumber} prêt. Code retrait: ${pickupSecretCode}.`,
+    `Colis ${parcelNumber} prêt. Code: ${pickupSecretCode}.`,
+  ]);
 }
 
 function buildOrderFulfilledSmsMessage({ preorder }) {
@@ -50,11 +63,10 @@ function buildOrderFulfilledSmsMessage({ preorder }) {
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
-  return [
-    `Bonjour ${customer},`,
-    `Le retrait de votre colis N° ${parcelNumber} a été confirmé.`,
-    "Merci pour votre confiance.",
-  ].join(" ");
+  return firstSmsCandidate([
+    `Bonjour ${customer}, retrait du colis ${parcelNumber} confirmé. Merci pour votre confiance.`,
+    `Retrait du colis ${parcelNumber} confirmé. Merci.`,
+  ]);
 }
 
 async function persistNotificationResult({

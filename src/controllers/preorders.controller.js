@@ -718,7 +718,7 @@ async function notifySms(req, res) {
         data: {
           preorderId: preorder.id,
           action: "PAYMENT_PENDING",
-          note: smsResult.accepted
+          note: notificationResult.sent
             ? "SMS renvoyé"
             : "Échec du renvoi SMS",
           meta: {

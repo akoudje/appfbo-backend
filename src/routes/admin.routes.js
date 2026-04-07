@@ -52,6 +52,16 @@ router.get(
   requirePermission(Permission.PREORDER_READ),
   eventsController.stream,
 );
+router.get(
+  "/events/health",
+  requirePermission(Permission.PREORDER_READ),
+  eventsController.health,
+);
+router.post(
+  "/events/ack",
+  requirePermission(Permission.PREORDER_READ),
+  eventsController.ackAlertPlayback,
+);
 
 // alias "preorders" pour compatibilite
 router.get(
