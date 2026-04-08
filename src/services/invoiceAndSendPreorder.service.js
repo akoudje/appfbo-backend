@@ -243,16 +243,16 @@ function buildInvoiceMessage({
 
   if (normalizedLink && !isCashFlow) {
     return firstSmsCandidate([
-      `FOREVER Ref:${ref} Total:${amountFmt}F Lien:${normalizedLink}`,
-      `Ref:${ref} Total:${amountFmt}F ${normalizedLink}`,
-      `Ref:${ref} ${normalizedLink}`,
+      `FOREVER: Facture ${ref}. Montant: ${amountFmt}F. Paiement sécurisé: ${normalizedLink}`,
+      `FOREVER: Ref ${ref}. Montant ${amountFmt}F. Lien: ${normalizedLink}`,
+      `FOREVER: Ref ${ref}. Paiement: ${normalizedLink}`,
     ]);
   }
 
   return firstSmsCandidate([
-    `FOREVER Ref:${ref} Total:${amountFmt}F Paiement en caisse FLP.`,
-    `Ref:${ref} Total:${amountFmt}F Paiement caisse.`,
-    `Ref:${ref} Facture disponible.`,
+    `FOREVER: Facture ${ref}. Montant: ${amountFmt}F. Paiement à la caisse FLP.`,
+    `FOREVER: Ref ${ref}. Montant ${amountFmt}F. Paiement caisse FLP.`,
+    `FOREVER: Ref ${ref}. Facture disponible.`,
   ]);
 }
 

@@ -99,7 +99,7 @@ function ensureTransporter() {
   return transporter;
 }
 
-async function sendEmail({ to, subject, body, metadata = {} }) {
+async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
   const normalizedTo = normalizeEmail(to);
   if (!normalizedTo) {
     return {
@@ -137,6 +137,7 @@ async function sendEmail({ to, subject, body, metadata = {} }) {
         to: normalizedTo,
         subject: String(subject || "").trim() || "Notification commande FOREVER",
         text: String(body || ""),
+        html: html ? String(html) : undefined,
         headers: {
           "X-AppFbo-PreorderId": String(metadata?.preorderId || ""),
           "X-AppFbo-Message-Id": messageId,
