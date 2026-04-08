@@ -88,6 +88,9 @@ function buildEmailSubjectByPurpose({ purpose, preorder }) {
   if (normalizedPurpose === "PREPARATION_STARTED") {
     return `FOREVER - Préparation en cours (${preorderNumber})`;
   }
+  if (normalizedPurpose === "ORDER_FULFILLED") {
+    return `FOREVER - Commande clôturée (${preorderNumber})`;
+  }
   if (normalizedPurpose === "PAYMENT_CONFIRMED") {
     return `FOREVER - Paiement confirmé (${preorderNumber})`;
   }
@@ -154,6 +157,18 @@ function buildDefaultEmailBodyByPurpose({
       `Bonjour ${customer},`,
       "",
       `Votre paiement pour la commande ${preorderNumber} a été confirmé.`,
+      "",
+      "Merci pour votre confiance.",
+      "Equipe FOREVER",
+    ].join("\n");
+  }
+
+  if (normalizedPurpose === "ORDER_FULFILLED") {
+    return [
+      `Bonjour ${customer},`,
+      "",
+      `Votre commande ${preorderNumber} a été clôturée avec succès.`,
+      `Référence colis: ${parcelNumber}`,
       "",
       "Merci pour votre confiance.",
       "Equipe FOREVER",
@@ -251,7 +266,42 @@ function normalizePurposeKey(purpose = "") {
   const key = String(purpose || "").trim().toUpperCase();
   if (key === "PAYMENT_LINK") return "INVOICE";
   if (key === "REMINDER") return "REMINDER";
+  if (key === "ORDER_FULFILLED") return "ORDER_FULFILLED";
   return key;
+}
+
+async function findRecentDuplicateOrderMessage({
+  preorderId,
+  purpose,
+  channel,
+  message,
+  toPhone = null,
+  dedupWindowSeconds = 60,
+}) {
+  const seconds = Math.max(0, Number(dedupWindowSeconds) || 0);
+  if (!seconds) return null;
+  const since = new Date(Date.now() - seconds * 1000);
+
+  return prisma.orderMessage.findFirst({
+    where: {
+      preorderId,
+      purpose,
+      channel,
+      body: String(message || ""),
+      ...(channel === "EMAIL"
+        ? {}
+        : { toPhone: toPhone ? String(toPhone) : null }),
+      createdAt: { gte: since },
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      provider: true,
+      providerMessageId: true,
+      status: true,
+      createdAt: true,
+    },
+  });
 }
 
 function getNestedTemplate(root, path = []) {
@@ -619,13 +669,54 @@ async function sendPreorderNotification({
 
   const attempts = [];
   let firstSuccess = null;
+  const dedupWindowSeconds = Number.parseInt(
+    process.env.NOTIFICATION_DEDUP_WINDOW_SECONDS || "60",
+    10,
+  );
   for (const item of channels) {
     if (!item.to) continue;
+
+    const messageToSend =
+      item.channel === "EMAIL" ? resolvedEmailMessage : resolvedSmsMessage;
+    const duplicateMessage = await findRecentDuplicateOrderMessage({
+      preorderId: preorder.id,
+      purpose,
+      channel: item.channel,
+      message: messageToSend,
+      toPhone: item.channel === "EMAIL" ? null : item.to,
+      dedupWindowSeconds,
+    });
+
+    if (duplicateMessage) {
+      const attempt = {
+        channel: item.channel,
+        sent: true,
+        to: item.to,
+        messageId: duplicateMessage.id,
+        provider: duplicateMessage.provider || null,
+        providerMessageId: duplicateMessage.providerMessageId || null,
+        errorCode: null,
+        errorMessage: null,
+        deduplicated: true,
+      };
+      attempts.push(attempt);
+      if (!firstSuccess) {
+        firstSuccess = {
+          channel: item.channel,
+          toPhone: item.channel === "EMAIL" ? null : item.to,
+          toEmail: item.channel === "EMAIL" ? item.to : null,
+          messageId: duplicateMessage.id,
+          provider: duplicateMessage.provider || null,
+          providerMessageId: duplicateMessage.providerMessageId || null,
+        };
+      }
+      continue;
+    }
 
     const sendResult = await sendByChannel({
       channel: item.channel,
       to: item.to,
-      message: item.channel === "EMAIL" ? resolvedEmailMessage : resolvedSmsMessage,
+      message: messageToSend,
       html: item.channel === "EMAIL" ? resolvedEmailHtml : undefined,
       subject: item.channel === "EMAIL" ? resolvedEmailSubject : undefined,
       preorderId: preorder.id,
@@ -637,8 +728,7 @@ async function sendPreorderNotification({
       channel: item.channel,
       purpose,
       toPhone: item.channel === "EMAIL" ? null : item.to,
-      message:
-        item.channel === "EMAIL" ? resolvedEmailMessage : resolvedSmsMessage,
+      message: messageToSend,
       paymentLinkTarget,
       paymentLinkTracked,
       actorName,

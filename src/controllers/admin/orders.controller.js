@@ -1953,7 +1953,7 @@ async function fulfillOrder(req, res) {
           ...order,
           ...updated,
         },
-        purpose: "REMINDER",
+        purpose: "ORDER_FULFILLED",
         message: buildOrderFulfilledSmsMessage({
           preorder: {
             ...order,
