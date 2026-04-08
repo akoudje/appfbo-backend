@@ -115,6 +115,14 @@ function buildPaymentWhatsAppMessage({
       "Merci de vous présenter au bureau pour effectuer le règlement en espèces."
     );
     lines.push("Votre commande sera préparée après validation du paiement.");
+  } else if (normalizedMode === "BANK_TRANSFER") {
+    lines.push("");
+    lines.push(
+      "Merci d'effectuer votre virement/versement bancaire selon les instructions reçues."
+    );
+    lines.push(
+      "Déposez ensuite la preuve de paiement depuis votre espace client sécurisé."
+    );
   } else if (paymentLink) {
     lines.push("");
     lines.push("Lien de paiement Wave :");

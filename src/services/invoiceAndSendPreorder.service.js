@@ -240,12 +240,25 @@ function buildInvoiceMessage({
     .trim()
     .toUpperCase();
   const isCashFlow = normalizedMode.includes("ESPE") || normalizedMode === "MANUAL";
+  const isBankTransferFlow =
+    normalizedMode === "BANK_TRANSFER" ||
+    normalizedMode.includes("BANK_TRANSFER") ||
+    normalizedMode.includes("VIREMENT") ||
+    normalizedMode.includes("BANK");
 
   if (normalizedLink && !isCashFlow) {
     return firstSmsCandidate([
       `FOREVER: Facture ${ref}. Montant: ${amountFmt}F. Paiement sécurisé: ${normalizedLink}`,
       `FOREVER: Ref ${ref}. Montant ${amountFmt}F. Lien: ${normalizedLink}`,
       `FOREVER: Ref ${ref}. Paiement: ${normalizedLink}`,
+    ]);
+  }
+
+  if (isBankTransferFlow) {
+    return firstSmsCandidate([
+      `FOREVER: Facture ${ref}. Montant: ${amountFmt}F. Virement/versement: consultez email ou espace client.`,
+      `FOREVER: Ref ${ref}. ${amountFmt}F. Instructions bancaires envoyees par email.`,
+      `FOREVER: Ref ${ref}. Connectez-vous a votre espace client pour les details bancaires.`,
     ]);
   }
 

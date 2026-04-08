@@ -80,6 +80,7 @@ enum PreorderPaymentMode {
   ESPECES
   WAVE
   ORANGE_MONEY
+  BANK_TRANSFER
 }
 
 enum PaymentStatus {
@@ -359,8 +360,17 @@ model CountrySettings {
   enableWave Boolean @default(true)
   enableOrangeMoney Boolean @default(true)
   enableCash Boolean @default(true)
+  enableBankTransfer Boolean @default(true)
   enableDelivery Boolean @default(true)
   enablePickup Boolean @default(true)
+  bankAccountLabel String?
+  bankName String?
+  bankAccountNumber String?
+  bankIban String?
+  bankSwift String?
+  bankAccountHolder String?
+  bankPaymentDueHours Int @default(72)
+  bankProofMaxFileSizeMb Int @default(8)
   currencyLabel String? @default("FCFA")
   pricingDisclaimer String? @db.Text
   themePrimaryColor String?

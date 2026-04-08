@@ -34,6 +34,7 @@ async function getStorefrontConfig(req, res) {
           enableWave: true,
           enableOrangeMoney: true,
           enableCash: true,
+          enableBankTransfer: true,
           enableDelivery: true,
           enablePickup: true,
           currencyLabel: true,
@@ -66,6 +67,7 @@ async function getStorefrontConfig(req, res) {
         wave: settings?.enableWave ?? true,
         orangeMoney: settings?.enableOrangeMoney ?? true,
         cash: settings?.enableCash ?? true,
+        bankTransfer: settings?.enableBankTransfer ?? true,
       },
       delivery: {
         delivery: settings?.enableDelivery ?? true,

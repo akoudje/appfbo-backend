@@ -16,8 +16,17 @@ async function getCountrySettings(req, res) {
         enableWave: true,
         enableOrangeMoney: true,
         enableCash: true,
+        enableBankTransfer: true,
         enableDelivery: true,
         enablePickup: true,
+        bankAccountLabel: true,
+        bankName: true,
+        bankAccountNumber: true,
+        bankIban: true,
+        bankSwift: true,
+        bankAccountHolder: true,
+        bankPaymentDueHours: true,
+        bankProofMaxFileSizeMb: true,
         currencyLabel: true,
         pricingDisclaimer: true,
         themePrimaryColor: true,
@@ -46,8 +55,17 @@ async function getCountrySettings(req, res) {
         enableWave: true,
         enableOrangeMoney: true,
         enableCash: true,
+        enableBankTransfer: true,
         enableDelivery: true,
         enablePickup: true,
+        bankAccountLabel: null,
+        bankName: null,
+        bankAccountNumber: null,
+        bankIban: null,
+        bankSwift: null,
+        bankAccountHolder: null,
+        bankPaymentDueHours: 72,
+        bankProofMaxFileSizeMb: 8,
         currencyLabel: "FCFA",
         pricingDisclaimer: null,
         themePrimaryColor: null,
@@ -86,8 +104,17 @@ async function updateCountrySettings(req, res) {
       enableWave,
       enableOrangeMoney,
       enableCash,
+      enableBankTransfer,
       enableDelivery,
       enablePickup,
+      bankAccountLabel,
+      bankName,
+      bankAccountNumber,
+      bankIban,
+      bankSwift,
+      bankAccountHolder,
+      bankPaymentDueHours,
+      bankProofMaxFileSizeMb,
       currencyLabel,
       pricingDisclaimer,
       themePrimaryColor,
@@ -139,6 +166,22 @@ async function updateCountrySettings(req, res) {
       data.billingClaimTimeoutMin = parsed;
     }
 
+    if (bankPaymentDueHours !== undefined) {
+      const parsed = Number.parseInt(bankPaymentDueHours, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 720) {
+        return res.status(400).json({ message: "bankPaymentDueHours invalide" });
+      }
+      data.bankPaymentDueHours = parsed;
+    }
+
+    if (bankProofMaxFileSizeMb !== undefined) {
+      const parsed = Number.parseInt(bankProofMaxFileSizeMb, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 50) {
+        return res.status(400).json({ message: "bankProofMaxFileSizeMb invalide" });
+      }
+      data.bankProofMaxFileSizeMb = parsed;
+    }
+
     if (supportPhone !== undefined) {
       data.supportPhone = supportPhone ? String(supportPhone).trim() : null;
     }
@@ -150,8 +193,28 @@ async function updateCountrySettings(req, res) {
     if (enableWave !== undefined) data.enableWave = Boolean(enableWave);
     if (enableOrangeMoney !== undefined) data.enableOrangeMoney = Boolean(enableOrangeMoney);
     if (enableCash !== undefined) data.enableCash = Boolean(enableCash);
+    if (enableBankTransfer !== undefined) data.enableBankTransfer = Boolean(enableBankTransfer);
     if (enableDelivery !== undefined) data.enableDelivery = Boolean(enableDelivery);
     if (enablePickup !== undefined) data.enablePickup = Boolean(enablePickup);
+
+    if (bankAccountLabel !== undefined) {
+      data.bankAccountLabel = bankAccountLabel ? String(bankAccountLabel).trim() : null;
+    }
+    if (bankName !== undefined) {
+      data.bankName = bankName ? String(bankName).trim() : null;
+    }
+    if (bankAccountNumber !== undefined) {
+      data.bankAccountNumber = bankAccountNumber ? String(bankAccountNumber).trim() : null;
+    }
+    if (bankIban !== undefined) {
+      data.bankIban = bankIban ? String(bankIban).trim() : null;
+    }
+    if (bankSwift !== undefined) {
+      data.bankSwift = bankSwift ? String(bankSwift).trim() : null;
+    }
+    if (bankAccountHolder !== undefined) {
+      data.bankAccountHolder = bankAccountHolder ? String(bankAccountHolder).trim() : null;
+    }
 
     if (currencyLabel !== undefined) {
       data.currencyLabel = currencyLabel ? String(currencyLabel).trim() : null;
@@ -213,9 +276,23 @@ async function updateCountrySettings(req, res) {
           enableOrangeMoney:
             data.enableOrangeMoney !== undefined ? data.enableOrangeMoney : true,
           enableCash: data.enableCash !== undefined ? data.enableCash : true,
+          enableBankTransfer:
+            data.enableBankTransfer !== undefined ? data.enableBankTransfer : true,
           enableDelivery:
             data.enableDelivery !== undefined ? data.enableDelivery : true,
           enablePickup: data.enablePickup !== undefined ? data.enablePickup : true,
+          bankAccountLabel: data.bankAccountLabel ?? null,
+          bankName: data.bankName ?? null,
+          bankAccountNumber: data.bankAccountNumber ?? null,
+          bankIban: data.bankIban ?? null,
+          bankSwift: data.bankSwift ?? null,
+          bankAccountHolder: data.bankAccountHolder ?? null,
+          bankPaymentDueHours:
+            data.bankPaymentDueHours !== undefined ? data.bankPaymentDueHours : 72,
+          bankProofMaxFileSizeMb:
+            data.bankProofMaxFileSizeMb !== undefined
+              ? data.bankProofMaxFileSizeMb
+              : 8,
           currencyLabel: data.currencyLabel ?? "FCFA",
           pricingDisclaimer: data.pricingDisclaimer ?? null,
           themePrimaryColor: data.themePrimaryColor ?? null,
@@ -247,8 +324,17 @@ async function updateCountrySettings(req, res) {
         enableWave: true,
         enableOrangeMoney: true,
         enableCash: true,
+        enableBankTransfer: true,
         enableDelivery: true,
         enablePickup: true,
+        bankAccountLabel: true,
+        bankName: true,
+        bankAccountNumber: true,
+        bankIban: true,
+        bankSwift: true,
+        bankAccountHolder: true,
+        bankPaymentDueHours: true,
+        bankProofMaxFileSizeMb: true,
         currencyLabel: true,
         pricingDisclaimer: true,
         themePrimaryColor: true,

@@ -1,6 +1,7 @@
 const MOBILE_MONEY_SERVICE_FEE_RATES = {
   WAVE: 1,
   ORANGE_MONEY: 0,
+  BANK_TRANSFER: 0,
 };
 
 function normalizePaymentMode(value) {
