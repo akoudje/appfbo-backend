@@ -6,6 +6,7 @@ const router = express.Router();
 
 const paymentsController = require("../payments/payments.controller");
 const { orangeSmsDlrWebhook } = require("../controllers/smsWebhook.controller");
+const { brevoEmailEventsWebhook } = require("../controllers/emailWebhook.controller");
 const { createRateLimiter } = require("../middlewares/rateLimit");
 
 const genericWebhookLimiter = createRateLimiter({
@@ -16,5 +17,6 @@ const genericWebhookLimiter = createRateLimiter({
 
 router.post("/wave", genericWebhookLimiter, paymentsController.waveWebhook);
 router.post("/orange-sms/dlr", genericWebhookLimiter, orangeSmsDlrWebhook);
+router.post("/brevo/email-events", genericWebhookLimiter, brevoEmailEventsWebhook);
 
 module.exports = router;
