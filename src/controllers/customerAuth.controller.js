@@ -131,8 +131,62 @@ async function requestOtp(req, res) {
     const expiresMin = otpExpiresInMinutes();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + expiresMin * 60 * 1000);
-    const destinationMasked =
-      resolved.channel === "SMS" ? maskPhone(resolved.smsPhone) : maskEmail(resolved.email);
+    const preferredFirst = resolved.channel === "SMS" ? ["SMS", "EMAIL"] : ["EMAIL", "SMS"];
+    const channelsToTry = preferredFirst.filter((ch, idx, arr) => arr.indexOf(ch) === idx);
+    const failures = [];
+    let sent = null;
+    let usedChannel = null;
+
+    for (const ch of channelsToTry) {
+      if (ch === "SMS" && resolved.smsPhone) {
+        const smsResult = await sendSms({
+          to: resolved.smsPhone,
+          message: `FOREVER: code connexion ${otp}. Expire dans ${expiresMin} min.`,
+        });
+        if (smsResult?.accepted) {
+          sent = smsResult;
+          usedChannel = "SMS";
+          break;
+        }
+        failures.push({
+          channel: "SMS",
+          errorCode: smsResult?.errorCode || "SMS_SEND_FAILED",
+          errorMessage: smsResult?.errorMessage || "Échec envoi SMS",
+        });
+      }
+
+      if (ch === "EMAIL" && resolved.email) {
+        const emailResult = await sendEmail({
+          to: resolved.email,
+          subject: "FOREVER | Code de connexion",
+          body: `Votre code de connexion est ${otp}. Il expire dans ${expiresMin} minutes.`,
+          metadata: {
+            purpose: "CUSTOMER_PORTAL_LOGIN",
+            fboId: resolved.fbo.id,
+          },
+        });
+        if (emailResult?.accepted) {
+          sent = emailResult;
+          usedChannel = "EMAIL";
+          break;
+        }
+        failures.push({
+          channel: "EMAIL",
+          errorCode: emailResult?.errorCode || "EMAIL_SEND_FAILED",
+          errorMessage: emailResult?.errorMessage || "Échec envoi email",
+        });
+      }
+    }
+
+    if (!sent?.accepted || !usedChannel) {
+      return res.status(502).json({
+        message: "Impossible d'envoyer le code OTP",
+        errorCode: failures?.[0]?.errorCode || "OTP_SEND_FAILED",
+        failures,
+      });
+    }
+
+    const destinationMasked = usedChannel === "SMS" ? maskPhone(resolved.smsPhone) : maskEmail(resolved.email);
 
     await prisma.$transaction(async (tx) => {
       await tx.customerOtpChallenge.updateMany({
@@ -151,47 +205,23 @@ async function requestOtp(req, res) {
           countryId,
           fboId: resolved.fbo.id,
           purpose: "CUSTOMER_PORTAL_LOGIN",
-          channel: resolved.channel,
+          channel: usedChannel,
           destinationMasked,
           codeHash: otpHash(otp),
           expiresAt,
           meta: {
             requestId: req.requestId || null,
             countryCode: req.country?.code || null,
+            fallbackFrom: resolved.channel !== usedChannel ? resolved.channel : null,
           },
         },
       });
     });
 
-    let sent = null;
-    if (resolved.channel === "SMS") {
-      sent = await sendSms({
-        to: resolved.smsPhone,
-        message: `FOREVER: code connexion ${otp}. Expire dans ${expiresMin} min.`,
-      });
-    } else {
-      sent = await sendEmail({
-        to: resolved.email,
-        subject: "FOREVER | Code de connexion",
-        body: `Votre code de connexion est ${otp}. Il expire dans ${expiresMin} minutes.`,
-        metadata: {
-          purpose: "CUSTOMER_PORTAL_LOGIN",
-          fboId: resolved.fbo.id,
-        },
-      });
-    }
-
-    if (!sent?.accepted) {
-      return res.status(502).json({
-        message: "Impossible d'envoyer le code OTP",
-        errorCode: sent?.errorCode || "OTP_SEND_FAILED",
-      });
-    }
-
     const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
     return res.json({
       ok: true,
-      channel: resolved.channel,
+      channel: usedChannel,
       destinationMasked,
       expiresInMinutes: expiresMin,
       ...(isProd ? {} : { debugOtp: otp }),
@@ -324,4 +354,3 @@ module.exports = {
   verifyOtp,
   me,
 };
-
