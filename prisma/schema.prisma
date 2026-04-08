@@ -114,6 +114,24 @@ enum OrderPaymentStatus {
   REFUNDED
 }
 
+enum BankPaymentStatus {
+  NOT_REQUIRED
+  WAITING_PROOF
+  PROOF_SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum BankPaymentProofStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
 enum ProviderAccountStatus {
   ACTIVE
   INACTIVE
@@ -322,6 +340,8 @@ model Fbo {
 
   preorders    Preorder[]
   fboCountries FboCountry[]
+  customerOtpChallenges CustomerOtpChallenge[]
+  bankPaymentProofs BankPaymentProof[]
 
   @@index([pointDeVente])
   @@index([grade])
@@ -346,6 +366,8 @@ model Country {
   payments                Payment[]
   paymentProviderAccounts PaymentProviderAccount[]
   paymentProviderRules    PaymentProviderRule[]
+  customerOtpChallenges   CustomerOtpChallenge[]
+  bankPaymentProofs       BankPaymentProof[]
 }
 
 model CountrySettings {
@@ -422,6 +444,7 @@ model AdminUser {
   assignedBillingPreorders        Preorder[] @relation("PreorderAssignedInvoicer")
   invoicedPreorders               Preorder[] @relation("PreorderInvoicedBy")
   manualPaymentValidatedPreorders Preorder[] @relation("PreorderManualPaymentValidatedBy")
+  bankPaymentValidatedPreorders   Preorder[] @relation("PreorderBankPaymentValidatedBy")
   launchedPreparationPreorders    Preorder[] @relation("PreorderPreparationLaunchedBy")
   pickupCodeVerifiedPreorders     Preorder[] @relation("PreorderPickupCodeVerifiedBy")
   preparedPreorders               Preorder[] @relation("PreorderPreparedBy")
@@ -431,6 +454,7 @@ model AdminUser {
   stockMovements StockMovement[]
   preorderLogs   PreorderLog[]
   paymentTransactionLogs PaymentTransactionLog[]
+  reviewedBankPaymentProofs BankPaymentProof[]
   cashierTransactions CashierTransaction[] @relation("CashierTransactionCashier")
   checkedPreparationItems PreparationChecklistItem[]
   createdPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyCreatedBy")
@@ -609,6 +633,11 @@ model Preorder {
   // Paiement global
   paymentProvider PaymentProvider?
   paidAt          DateTime?
+  bankPaymentStatus BankPaymentStatus @default(NOT_REQUIRED)
+  bankPaymentDueAt DateTime?
+  bankPaymentValidatedAt DateTime?
+  bankPaymentValidatedById String?
+  bankPaymentValidatedBy AdminUser? @relation("PreorderBankPaymentValidatedBy", fields: [bankPaymentValidatedById], references: [id], onDelete: SetNull)
 
   // Paiement actif (facilite les écrans)
   activePaymentId String?
@@ -668,6 +697,7 @@ model Preorder {
   preparationAnomalies PreparationAnomaly[]
   paymentTransactionLogs PaymentTransactionLog[]
   stockMovements StockMovement[]
+  bankPaymentProofs BankPaymentProof[]
 
   @@index([status, createdAt])
   @@index([preorderPaymentMode])
@@ -688,6 +718,75 @@ model Preorder {
   @@index([cancelledById])
   @@index([factureReference])
   @@index([activePaymentId])
+  @@index([bankPaymentStatus, bankPaymentDueAt])
+  @@index([bankPaymentValidatedById])
+}
+
+model CustomerOtpChallenge {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  fboId String
+  fbo Fbo @relation(fields: [fboId], references: [id], onDelete: Cascade)
+
+  purpose String @default("CUSTOMER_PORTAL_LOGIN")
+  channel String
+  destinationMasked String?
+
+  codeHash String
+  expiresAt DateTime
+  consumedAt DateTime?
+
+  attempts Int @default(0)
+  maxAttempts Int @default(5)
+
+  meta Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, fboId, createdAt])
+  @@index([fboId, consumedAt, expiresAt])
+}
+
+model BankPaymentProof {
+  id String @id @default(cuid())
+
+  preorderId String
+  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  fboId String
+  fbo Fbo @relation(fields: [fboId], references: [id], onDelete: Restrict)
+
+  status BankPaymentProofStatus @default(SUBMITTED)
+
+  declaredAmountFcfa Int?
+  reference String?
+  note String? @db.Text
+
+  fileUrl String
+  fileMimeType String
+  fileSizeBytes Int
+  originalFileName String?
+
+  submittedAt DateTime @default(now())
+  reviewedAt DateTime?
+  reviewedByAdminId String?
+  reviewedByAdmin AdminUser? @relation(fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  rejectionReason String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([preorderId, createdAt])
+  @@index([countryId, status, submittedAt])
+  @@index([fboId, submittedAt])
+  @@index([reviewedByAdminId, reviewedAt])
 }
 
 model CashierTransaction {
