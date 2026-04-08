@@ -26,6 +26,7 @@ async function getCountrySettings(req, res) {
         themeLogoPath: true,
         themeSliderEnabled: true,
         themeSidePanelsEnabled: true,
+        notificationTemplates: true,
         maxActiveBillingPerInvoicer: true,
         billingClaimTimeoutMin: true,
         createdAt: true,
@@ -55,6 +56,7 @@ async function getCountrySettings(req, res) {
         themeLogoPath: null,
         themeSliderEnabled: true,
         themeSidePanelsEnabled: true,
+        notificationTemplates: null,
         maxActiveBillingPerInvoicer: 5,
         billingClaimTimeoutMin: 15,
         createdAt: null,
@@ -94,6 +96,7 @@ async function updateCountrySettings(req, res) {
       themeLogoPath,
       themeSliderEnabled,
       themeSidePanelsEnabled,
+      notificationTemplates,
       maxActiveBillingPerInvoicer,
       billingClaimTimeoutMin,
     } = req.body || {};
@@ -182,6 +185,18 @@ async function updateCountrySettings(req, res) {
     if (themeSidePanelsEnabled !== undefined) {
       data.themeSidePanelsEnabled = Boolean(themeSidePanelsEnabled);
     }
+    if (notificationTemplates !== undefined) {
+      if (
+        notificationTemplates !== null &&
+        (typeof notificationTemplates !== "object" ||
+          Array.isArray(notificationTemplates))
+      ) {
+        return res
+          .status(400)
+          .json({ message: "notificationTemplates invalide" });
+      }
+      data.notificationTemplates = notificationTemplates;
+    }
 
     const updated = await prisma.countrySettings.upsert({
       where: { countryId },
@@ -242,6 +257,7 @@ async function updateCountrySettings(req, res) {
         themeLogoPath: true,
         themeSliderEnabled: true,
         themeSidePanelsEnabled: true,
+        notificationTemplates: true,
         maxActiveBillingPerInvoicer: true,
         billingClaimTimeoutMin: true,
         createdAt: true,

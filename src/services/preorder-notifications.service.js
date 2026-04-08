@@ -69,6 +69,230 @@ function buildOrderFulfilledSmsMessage({ preorder }) {
   ]);
 }
 
+function formatFcfa(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return "0 FCFA";
+  return `${new Intl.NumberFormat("fr-FR").format(Math.max(0, Math.round(num)))} FCFA`;
+}
+
+function buildEmailSubjectByPurpose({ purpose, preorder }) {
+  const normalizedPurpose = String(purpose || "").trim().toUpperCase();
+  const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
+
+  if (normalizedPurpose === "INVOICE" || normalizedPurpose === "PAYMENT_LINK") {
+    return `FOREVER - Facture ${preorderNumber}`;
+  }
+  if (normalizedPurpose === "ORDER_READY") {
+    return `FOREVER - Colis prêt (${preorderNumber})`;
+  }
+  if (normalizedPurpose === "PREPARATION_STARTED") {
+    return `FOREVER - Préparation en cours (${preorderNumber})`;
+  }
+  if (normalizedPurpose === "PAYMENT_CONFIRMED") {
+    return `FOREVER - Paiement confirmé (${preorderNumber})`;
+  }
+  return `FOREVER - Notification commande (${preorderNumber})`;
+}
+
+function buildDefaultEmailBodyByPurpose({
+  purpose,
+  preorder,
+  smsMessage,
+  paymentLinkTarget = null,
+  paymentLinkTracked = null,
+}) {
+  const normalizedPurpose = String(purpose || "").trim().toUpperCase();
+  const customer = preorder?.fboNomComplet || "Client";
+  const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
+  const parcelNumber = preorder?.parcelNumber || preorderNumber;
+  const invoiceRef =
+    preorder?.factureReference || preorder?.preorderNumber || preorder?.id || "-";
+  const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
+  const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
+  const pickupCode = preorder?.pickupSecretCode || "-";
+
+  if (normalizedPurpose === "INVOICE" || normalizedPurpose === "PAYMENT_LINK") {
+    return [
+      `Bonjour ${customer},`,
+      "",
+      "Votre facture est disponible.",
+      `Référence: ${invoiceRef}`,
+      `Commande: ${preorderNumber}`,
+      `Montant à payer: ${total}`,
+      paymentLink ? `Lien de paiement: ${paymentLink}` : "Mode de paiement: à la caisse FLP",
+      "",
+      "Merci de votre confiance.",
+      "Equipe FOREVER",
+    ].join("\n");
+  }
+
+  if (normalizedPurpose === "ORDER_READY") {
+    return [
+      `Bonjour ${customer},`,
+      "",
+      `Votre colis ${parcelNumber} est prêt à être retiré.`,
+      `Code de retrait: ${pickupCode}`,
+      "",
+      "Présentez ce code au comptoir lors du retrait.",
+      "Equipe FOREVER",
+    ].join("\n");
+  }
+
+  if (normalizedPurpose === "PREPARATION_STARTED") {
+    return [
+      `Bonjour ${customer},`,
+      "",
+      `Votre colis ${parcelNumber} est en cours de préparation.`,
+      "Nous vous informerons dès qu'il sera prêt.",
+      "",
+      "Equipe FOREVER",
+    ].join("\n");
+  }
+
+  if (normalizedPurpose === "PAYMENT_CONFIRMED") {
+    return [
+      `Bonjour ${customer},`,
+      "",
+      `Votre paiement pour la commande ${preorderNumber} a été confirmé.`,
+      "",
+      "Merci pour votre confiance.",
+      "Equipe FOREVER",
+    ].join("\n");
+  }
+
+  return [
+    `Bonjour ${customer},`,
+    "",
+    `Mise à jour de votre commande ${preorderNumber}.`,
+    "",
+    compactText(smsMessage || ""),
+    "",
+    "Equipe FOREVER",
+  ].join("\n");
+}
+
+function normalizePurposeKey(purpose = "") {
+  const key = String(purpose || "").trim().toUpperCase();
+  if (key === "PAYMENT_LINK") return "INVOICE";
+  if (key === "REMINDER") return "REMINDER";
+  return key;
+}
+
+function getNestedTemplate(root, path = []) {
+  return path.reduce((acc, key) => {
+    if (!acc || typeof acc !== "object") return null;
+    return acc[key];
+  }, root);
+}
+
+function interpolateTemplate(template = "", context = {}) {
+  const raw = String(template || "");
+  return raw.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, token) => {
+    const value = context[token];
+    return value === undefined || value === null ? "" : String(value);
+  });
+}
+
+async function loadCountryNotificationTemplates(countryId) {
+  if (!countryId) return null;
+  try {
+    const settings = await prisma.countrySettings.findUnique({
+      where: { countryId: String(countryId) },
+      select: {
+        notificationTemplates: true,
+        supportPhone: true,
+        pickupAddress: true,
+      },
+    });
+    if (!settings) return null;
+    return settings;
+  } catch {
+    return null;
+  }
+}
+
+function buildTemplateContext({
+  preorder,
+  purpose,
+  paymentLinkTarget,
+  paymentLinkTracked,
+  supportPhone = null,
+  pickupAddress = null,
+}) {
+  const customerName = preorder?.fboNomComplet || "Client";
+  const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
+  const parcelNumber = preorder?.parcelNumber || preorderNumber;
+  const invoiceRef =
+    preorder?.factureReference || preorder?.preorderNumber || preorder?.id || "-";
+  const totalFcfa = Number(
+    preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0,
+  );
+  const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
+  const pickupCode = preorder?.pickupSecretCode || "-";
+
+  return {
+    purpose: normalizePurposeKey(purpose),
+    customerName,
+    preorderNumber,
+    parcelNumber,
+    invoiceRef,
+    totalFcfa: String(Math.max(0, Math.round(totalFcfa))),
+    totalFcfaLabel: formatFcfa(totalFcfa),
+    paymentLink,
+    pickupCode,
+    supportPhone: supportPhone || "",
+    pickupAddress: pickupAddress || "",
+  };
+}
+
+function resolveConfiguredTemplates({
+  templatesRoot,
+  purpose,
+  context,
+  fallbackSms,
+  fallbackEmailSubject,
+  fallbackEmailBody,
+}) {
+  const purposeKey = normalizePurposeKey(purpose);
+
+  const smsTemplate = getNestedTemplate(templatesRoot, [
+    "sms",
+    purposeKey,
+  ]);
+  const emailSubjectTemplate = getNestedTemplate(templatesRoot, [
+    "email",
+    purposeKey,
+    "subject",
+  ]);
+  const emailBodyTemplate = getNestedTemplate(templatesRoot, [
+    "email",
+    purposeKey,
+    "body",
+  ]);
+
+  const resolvedSms = compactText(
+    smsTemplate ? interpolateTemplate(smsTemplate, context) : fallbackSms,
+  );
+  const resolvedSubject = compactText(
+    emailSubjectTemplate
+      ? interpolateTemplate(emailSubjectTemplate, context)
+      : fallbackEmailSubject,
+  );
+  const resolvedEmailBody = String(
+    emailBodyTemplate
+      ? interpolateTemplate(emailBodyTemplate, context)
+      : fallbackEmailBody,
+  )
+    .replace(/\r\n/g, "\n")
+    .trim();
+
+  return {
+    smsMessage: firstSmsCandidate([resolvedSms || fallbackSms]),
+    emailSubject: resolvedSubject || fallbackEmailSubject,
+    emailBody: resolvedEmailBody || fallbackEmailBody,
+  };
+}
+
 async function persistNotificationResult({
   preorderId,
   channel,
@@ -238,6 +462,8 @@ async function sendPreorderNotification({
   preorder,
   purpose,
   message,
+  emailSubject = null,
+  emailMessage = null,
   actorName = "SYSTEM",
   toPhone = null,
   toWhatsapp = null,
@@ -253,6 +479,42 @@ async function sendPreorderNotification({
   const resolvedPhone = toPhone || resolveNotificationPhone(preorder);
   const resolvedWhatsapp = toWhatsapp || resolvedPhone;
   const resolvedEmail = resolveNotificationEmail(preorder, toEmail);
+  const defaultEmailSubject =
+    String(emailSubject || "").trim() ||
+    buildEmailSubjectByPurpose({ purpose, preorder });
+  const defaultEmailMessage =
+    String(emailMessage || "").trim() ||
+    buildDefaultEmailBodyByPurpose({
+      purpose,
+      preorder,
+      smsMessage: message,
+      paymentLinkTarget,
+      paymentLinkTracked,
+    });
+  const fallbackSmsMessage = firstSmsCandidate([compactText(message || "")]);
+
+  const countryTemplateSettings = await loadCountryNotificationTemplates(
+    preorder?.countryId || preorder?.country?.id || null,
+  );
+  const context = buildTemplateContext({
+    preorder,
+    purpose,
+    paymentLinkTarget,
+    paymentLinkTracked,
+    supportPhone: countryTemplateSettings?.supportPhone || null,
+    pickupAddress: countryTemplateSettings?.pickupAddress || null,
+  });
+  const configuredTemplates = resolveConfiguredTemplates({
+    templatesRoot: countryTemplateSettings?.notificationTemplates || null,
+    purpose,
+    context,
+    fallbackSms: fallbackSmsMessage,
+    fallbackEmailSubject: defaultEmailSubject,
+    fallbackEmailBody: defaultEmailMessage,
+  });
+  const resolvedSmsMessage = configuredTemplates.smsMessage;
+  const resolvedEmailSubject = configuredTemplates.emailSubject;
+  const resolvedEmailMessage = configuredTemplates.emailBody;
 
   const hasSmsIntent = Boolean(resolvedPhone);
   const channels = hasSmsIntent
@@ -277,7 +539,8 @@ async function sendPreorderNotification({
     const sendResult = await sendByChannel({
       channel: item.channel,
       to: item.to,
-      message,
+      message: item.channel === "EMAIL" ? resolvedEmailMessage : resolvedSmsMessage,
+      subject: item.channel === "EMAIL" ? resolvedEmailSubject : undefined,
       preorderId: preorder.id,
       maxSmsRetries,
     });
@@ -287,7 +550,8 @@ async function sendPreorderNotification({
       channel: item.channel,
       purpose,
       toPhone: item.channel === "EMAIL" ? null : item.to,
-      message,
+      message:
+        item.channel === "EMAIL" ? resolvedEmailMessage : resolvedSmsMessage,
       paymentLinkTarget,
       paymentLinkTracked,
       actorName,

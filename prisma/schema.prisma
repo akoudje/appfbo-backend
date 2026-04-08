@@ -368,6 +368,7 @@ model CountrySettings {
   themeLogoPath String?
   themeSliderEnabled Boolean @default(true)
   themeSidePanelsEnabled Boolean @default(true)
+  notificationTemplates Json?
 
   // Paramètres opérationnels facturation
   maxActiveBillingPerInvoicer Int @default(5)

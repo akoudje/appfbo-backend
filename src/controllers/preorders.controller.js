@@ -514,6 +514,8 @@ async function submit(req, res) {
       preorder: {
         ...summary.preorder,
         factureWhatsappTo: smsTo,
+        fboEmail: preorder.fboEmail || null,
+        countryId: preorder.countryId || null,
       },
       purpose: "INVOICE",
       message: smsMessage,
