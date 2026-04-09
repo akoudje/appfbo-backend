@@ -666,6 +666,42 @@ async function downloadBankProofFile(req, res) {
   }
 }
 
+async function downloadLegacyManualProofFile(req, res) {
+  try {
+    const { id } = req.params;
+
+    const preorder = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        manualPaymentProofUrl: true,
+      },
+    });
+
+    if (!preorder) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const absPath = resolveBankProofAbsolutePath(preorder.manualPaymentProofUrl);
+    if (!absPath || !fs.existsSync(absPath)) {
+      return res.status(404).json({ message: "Fichier preuve introuvable" });
+    }
+
+    const stat = fs.statSync(absPath);
+    const fileName = path.basename(absPath);
+
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Length", String(stat.size || 0));
+    res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
+    return fs.createReadStream(absPath).pipe(res);
+  } catch (e) {
+    console.error("downloadLegacyManualProofFile error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (downloadLegacyManualProofFile)",
+    });
+  }
+}
+
 async function getDeliveryNotePdf(req, res) {
   try {
     const { id } = req.params;
@@ -2178,6 +2214,7 @@ module.exports = {
   getOrderById,
   listOrderMessages,
   downloadBankProofFile,
+  downloadLegacyManualProofFile,
   getDeliveryNotePdf,
   updateOrderStatus,
   getInvoicePreview,

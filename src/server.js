@@ -146,6 +146,9 @@ app.use("/api/admin", adminRoutes);
 /* =========================================================
    Static
    ========================================================= */
+app.use("/uploads/bank-proofs", (req, res) =>
+  res.status(403).json({ error: "Forbidden" })
+);
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 /* =========================================================

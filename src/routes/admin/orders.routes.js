@@ -13,6 +13,11 @@ router.get(
   ordersController.downloadBankProofFile,
 );
 router.get(
+  "/:id/manual-proof/file",
+  requirePermission(Permission.PREORDER_READ),
+  ordersController.downloadLegacyManualProofFile,
+);
+router.get(
   "/:id/delivery-note.pdf",
   requirePermission(Permission.PREORDER_READ),
   ordersController.getDeliveryNotePdf,
