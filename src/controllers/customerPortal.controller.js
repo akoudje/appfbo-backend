@@ -136,6 +136,32 @@ async function getMyOrder(req, res) {
             },
           },
         },
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          select: {
+            id: true,
+            channel: true,
+            purpose: true,
+            status: true,
+            toPhone: true,
+            sentAt: true,
+            deliveredAt: true,
+            failedAt: true,
+            errorMessage: true,
+            createdAt: true,
+          },
+        },
+        logs: {
+          orderBy: { createdAt: "desc" },
+          take: 30,
+          select: {
+            id: true,
+            action: true,
+            note: true,
+            createdAt: true,
+          },
+        },
         bankPaymentProofs: {
           orderBy: { createdAt: "desc" },
         },
@@ -274,4 +300,3 @@ module.exports = {
   getMyOrder,
   submitMyBankProof,
 };
-
