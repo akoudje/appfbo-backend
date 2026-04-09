@@ -107,9 +107,20 @@ async function createDraft(req, res) {
       ? String(paymentMode).trim().toUpperCase()
       : null;
 
-    const normalizedDeliveryMode = deliveryMode
+    const requestedDeliveryMode = deliveryMode
       ? String(deliveryMode).trim().toUpperCase()
       : null;
+
+    const isRestrictedDeliveryPayment = [
+      "ESPECES",
+      "WAVE",
+      "ORANGE_MONEY",
+      "BANK_TRANSFER",
+    ].includes(String(normalizedPaymentMode || "").toUpperCase());
+
+    const normalizedDeliveryMode = isRestrictedDeliveryPayment
+      ? "RETRAIT_SITE_FLP"
+      : requestedDeliveryMode;
 
     const countryId = req.country?.id || req.scope?.countryId || req.countryId;
     const countryCode =

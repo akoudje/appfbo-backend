@@ -5,6 +5,11 @@ const prisma = require("../prisma");
 const { computePreorderTotals } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
+const {
+  ensurePrivateBankProofDir,
+  buildPrivateBankProofRef,
+  resolveBankProofAbsolutePath,
+} = require("../utils/bankProofFiles");
 
 const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
@@ -13,13 +18,11 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 
 function getUploadsDir() {
-  return path.join(__dirname, "..", "..", "uploads", "bank-proofs");
+  return ensurePrivateBankProofDir();
 }
 
 function ensureUploadsDir() {
-  const dir = getUploadsDir();
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return getUploadsDir();
 }
 
 const storage = multer.diskStorage({
@@ -218,7 +221,7 @@ async function submitMyBankProof(req, res) {
     }
 
     const now = new Date();
-    const fileUrl = `/uploads/bank-proofs/${path.basename(file.path)}`;
+    const fileUrl = buildPrivateBankProofRef(path.basename(file.path));
     const parsedAmount = Number.parseInt(declaredAmountFcfa, 10);
     const amount =
       Number.isFinite(parsedAmount) && parsedAmount >= 0 ? parsedAmount : null;
@@ -381,6 +384,14 @@ async function reorderMyOrder(req, res) {
         seq: nextSeq,
       });
 
+      const normalizedPaymentMode = sourceOrder.preorderPaymentMode || null;
+      const isRestrictedDeliveryPayment = [
+        "ESPECES",
+        "WAVE",
+        "ORANGE_MONEY",
+        "BANK_TRANSFER",
+      ].includes(String(normalizedPaymentMode || "").toUpperCase());
+
       const created = await tx.preorder.create({
         data: {
           countryId,
@@ -390,8 +401,10 @@ async function reorderMyOrder(req, res) {
           fboEmail: sourceOrder.fbo.email || null,
           fboGrade: sourceOrder.fbo.grade,
           pointDeVente: sourceOrder.fbo.pointDeVente,
-          preorderPaymentMode: sourceOrder.preorderPaymentMode || null,
-          deliveryMode: sourceOrder.deliveryMode || null,
+          preorderPaymentMode: normalizedPaymentMode,
+          deliveryMode: isRestrictedDeliveryPayment
+            ? "RETRAIT_SITE_FLP"
+            : sourceOrder.deliveryMode || null,
           status: "DRAFT",
           paymentStatus: "UNPAID",
           billingWorkStatus: "NONE",
@@ -463,10 +476,54 @@ async function reorderMyOrder(req, res) {
   }
 }
 
+async function downloadMyBankProof(req, res) {
+  try {
+    const countryId = req.country?.id || req.countryId;
+    const fboId = req.customer?.fboId;
+    const { id, proofId } = req.params;
+
+    const proof = await prisma.bankPaymentProof.findFirst({
+      where: {
+        id: proofId,
+        preorderId: id,
+        countryId,
+        fboId,
+      },
+      select: {
+        id: true,
+        fileUrl: true,
+        fileMimeType: true,
+        originalFileName: true,
+      },
+    });
+
+    if (!proof) {
+      return res.status(404).json({ message: "Preuve introuvable" });
+    }
+
+    const absPath = resolveBankProofAbsolutePath(proof.fileUrl);
+    if (!absPath || !fs.existsSync(absPath)) {
+      return res.status(404).json({ message: "Fichier preuve introuvable" });
+    }
+
+    const fileName = path.basename(proof.originalFileName || absPath);
+    const stat = fs.statSync(absPath);
+
+    res.setHeader("Content-Type", proof.fileMimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(stat.size || 0));
+    res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
+    return fs.createReadStream(absPath).pipe(res);
+  } catch (e) {
+    console.error("downloadMyBankProof error:", e);
+    return res.status(500).json({ message: "Erreur serveur (downloadMyBankProof)" });
+  }
+}
+
 module.exports = {
   uploadBankProofMiddleware,
   listMyOrders,
   getMyOrder,
   submitMyBankProof,
   reorderMyOrder,
+  downloadMyBankProof,
 };

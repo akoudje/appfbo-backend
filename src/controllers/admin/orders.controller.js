@@ -1,4 +1,6 @@
 const prisma = require("../../prisma");
+const fs = require("fs");
+const path = require("path");
 const { generateParcelNumber } = require("../../helpers/parcel-number");
 const { AdminRole } = require("../../auth/permissions");
 
@@ -22,6 +24,7 @@ const {
   scopeWhere,
   safeFindUniqueScoped,
 } = require("../../helpers/countryScope");
+const { resolveBankProofAbsolutePath } = require("../../utils/bankProofFiles");
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
@@ -609,6 +612,56 @@ async function listOrderMessages(req, res) {
     console.error("listOrderMessages error:", e);
     return res.status(500).json({
       message: "Erreur serveur (listOrderMessages)",
+    });
+  }
+}
+
+async function downloadBankProofFile(req, res) {
+  try {
+    const { id, proofId } = req.params;
+
+    const preorder = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: { id: true },
+    });
+
+    if (!preorder) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const proof = await prisma.bankPaymentProof.findFirst({
+      where: {
+        id: proofId,
+        preorderId: preorder.id,
+      },
+      select: {
+        id: true,
+        fileUrl: true,
+        fileMimeType: true,
+        originalFileName: true,
+      },
+    });
+
+    if (!proof) {
+      return res.status(404).json({ message: "Preuve introuvable" });
+    }
+
+    const absPath = resolveBankProofAbsolutePath(proof.fileUrl);
+    if (!absPath || !fs.existsSync(absPath)) {
+      return res.status(404).json({ message: "Fichier preuve introuvable" });
+    }
+
+    const stat = fs.statSync(absPath);
+    const fileName = path.basename(proof.originalFileName || absPath);
+
+    res.setHeader("Content-Type", proof.fileMimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(stat.size || 0));
+    res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
+    return fs.createReadStream(absPath).pipe(res);
+  } catch (e) {
+    console.error("downloadBankProofFile error:", e);
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (downloadBankProofFile)",
     });
   }
 }
@@ -2124,6 +2177,7 @@ module.exports = {
   listOrders,
   getOrderById,
   listOrderMessages,
+  downloadBankProofFile,
   getDeliveryNotePdf,
   updateOrderStatus,
   getInvoicePreview,

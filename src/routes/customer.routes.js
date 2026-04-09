@@ -28,6 +28,11 @@ router.get("/me", requireCustomerAuth, customerAuthController.me);
 router.get("/me/orders", requireCustomerAuth, customerPortalController.listMyOrders);
 router.get("/me/orders/:id", requireCustomerAuth, customerPortalController.getMyOrder);
 router.post("/me/orders/:id/reorder", requireCustomerAuth, customerPortalController.reorderMyOrder);
+router.get(
+  "/me/orders/:id/bank-proofs/:proofId/file",
+  requireCustomerAuth,
+  customerPortalController.downloadMyBankProof,
+);
 router.post(
   "/me/orders/:id/bank-proof",
   requireCustomerAuth,
