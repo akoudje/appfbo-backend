@@ -27,6 +27,7 @@ router.post("/auth/otp/verify", otpVerifyLimiter, customerAuthController.verifyO
 router.get("/me", requireCustomerAuth, customerAuthController.me);
 router.get("/me/orders", requireCustomerAuth, customerPortalController.listMyOrders);
 router.get("/me/orders/:id", requireCustomerAuth, customerPortalController.getMyOrder);
+router.post("/me/orders/:id/reorder", requireCustomerAuth, customerPortalController.reorderMyOrder);
 router.post(
   "/me/orders/:id/bank-proof",
   requireCustomerAuth,
@@ -35,4 +36,3 @@ router.post(
 );
 
 module.exports = router;
-
