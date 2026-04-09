@@ -208,6 +208,8 @@ async function submitMyBankProof(req, res) {
         fboId: true,
         preorderNumber: true,
         preorderPaymentMode: true,
+        factureReference: true,
+        invoicedAt: true,
       },
     });
     if (!order) {
@@ -218,6 +220,22 @@ async function submitMyBankProof(req, res) {
       return res
         .status(400)
         .json({ message: "Le dépôt de preuve est réservé au mode virement bancaire." });
+    }
+
+    const status = String(order.status || "").toUpperCase();
+    const hasInvoiceSignal = Boolean(order.factureReference || order.invoicedAt);
+    const canUploadAfterBilling = new Set([
+      "INVOICED",
+      "PAYMENT_PENDING",
+      "PAID",
+      "READY",
+      "FULFILLED",
+    ]);
+    if (!hasInvoiceSignal && !canUploadAfterBilling.has(status)) {
+      return res.status(400).json({
+        message:
+          "Le dépôt de preuve sera disponible après traitement par le facturier (montant final communiqué).",
+      });
     }
 
     const now = new Date();
