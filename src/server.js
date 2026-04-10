@@ -23,6 +23,26 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
+const DEFAULT_ALLOWED_ORIGINS = new Set([
+  "https://appfbo-frontend.vercel.app",
+  "https://appfbo-admin.vercel.app",
+  "https://forevercivstore.com",
+  "https://www.forevercivstore.com",
+  "https://admin.forevercivstore.com",
+]);
+
+function parseAllowedOrigins() {
+  const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
+  if (!raw) return DEFAULT_ALLOWED_ORIGINS;
+  const values = raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return new Set(values);
+}
+
+const allowedOrigins = parseAllowedOrigins();
+
 app.use((req, res, next) => {
   const rid =
     req.get("x-request-id") ||
@@ -59,10 +79,7 @@ const corsOptions = {
         return cb(new Error("Bad origin"));
       }
 
-      if (
-        origin === "https://appfbo-frontend.vercel.app" ||
-        origin === "https://appfbo-admin.vercel.app"
-      ) {
+      if (allowedOrigins.has(origin)) {
         return cb(null, true);
       }
 
