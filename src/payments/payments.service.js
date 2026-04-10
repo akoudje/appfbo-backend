@@ -1036,25 +1036,26 @@ async function initiateWavePayment({
     err.statusCode = 400;
     throw err;
   }
-  const amountToChargeFcfa = Math.max(
-    0,
-    Number(
-      amountFcfaOverride ??
-        preorder.activePayment?.amountExpectedFcfa ??
-        computePaymentPricing({
-          preorderPaymentMode: preorder.preorderPaymentMode,
-          orderTotalFcfa: preorder.totalFcfa,
-        }).amountToPayFcfa ??
-        preorder.totalFcfa ??
-        0,
-    ),
-  );
   const resolvedPricingMeta =
     pricingMeta ||
     computePaymentPricing({
       preorderPaymentMode: preorder.preorderPaymentMode,
+      paymentMode: preorder.paymentMode,
+      paymentProvider:
+        preorder.paymentProvider || preorder.activePayment?.provider,
       orderTotalFcfa: preorder.totalFcfa,
     });
+
+  const amountToChargeFcfa = Math.max(
+    0,
+    Number(
+      amountFcfaOverride ??
+        resolvedPricingMeta?.amountToPayFcfa ??
+        preorder.activePayment?.amountExpectedFcfa ??
+        preorder.totalFcfa ??
+        0,
+    ),
+  );
 
   const simulation = isWaveSimulationEnabled();
 
@@ -1361,6 +1362,8 @@ async function getPublicWavePaymentContext({ req, preorderId }) {
   const preorder = await resolvePublicWavePreorder(req, preorderId);
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: preorder.preorderPaymentMode,
+    paymentMode: preorder.paymentMode,
+    paymentProvider: preorder.paymentProvider || preorder.activePayment?.provider,
     orderTotalFcfa: preorder.totalFcfa || 0,
   });
   const lastAttempt = preorder.activePayment?.attempts?.[0] || null;
@@ -1381,9 +1384,7 @@ async function getPublicWavePaymentContext({ req, preorderId }) {
       orderTotalFcfa: Number(preorder.totalFcfa || 0),
       paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
       serviceFeeRatePercent: paymentPricing.serviceFeeRatePercent,
-      amountToPayFcfa:
-        Number(preorder.activePayment?.amountExpectedFcfa || 0) ||
-        paymentPricing.amountToPayFcfa,
+      amountToPayFcfa: paymentPricing.amountToPayFcfa,
       activePayment: preorder.activePayment
         ? {
             id: preorder.activePayment.id,

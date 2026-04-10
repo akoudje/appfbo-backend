@@ -25,6 +25,7 @@ const {
   safeFindUniqueScoped,
 } = require("../../helpers/countryScope");
 const { resolveBankProofAbsolutePath } = require("../../utils/bankProofFiles");
+const { computePaymentPricing } = require("../../payments/payment-pricing");
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
@@ -104,6 +105,20 @@ function actorLabel(req) {
     req.user?.role ||
     "admin"
   );
+}
+
+function resolveOrderAmountToPayFcfa(order) {
+  const activeExpected = Number(order?.activePayment?.amountExpectedFcfa || 0);
+  if (activeExpected > 0) return activeExpected;
+
+  const pricing = computePaymentPricing({
+    preorderPaymentMode: order?.preorderPaymentMode,
+    paymentMode: order?.paymentMode,
+    paymentProvider: order?.paymentProvider,
+    orderTotalFcfa: Number(order?.totalFcfa || 0),
+  });
+
+  return Number(pricing.amountToPayFcfa || 0);
 }
 
 function isGlobalAdminRole(role) {
@@ -1148,8 +1163,14 @@ async function resendInvoiceSms(req, res) {
         totalFcfa: true,
         preorderPaymentMode: true,
         paymentProvider: true,
+        paymentMode: true,
         factureWhatsappTo: true,
         whatsappMessage: true,
+        activePayment: {
+          select: {
+            amountExpectedFcfa: true,
+          },
+        },
       },
     });
 
@@ -1172,6 +1193,7 @@ async function resendInvoiceSms(req, res) {
       },
     });
 
+    const amountToPayFcfa = resolveOrderAmountToPayFcfa(order);
     const paymentLink = String(
       latestMessage?.paymentLinkTracked ||
         latestMessage?.paymentLinkTarget ||
@@ -1181,7 +1203,7 @@ async function resendInvoiceSms(req, res) {
       preorder: order,
       invoiceRef: order.factureReference || order.preorderNumber || "-",
       paymentLink: paymentLink || null,
-      amountToPayFcfa: order.totalFcfa || 0,
+      amountToPayFcfa,
     });
     const destination =
       String(order.factureWhatsappTo || "").trim() ||
@@ -1284,7 +1306,13 @@ async function resendConfirmationSms(req, res) {
         totalFcfa: true,
         preorderPaymentMode: true,
         paymentProvider: true,
+        paymentMode: true,
         factureWhatsappTo: true,
+        activePayment: {
+          select: {
+            amountExpectedFcfa: true,
+          },
+        },
       },
     });
 
@@ -1300,6 +1328,7 @@ async function resendConfirmationSms(req, res) {
       });
     }
 
+    const amountToPayFcfa = resolveOrderAmountToPayFcfa(order);
     const actorName = actorLabel(req);
     const payloadOrder = { ...order };
 
@@ -1336,7 +1365,7 @@ async function resendConfirmationSms(req, res) {
             latestMessage?.paymentLinkTracked ||
             latestMessage?.paymentLinkTarget ||
             null,
-          amountToPayFcfa: order.totalFcfa || 0,
+          amountToPayFcfa,
         }) ||
         String(latestMessage?.body || "").trim();
     }

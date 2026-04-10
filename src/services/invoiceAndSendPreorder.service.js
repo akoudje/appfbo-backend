@@ -186,6 +186,8 @@ async function buildInvoicePreview({
 
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: preorder.preorderPaymentMode,
+    paymentMode: preorder.paymentMode,
+    paymentProvider: preorder.paymentProvider,
     orderTotalFcfa: effectiveInvoiceTotalFcfa,
   });
 
@@ -353,6 +355,8 @@ async function invoiceAndSendPreorder({
   }
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: existingPreorder.preorderPaymentMode,
+    paymentMode: existingPreorder.paymentMode,
+    paymentProvider: existingPreorder.paymentProvider,
     orderTotalFcfa: effectiveInvoiceTotalFcfa,
   });
 
