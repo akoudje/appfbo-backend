@@ -31,6 +31,10 @@ const DEFAULT_ALLOWED_ORIGINS = new Set([
   "https://admin.forevercivstore.com",
 ]);
 
+const DEFAULT_ALLOWED_ORIGIN_PATTERNS = [
+  /^https:\/\/[a-z0-9-]+\.forevercivstore\.com$/i,
+];
+
 function parseAllowedOrigins() {
   const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
   if (!raw) return DEFAULT_ALLOWED_ORIGINS;
@@ -41,7 +45,29 @@ function parseAllowedOrigins() {
   return new Set(values);
 }
 
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function wildcardToRegex(pattern) {
+  const normalized = String(pattern || "").trim();
+  if (!normalized) return null;
+  const escaped = escapeRegex(normalized).replace(/\\\*/g, "[^.]+");
+  return new RegExp(`^${escaped}$`, "i");
+}
+
+function parseAllowedOriginPatterns() {
+  const raw = String(process.env.ALLOWED_ORIGIN_PATTERNS || "").trim();
+  if (!raw) return DEFAULT_ALLOWED_ORIGIN_PATTERNS;
+
+  return raw
+    .split(",")
+    .map((v) => wildcardToRegex(v))
+    .filter(Boolean);
+}
+
 const allowedOrigins = parseAllowedOrigins();
+const allowedOriginPatterns = parseAllowedOriginPatterns();
 
 app.use((req, res, next) => {
   const rid =
@@ -83,6 +109,10 @@ const corsOptions = {
         return cb(null, true);
       }
 
+      if (allowedOriginPatterns.some((rx) => rx.test(origin))) {
+        return cb(null, true);
+      }
+
       if (hostname === "localhost" || hostname === "127.0.0.1") {
         return cb(null, true);
       }
@@ -109,6 +139,12 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+
+console.log("CORS allowlist (exact):", Array.from(allowedOrigins).join(", "));
+console.log(
+  "CORS allowlist (patterns):",
+  allowedOriginPatterns.map((rx) => rx.toString()).join(", ")
+);
 
 
 
