@@ -614,6 +614,7 @@ model Preorder {
 
   // Facturation
   factureReference  String?
+  paymentCollectionCode String?
   factureWhatsappTo String?
   billingAdjustmentReason String? @db.Text
   parcelNumber      String? @unique
@@ -717,6 +718,7 @@ model Preorder {
   @@index([fulfilledById])
   @@index([cancelledById])
   @@index([factureReference])
+  @@index([paymentCollectionCode])
   @@index([activePaymentId])
   @@index([bankPaymentStatus, bankPaymentDueAt])
   @@index([bankPaymentValidatedById])

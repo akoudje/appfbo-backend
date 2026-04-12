@@ -59,6 +59,7 @@ function buildOrderSummary(order) {
     preorderNumber: order.preorderNumber,
     parcelNumber: order.parcelNumber,
     factureReference: order.factureReference,
+    paymentCollectionCode: order.paymentCollectionCode,
     status: order.status,
     paymentStatus: order.paymentStatus,
     paymentProvider: order.paymentProvider,
@@ -216,6 +217,7 @@ async function getWorkspace(req, res) {
             { fboNumero: { contains: String(q).trim(), mode: "insensitive" } },
             { fboNomComplet: { contains: String(q).trim(), mode: "insensitive" } },
             { factureReference: { contains: String(q).trim(), mode: "insensitive" } },
+            { paymentCollectionCode: { contains: String(q).trim(), mode: "insensitive" } },
             { preorderNumber: { contains: String(q).trim(), mode: "insensitive" } },
             { parcelNumber: { contains: String(q).trim(), mode: "insensitive" } },
             {

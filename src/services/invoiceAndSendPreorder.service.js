@@ -138,6 +138,20 @@ function compactText(value = "") {
     .trim();
 }
 
+function buildPaymentCollectionCode(preorder = {}) {
+  const countryCode = String(preorder?.country?.code || "CIV")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 3) || "CIV";
+  const baseRef = String(preorder?.preorderNumber || preorder?.id || "000000")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  const compactRef = baseRef.slice(-10) || "000000";
+  return `PC-${countryCode}-${compactRef}`;
+}
+
 function firstSmsCandidate(candidates = [], maxLength = MAX_SMS_LENGTH) {
   for (const raw of candidates) {
     const candidate = compactText(raw);
@@ -226,9 +240,11 @@ function buildInvoiceMessage({
   serviceFeeRatePercent = 0,
 }) {
   const payableAmount = Number(amountToPayFcfa ?? preorder.totalFcfa ?? 0);
-  const ref = compactText(invoiceRef || preorder?.factureReference || "-")
+  const collectionCode = compactText(
+    preorder?.paymentCollectionCode || buildPaymentCollectionCode(preorder),
+  )
     .replace(/\s+/g, "")
-    .slice(0, 24);
+    .slice(0, 32);
   const amountFmt = new Intl.NumberFormat("fr-FR").format(
     Math.max(0, Math.round(payableAmount || 0)),
   );
@@ -250,24 +266,24 @@ function buildInvoiceMessage({
 
   if (normalizedLink && !isCashFlow) {
     return firstSmsCandidate([
-      `FOREVER: Facture ${ref}. Montant: ${amountFmt}F. Paiement sécurisé: ${normalizedLink}`,
-      `FOREVER: Ref ${ref}. Montant ${amountFmt}F. Lien: ${normalizedLink}`,
-      `FOREVER: Ref ${ref}. Paiement: ${normalizedLink}`,
+      `FOREVER: Precommande en ligne. Code caisse ${collectionCode}. Montant ${amountFmt}F. Paiement: ${normalizedLink}`,
+      `FOREVER: Code caisse ${collectionCode}. Montant ${amountFmt}F. Lien: ${normalizedLink}`,
+      `FOREVER: Code ${collectionCode}. Paiement: ${normalizedLink}`,
     ]);
   }
 
   if (isBankTransferFlow) {
     return firstSmsCandidate([
-      `FOREVER: Facture ${ref}. Montant: ${amountFmt}F. Virement/versement: consultez email ou espace client.`,
-      `FOREVER: Ref ${ref}. ${amountFmt}F. Instructions bancaires envoyees par email.`,
-      `FOREVER: Ref ${ref}. Connectez-vous a votre espace client pour les details bancaires.`,
+      `FOREVER: Precommande en ligne. Code caisse ${collectionCode}. Montant ${amountFmt}F. Virement: voir email/espace client.`,
+      `FOREVER: Code caisse ${collectionCode}. ${amountFmt}F. Instructions bancaires par email.`,
+      `FOREVER: Code ${collectionCode}. Voir espace client pour le virement.`,
     ]);
   }
 
   return firstSmsCandidate([
-    `FOREVER: Facture ${ref}. Montant: ${amountFmt}F. Paiement à la caisse FLP.`,
-    `FOREVER: Ref ${ref}. Montant ${amountFmt}F. Paiement caisse FLP.`,
-    `FOREVER: Ref ${ref}. Facture disponible.`,
+    `FOREVER: Precommande en ligne. Code caisse ${collectionCode}. Montant ${amountFmt}F. Paiement a la caisse FLP.`,
+    `FOREVER: Code caisse ${collectionCode}. Montant ${amountFmt}F. Paiement caisse FLP.`,
+    `FOREVER: Code ${collectionCode}. Paiement en caisse FLP.`,
   ]);
 }
 
@@ -359,6 +375,9 @@ async function invoiceAndSendPreorder({
     paymentProvider: existingPreorder.paymentProvider,
     orderTotalFcfa: effectiveInvoiceTotalFcfa,
   });
+  const paymentCollectionCode =
+    existingPreorder.paymentCollectionCode ||
+    buildPaymentCollectionCode(existingPreorder);
 
   // 2) Facturer la commande
   const invoicedPreorder = await prisma.$transaction(async (tx) => {
@@ -394,6 +413,7 @@ async function invoiceAndSendPreorder({
         status: "INVOICED",
         billingGrade: effectiveGrade,
         factureReference: invoiceRef,
+        paymentCollectionCode,
         factureWhatsappTo: whatsappTo,
         indicativeTotalFcfa,
         computedGradeTotalFcfa: pricingSummary.totals.totalFcfa || 0,
@@ -431,6 +451,7 @@ async function invoiceAndSendPreorder({
       note: "Précommande facturée.",
       meta: {
         invoiceRef,
+        paymentCollectionCode,
         whatsappTo,
         previousGrade: existingPreorder.fboGrade,
         effectiveGrade,
@@ -491,6 +512,7 @@ async function invoiceAndSendPreorder({
     preorder: {
       ...invoicedPreorder,
       factureWhatsappTo: whatsappTo,
+      paymentCollectionCode,
     },
     purpose: messagePurpose,
     message: whatsappMessage,
@@ -528,6 +550,7 @@ async function invoiceAndSendPreorder({
           : "Precommande facturee, mais echec SMS.",
       meta: {
         invoiceRef,
+        paymentCollectionCode,
         whatsappTo,
         previousGrade: existingPreorder.fboGrade,
         effectiveGrade,

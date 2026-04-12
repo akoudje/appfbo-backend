@@ -110,6 +110,8 @@ function buildDefaultEmailBodyByPurpose({
   const parcelNumber = preorder?.parcelNumber || preorderNumber;
   const invoiceRef =
     preorder?.factureReference || preorder?.preorderNumber || preorder?.id || "-";
+  const paymentCollectionCode =
+    preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-";
   const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
   const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
   const pickupCode = preorder?.pickupSecretCode || "-";
@@ -118,8 +120,8 @@ function buildDefaultEmailBodyByPurpose({
     return [
       `Bonjour ${customer},`,
       "",
-      "Votre facture est disponible.",
-      `Référence: ${invoiceRef}`,
+      "Votre précommande en ligne est disponible pour paiement.",
+      `Code encaissement: ${paymentCollectionCode}`,
       `Commande: ${preorderNumber}`,
       `Montant à payer: ${total}`,
       paymentLink ? `Lien de paiement: ${paymentLink}` : "Mode de paiement: à la caisse FLP",
@@ -350,6 +352,8 @@ function buildTemplateContext({
   const parcelNumber = preorder?.parcelNumber || preorderNumber;
   const invoiceRef =
     preorder?.factureReference || preorder?.preorderNumber || preorder?.id || "-";
+  const paymentCollectionCode =
+    preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-";
   const totalFcfa = Number(
     preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0,
   );
@@ -363,6 +367,7 @@ function buildTemplateContext({
     preorderNumber,
     parcelNumber,
     invoiceRef,
+    paymentCollectionCode,
     totalFcfa: String(Math.max(0, Math.round(totalFcfa))),
     totalFcfaLabel: formatFcfa(totalFcfa),
     paymentLink,
