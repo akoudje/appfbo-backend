@@ -380,16 +380,6 @@ async function setItems(req, res) {
       });
     });
 
-    publishRealtimeEvent({
-      countryId: req.countryId,
-      eventKey: "billing_queue_new",
-      orderId: preorderId,
-      meta: {
-        status: "SUBMITTED",
-        billingWorkStatus: "QUEUED",
-      },
-    });
-
     return res.json({
       preorderId,
       preorderNumber:
@@ -634,6 +624,16 @@ async function submit(req, res) {
           },
         },
       });
+    });
+
+    publishRealtimeEvent({
+      countryId: preorder.countryId || req.countryId,
+      eventKey: "billing_queue_new",
+      orderId: preorderId,
+      meta: {
+        status: "SUBMITTED",
+        billingWorkStatus: "QUEUED",
+      },
     });
 
     return res.json({

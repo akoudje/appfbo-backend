@@ -163,11 +163,11 @@ async function markManualPaymentPending(req, res) {
 
     publishRealtimeEvent({
       countryId: order.countryId || req.countryId,
-      eventKey: "cashier_launch_new",
+      eventKey: "cashier_collect_new",
       orderId: order.id,
       meta: {
-        status: "PAID",
-        paymentStatus: "PAID",
+        status: "PAYMENT_PENDING",
+        paymentStatus: "PAYMENT_PENDING",
       },
     });
 

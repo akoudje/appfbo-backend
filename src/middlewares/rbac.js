@@ -20,8 +20,17 @@ function getBearerToken(req) {
   const [type, token] = raw.split(" ");
   if (type?.toLowerCase() === "bearer" && token) return token;
 
-  // Désactivé par défaut en production (risque de fuite via logs/proxy).
-  if (String(process.env.ALLOW_QUERY_TOKEN_AUTH || "").toLowerCase() !== "true") {
+  const queryTokenAuthEnabled =
+    String(process.env.ALLOW_QUERY_TOKEN_AUTH || "").toLowerCase() === "true";
+  const reqPath = String(req.path || "");
+  const reqOriginalUrl = String(req.originalUrl || "");
+  const isRealtimeEventsStream =
+    reqPath.endsWith("/events/stream") ||
+    reqOriginalUrl.includes("/events/stream");
+
+  // Query token autorisé explicitement par env, ou pour le flux SSE admin/events/stream
+  // utilisé par EventSource (qui ne permet pas d'envoyer Authorization header).
+  if (!queryTokenAuthEnabled && !isRealtimeEventsStream) {
     return null;
   }
 
