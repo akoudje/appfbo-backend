@@ -528,7 +528,7 @@ async function submit(req, res) {
         fboEmail: preorder.fboEmail || null,
         countryId: preorder.countryId || null,
       },
-      purpose: "INVOICE",
+      purpose: "PREORDER_SUBMITTED",
       message: smsMessage,
       actorName: "SYSTEM",
       toPhone: smsTo,

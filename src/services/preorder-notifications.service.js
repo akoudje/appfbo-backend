@@ -416,24 +416,42 @@ function buildSmsTemplateCandidates({ purpose, context }) {
   return ["INVOICE_CASH", "INVOICE"];
 }
 
+function sanitizeInvoiceSmsMessage(value = "") {
+  let msg = compactText(value || "");
+  if (!msg) return msg;
+
+  msg = msg.replace(/^FOREVER:\s*FOREVER:\s*/i, "FOREVER: ");
+  msg = msg.replace(/\s*(Paiement|Lien)\s*:\s*$/i, "");
+  msg = msg.replace(/\s{2,}/g, " ").trim();
+  return msg;
+}
+
 function ensureInvoiceSmsIncludesCollectionCode({
   purpose,
   smsMessage,
   paymentCollectionCode,
 }) {
   const purposeKey = normalizePurposeKey(purpose);
-  if (purposeKey !== "INVOICE") return firstSmsCandidate([smsMessage]);
+  if (purposeKey !== "INVOICE") return firstSmsCandidate([compactText(smsMessage)]);
 
   const normalizedCode = compactText(paymentCollectionCode || "");
-  if (!normalizedCode) return firstSmsCandidate([smsMessage]);
+  const normalizedMessage = sanitizeInvoiceSmsMessage(smsMessage);
 
-  const normalizedMessage = compactText(smsMessage || "");
+  if (!normalizedCode) return firstSmsCandidate([normalizedMessage]);
+
   if (normalizedMessage.includes(normalizedCode)) {
     return firstSmsCandidate([normalizedMessage]);
   }
 
+  if (/^FOREVER:/i.test(normalizedMessage)) {
+    const withCodeAfterBrand = normalizedMessage.replace(
+      /^FOREVER:\s*/i,
+      `FOREVER: Code ${normalizedCode}. `,
+    );
+    return firstSmsCandidate([withCodeAfterBrand]);
+  }
+
   return firstSmsCandidate([
-    `FOREVER: Code caisse ${normalizedCode}. ${normalizedMessage}`,
     `FOREVER: Code ${normalizedCode}. ${normalizedMessage}`,
     `FOREVER: Code caisse ${normalizedCode}.`,
   ]);
