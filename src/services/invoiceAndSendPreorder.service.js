@@ -266,24 +266,24 @@ function buildInvoiceMessage({
 
   if (normalizedLink && !isCashFlow) {
     return firstSmsCandidate([
-      `FOREVER: Precommande en ligne. Code caisse ${collectionCode}. Montant ${amountFmt}F. Paiement: ${normalizedLink}`,
-      `FOREVER: Code caisse ${collectionCode}. Montant ${amountFmt}F. Lien: ${normalizedLink}`,
-      `FOREVER: Code ${collectionCode}. Paiement: ${normalizedLink}`,
+      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Paiement Wave: ${normalizedLink}`,
+      `FOREVER: Code ${collectionCode}. ${amountFmt}F. ${normalizedLink}`,
+      `FOREVER: Code ${collectionCode}. ${normalizedLink}`,
     ]);
   }
 
   if (isBankTransferFlow) {
     return firstSmsCandidate([
-      `FOREVER: Precommande en ligne. Code caisse ${collectionCode}. Montant ${amountFmt}F. Virement: voir email/espace client.`,
-      `FOREVER: Code caisse ${collectionCode}. ${amountFmt}F. Instructions bancaires par email.`,
+      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Virement: voir email ou espace client.`,
+      `FOREVER: Code ${collectionCode}. ${amountFmt}F. Instructions bancaires par email.`,
       `FOREVER: Code ${collectionCode}. Voir espace client pour le virement.`,
     ]);
   }
 
   return firstSmsCandidate([
-    `FOREVER: Precommande en ligne. Code caisse ${collectionCode}. Montant ${amountFmt}F. Paiement a la caisse FLP.`,
-    `FOREVER: Code caisse ${collectionCode}. Montant ${amountFmt}F. Paiement caisse FLP.`,
-    `FOREVER: Code ${collectionCode}. Paiement en caisse FLP.`,
+    `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Paiement a la caisse FLP.`,
+    `FOREVER: Code ${collectionCode}. ${amountFmt}F. Paiement caisse FLP.`,
+    `FOREVER: Code ${collectionCode}. Paiement caisse FLP.`,
   ]);
 }
 
