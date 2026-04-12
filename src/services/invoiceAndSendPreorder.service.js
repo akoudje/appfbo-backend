@@ -366,9 +366,6 @@ async function invoiceAndSendPreorder({
   const requiresAdjustmentReason =
     existingPreorder.fboGrade !== effectiveGrade ||
     effectiveInvoiceTotalFcfa !== Number(pricingSummary.totals.totalFcfa || 0);
-  if (requiresAdjustmentReason && !billingAdjustmentReason) {
-    throw new Error("BILLING_ADJUSTMENT_REASON_REQUIRED");
-  }
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: existingPreorder.preorderPaymentMode,
     paymentMode: existingPreorder.paymentMode,
