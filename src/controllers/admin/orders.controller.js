@@ -864,7 +864,6 @@ async function invoiceOrder(req, res) {
       note,
       fboGrade,
       invoiceAmountFcfa,
-      billingAdjustmentReason,
     } =
       req.body || {};
 
@@ -881,7 +880,6 @@ async function invoiceOrder(req, res) {
       invoiceNote: note,
       billingGradeInput: fboGrade,
       invoiceAmountOverrideInput: invoiceAmountFcfa,
-      billingAdjustmentReasonInput: billingAdjustmentReason,
     });
 
     publishRealtimeEvent({
@@ -929,13 +927,6 @@ async function invoiceOrder(req, res) {
     if (e.message === "INVOICE_REFERENCE_REQUIRED") {
       return res.status(400).json({
         message: "La référence AS400 est obligatoire pour facturer la précommande.",
-      });
-    }
-
-    if (e.message === "BILLING_ADJUSTMENT_REASON_REQUIRED") {
-      return res.status(400).json({
-        message:
-          "Le motif d'ajustement est obligatoire si le grade retenu ou le montant AS400 diffère du calcul applicatif.",
       });
     }
 

@@ -127,11 +127,6 @@ function normalizeInvoiceAmountOverride(value) {
   return Math.round(amount);
 }
 
-function normalizeAdjustmentReason(value) {
-  const normalized = String(value || "").trim();
-  return normalized || null;
-}
-
 function compactText(value = "") {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -219,9 +214,7 @@ async function buildInvoicePreview({
     pricingTotals: pricingSummary.totals,
     invoiceAmountOverrideFcfa,
     effectiveInvoiceTotalFcfa,
-    requiresAdjustmentReason:
-      preorder.fboGrade !== effectiveGrade ||
-      effectiveInvoiceTotalFcfa !== Number(pricingSummary.totals.totalFcfa || 0),
+    requiresAdjustmentReason: false,
     payment: paymentPricing,
   };
 }
@@ -300,7 +293,6 @@ async function invoiceAndSendPreorder({
   invoiceNote = "",
   billingGradeInput = "",
   invoiceAmountOverrideInput = "",
-  billingAdjustmentReasonInput = "",
 }) {
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
@@ -360,12 +352,6 @@ async function invoiceAndSendPreorder({
   );
   const effectiveInvoiceTotalFcfa =
     invoiceAmountOverrideFcfa ?? pricingSummary.totals.totalFcfa;
-  const billingAdjustmentReason = normalizeAdjustmentReason(
-    billingAdjustmentReasonInput,
-  );
-  const requiresAdjustmentReason =
-    existingPreorder.fboGrade !== effectiveGrade ||
-    effectiveInvoiceTotalFcfa !== Number(pricingSummary.totals.totalFcfa || 0);
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: existingPreorder.preorderPaymentMode,
     paymentMode: existingPreorder.paymentMode,
@@ -415,7 +401,7 @@ async function invoiceAndSendPreorder({
         indicativeTotalFcfa,
         computedGradeTotalFcfa: pricingSummary.totals.totalFcfa || 0,
         as400InvoiceTotalFcfa: effectiveInvoiceTotalFcfa || 0,
-        billingAdjustmentReason,
+        billingAdjustmentReason: null,
         invoicedAt: now,
         invoicedById: actorAdminId || existingPreorder.invoicedById || null,
         totalCc: String(Number(pricingSummary.totals.totalCc || 0).toFixed(3)),
@@ -457,7 +443,6 @@ async function invoiceAndSendPreorder({
         computedTotalFcfa: pricingSummary.totals.totalFcfa || 0,
         invoiceAmountOverrideFcfa,
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
-        billingAdjustmentReason,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
         actorName,
@@ -556,7 +541,6 @@ async function invoiceAndSendPreorder({
         computedTotalFcfa: pricingSummary.totals.totalFcfa || 0,
         invoiceAmountOverrideFcfa,
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
-        billingAdjustmentReason,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
         messageId: notificationResult.messageId || null,
