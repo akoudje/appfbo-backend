@@ -75,6 +75,26 @@ function formatFcfa(value) {
   return `${new Intl.NumberFormat("fr-FR").format(Math.max(0, Math.round(num)))} FCFA`;
 }
 
+function buildPublicAssetUrl(filename = "") {
+  const cleanFilename = String(filename || "").trim().replace(/^\/+/, "");
+  if (!cleanFilename) return "";
+
+  const base =
+    String(process.env.EMAIL_PUBLIC_ASSETS_BASE_URL || "").trim() ||
+    String(process.env.FRONTEND_PUBLIC_URL || "").trim() ||
+    String(process.env.APP_PUBLIC_BASE_URL || "").trim() ||
+    "https://appfbo-frontend.vercel.app";
+
+  const normalizedBase = base.replace(/\/+$/, "");
+  return `${normalizedBase}/${cleanFilename}`;
+}
+
+function formatOptionalContactLine(label, value) {
+  const normalized = compactText(value || "");
+  if (!normalized) return null;
+  return `${label}: ${normalized}`;
+}
+
 function buildEmailSubjectByPurpose({ purpose, preorder }) {
   const normalizedPurpose = String(purpose || "").trim().toUpperCase();
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
@@ -103,6 +123,8 @@ function buildDefaultEmailBodyByPurpose({
   smsMessage,
   paymentLinkTarget = null,
   paymentLinkTracked = null,
+  supportPhone = null,
+  pickupAddress = null,
 }) {
   const normalizedPurpose = String(purpose || "").trim().toUpperCase();
   const customer = preorder?.fboNomComplet || "Client";
@@ -115,20 +137,37 @@ function buildDefaultEmailBodyByPurpose({
   const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
   const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
   const pickupCode = preorder?.pickupSecretCode || "-";
+  const supportLine = formatOptionalContactLine("Assistance", supportPhone);
+  const pickupAddressLine = formatOptionalContactLine(
+    "Adresse de retrait",
+    pickupAddress,
+  );
 
   if (normalizedPurpose === "INVOICE" || normalizedPurpose === "PAYMENT_LINK") {
     return [
       `Bonjour ${customer},`,
       "",
-      "Votre précommande en ligne est disponible pour paiement.",
+      `Votre précommande ${preorderNumber} est disponible pour paiement.`,
+      `Référence facture: ${invoiceRef}`,
       `Code encaissement: ${paymentCollectionCode}`,
-      `Commande: ${preorderNumber}`,
       `Montant à payer: ${total}`,
-      paymentLink ? `Lien de paiement: ${paymentLink}` : "Mode de paiement: à la caisse FLP",
+      paymentLink
+        ? `Lien de paiement sécurisé: ${paymentLink}`
+        : "Mode de paiement: règlement à la caisse FLP",
+      "",
+      "Étapes recommandées:",
+      "1. Vérifiez le montant et la référence de commande.",
+      paymentLink
+        ? "2. Ouvrez le lien et finalisez le paiement en ligne."
+        : "2. Présentez le code encaissement au comptoir pour régler.",
+      "3. Conservez cette notification jusqu'à confirmation du paiement.",
+      supportLine,
       "",
       "Merci de votre confiance.",
       "Equipe FOREVER",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (normalizedPurpose === "ORDER_READY") {
@@ -137,10 +176,15 @@ function buildDefaultEmailBodyByPurpose({
       "",
       `Votre colis ${parcelNumber} est prêt à être retiré.`,
       `Code de retrait: ${pickupCode}`,
+      pickupAddressLine,
       "",
-      "Présentez ce code au comptoir lors du retrait.",
+      "Présentez ce code au comptoir pour sécuriser la remise.",
+      "Sans ce code, le retrait peut être refusé.",
+      supportLine,
       "Equipe FOREVER",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (normalizedPurpose === "PREPARATION_STARTED") {
@@ -148,10 +192,14 @@ function buildDefaultEmailBodyByPurpose({
       `Bonjour ${customer},`,
       "",
       `Votre colis ${parcelNumber} est en cours de préparation.`,
-      "Nous vous informerons dès qu'il sera prêt.",
+      "Nos équipes finalisent la préparation de votre commande.",
+      "Vous recevrez une nouvelle notification dès qu'il sera prêt au retrait.",
+      supportLine,
       "",
       "Equipe FOREVER",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (normalizedPurpose === "PAYMENT_CONFIRMED") {
@@ -159,22 +207,32 @@ function buildDefaultEmailBodyByPurpose({
       `Bonjour ${customer},`,
       "",
       `Votre paiement pour la commande ${preorderNumber} a été confirmé.`,
+      `Référence facture: ${invoiceRef}`,
+      `Montant confirmé: ${total}`,
+      "Votre commande suit son traitement normal.",
+      supportLine,
       "",
       "Merci pour votre confiance.",
       "Equipe FOREVER",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (normalizedPurpose === "ORDER_FULFILLED") {
     return [
       `Bonjour ${customer},`,
       "",
-      `Votre commande ${preorderNumber} a été clôturée avec succès.`,
-      `Référence colis: ${parcelNumber}`,
+      `Le retrait du colis ${parcelNumber} a été confirmé.`,
+      `Commande associée: ${preorderNumber}`,
+      "Cette commande est désormais clôturée avec succès.",
+      supportLine,
       "",
       "Merci pour votre confiance.",
       "Equipe FOREVER",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   return [
@@ -216,7 +274,7 @@ function textToHtmlParagraphs(value = "") {
 function buildDefaultEmailHtml({ subject, body, preorder }) {
   const logoUrl =
     String(process.env.EMAIL_BRAND_LOGO_URL || "").trim() ||
-    "https://appfbo-frontend.vercel.app/logo-forever.png";
+    buildPublicAssetUrl("forever-corporate-logo.png");
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
   const safeSubject = escapeHtml(subject || `Notification commande ${preorderNumber}`);
   const content = textToHtmlParagraphs(body);
@@ -706,6 +764,11 @@ async function sendPreorderNotification({
   const defaultEmailSubject =
     String(emailSubject || "").trim() ||
     buildEmailSubjectByPurpose({ purpose, preorder });
+  const fallbackSmsMessage = firstSmsCandidate([compactText(message || "")]);
+
+  const countryTemplateSettings = await loadCountryNotificationTemplates(
+    preorder?.countryId || preorder?.country?.id || null,
+  );
   const defaultEmailMessage =
     String(emailMessage || "").trim() ||
     buildDefaultEmailBodyByPurpose({
@@ -714,12 +777,9 @@ async function sendPreorderNotification({
       smsMessage: message,
       paymentLinkTarget,
       paymentLinkTracked,
+      supportPhone: countryTemplateSettings?.supportPhone || null,
+      pickupAddress: countryTemplateSettings?.pickupAddress || null,
     });
-  const fallbackSmsMessage = firstSmsCandidate([compactText(message || "")]);
-
-  const countryTemplateSettings = await loadCountryNotificationTemplates(
-    preorder?.countryId || preorder?.country?.id || null,
-  );
   const context = buildTemplateContext({
     preorder,
     purpose,
