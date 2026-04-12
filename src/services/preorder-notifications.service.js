@@ -272,6 +272,29 @@ function normalizePurposeKey(purpose = "") {
   return key;
 }
 
+function resolvePaymentFlowKey(preorder = {}, paymentLink = "") {
+  const mode = String(
+    preorder?.preorderPaymentMode ||
+      preorder?.paymentMode ||
+      preorder?.paymentProvider ||
+      "",
+  )
+    .trim()
+    .toUpperCase();
+  const hasPaymentLink = Boolean(String(paymentLink || "").trim());
+  const isBankTransfer =
+    mode === "BANK_TRANSFER" ||
+    mode.includes("BANK_TRANSFER") ||
+    mode.includes("VIREMENT") ||
+    mode.includes("BANK");
+  const isCash = mode.includes("ESPE") || mode === "MANUAL" || mode === "CASH";
+
+  if (hasPaymentLink || mode.includes("WAVE")) return "WAVE";
+  if (isBankTransfer) return "BANK_TRANSFER";
+  if (isCash) return "CASH";
+  return "CASH";
+}
+
 async function findRecentDuplicateOrderMessage({
   preorderId,
   purpose,
@@ -359,6 +382,7 @@ function buildTemplateContext({
   );
   const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
   const pickupCode = preorder?.pickupSecretCode || "-";
+  const paymentFlow = resolvePaymentFlowKey(preorder, paymentLink);
 
   return {
     purpose: normalizePurposeKey(purpose),
@@ -371,10 +395,48 @@ function buildTemplateContext({
     totalFcfa: String(Math.max(0, Math.round(totalFcfa))),
     totalFcfaLabel: formatFcfa(totalFcfa),
     paymentLink,
+    paymentFlow,
     pickupCode,
     supportPhone: supportPhone || "",
     pickupAddress: pickupAddress || "",
   };
+}
+
+function buildSmsTemplateCandidates({ purpose, context }) {
+  const purposeKey = normalizePurposeKey(purpose);
+  if (purposeKey !== "INVOICE") return [purposeKey];
+
+  const flow = String(context?.paymentFlow || "CASH").toUpperCase();
+  if (flow === "WAVE") {
+    return ["INVOICE_WAVE", "INVOICE"];
+  }
+  if (flow === "BANK_TRANSFER") {
+    return ["INVOICE_BANK_TRANSFER", "INVOICE"];
+  }
+  return ["INVOICE_CASH", "INVOICE"];
+}
+
+function ensureInvoiceSmsIncludesCollectionCode({
+  purpose,
+  smsMessage,
+  paymentCollectionCode,
+}) {
+  const purposeKey = normalizePurposeKey(purpose);
+  if (purposeKey !== "INVOICE") return firstSmsCandidate([smsMessage]);
+
+  const normalizedCode = compactText(paymentCollectionCode || "");
+  if (!normalizedCode) return firstSmsCandidate([smsMessage]);
+
+  const normalizedMessage = compactText(smsMessage || "");
+  if (normalizedMessage.includes(normalizedCode)) {
+    return firstSmsCandidate([normalizedMessage]);
+  }
+
+  return firstSmsCandidate([
+    `FOREVER: Code caisse ${normalizedCode}. ${normalizedMessage}`,
+    `FOREVER: Code ${normalizedCode}. ${normalizedMessage}`,
+    `FOREVER: Code caisse ${normalizedCode}.`,
+  ]);
 }
 
 function resolveConfiguredTemplates({
@@ -386,11 +448,11 @@ function resolveConfiguredTemplates({
   fallbackEmailBody,
 }) {
   const purposeKey = normalizePurposeKey(purpose);
+  const smsPurposeCandidates = buildSmsTemplateCandidates({ purpose, context });
 
-  const smsTemplate = getNestedTemplate(templatesRoot, [
-    "sms",
-    purposeKey,
-  ]);
+  const smsTemplate = smsPurposeCandidates
+    .map((key) => getNestedTemplate(templatesRoot, ["sms", key]))
+    .find(Boolean);
   const emailSubjectTemplate = getNestedTemplate(templatesRoot, [
     "email",
     purposeKey,
@@ -424,7 +486,11 @@ function resolveConfiguredTemplates({
   });
 
   return {
-    smsMessage: firstSmsCandidate([resolvedSms || fallbackSms]),
+    smsMessage: ensureInvoiceSmsIncludesCollectionCode({
+      purpose,
+      smsMessage: resolvedSms || fallbackSms,
+      paymentCollectionCode: context?.paymentCollectionCode,
+    }),
     emailSubject: resolvedSubject || fallbackEmailSubject,
     emailBody: resolvedEmailBody || fallbackEmailBody,
     emailHtml: resolvedEmailHtml,
