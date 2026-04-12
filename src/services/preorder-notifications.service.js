@@ -330,6 +330,27 @@ function normalizePurposeKey(purpose = "") {
   return key;
 }
 
+const ORDER_MESSAGE_PURPOSE_VALUES = new Set([
+  "INVOICE",
+  "PAYMENT_LINK",
+  "REMINDER",
+  "PAYMENT_CONFIRMED",
+  "PREPARATION_STARTED",
+  "ORDER_READY",
+  "ORDER_FULFILLED",
+]);
+
+function resolvePersistedOrderMessagePurpose(purpose = "") {
+  const key = String(purpose || "").trim().toUpperCase();
+  if (ORDER_MESSAGE_PURPOSE_VALUES.has(key)) return key;
+
+  // Compatibilité rétroactive: certains flux utilisent PREORDER_SUBMITTED
+  // alors que l'enum Prisma ne le contient pas.
+  if (key === "PREORDER_SUBMITTED") return "REMINDER";
+
+  return "REMINDER";
+}
+
 function resolvePaymentFlowKey(preorder = {}, paymentLink = "") {
   const mode = String(
     preorder?.preorderPaymentMode ||
@@ -758,6 +779,8 @@ async function sendPreorderNotification({
     return { sent: false, skipped: true, reason: "INVALID_NOTIFICATION" };
   }
 
+  const persistedPurpose = resolvePersistedOrderMessagePurpose(purpose);
+
   const resolvedPhone = toPhone || resolveNotificationPhone(preorder);
   const resolvedWhatsapp = toWhatsapp || resolvedPhone;
   const resolvedEmail = resolveNotificationEmail(preorder, toEmail);
@@ -829,7 +852,7 @@ async function sendPreorderNotification({
       item.channel === "EMAIL" ? resolvedEmailMessage : resolvedSmsMessage;
     const duplicateMessage = await findRecentDuplicateOrderMessage({
       preorderId: preorder.id,
-      purpose,
+      purpose: persistedPurpose,
       channel: item.channel,
       message: messageToSend,
       toPhone: item.channel === "EMAIL" ? null : item.to,
@@ -875,7 +898,7 @@ async function sendPreorderNotification({
     const savedMessage = await persistNotificationResult({
       preorderId: preorder.id,
       channel: item.channel,
-      purpose,
+      purpose: persistedPurpose,
       toPhone: item.channel === "EMAIL" ? null : item.to,
       message: messageToSend,
       paymentLinkTarget,
