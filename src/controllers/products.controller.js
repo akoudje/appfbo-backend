@@ -53,6 +53,7 @@ async function listProducts(req, res) {
           category: true,
           details: true,
           stockQty: true,
+          maxQtyPerOrder: true,
         },
       }),
     ]);
@@ -92,6 +93,7 @@ async function getProductById(req, res) {
         category: true,
         details: true,
         stockQty: true,
+        maxQtyPerOrder: true,
 
         createdAt: true,
         updatedAt: true,

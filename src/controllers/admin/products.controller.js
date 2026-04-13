@@ -40,6 +40,11 @@ function parseStockQty(v, fallback = 0) {
   return Math.max(0, n);
 }
 
+function isIntegerLike(v) {
+  if (v === null || v === undefined || v === "") return false;
+  return /^-?\d+$/.test(String(v).trim());
+}
+
 function parseEnumSafe(input, enumObj, fallback) {
   if (input === null || input === undefined || String(input).trim() === "") {
     return fallback;
@@ -86,6 +91,7 @@ async function createProduct(req, res) {
       category,
       details,
       stockQty,
+      maxQtyPerOrder,
     } = req.body || {};
 
     if (!sku || !String(sku).trim())
@@ -108,6 +114,21 @@ async function createProduct(req, res) {
       ProductCategory.NON_CLASSE || "NON_CLASSE",
     );
     const stock = parseStockQty(stockQty, 0);
+    if (stockQty !== undefined && stockQty !== null && stockQty !== "" && !isIntegerLike(stockQty)) {
+      return res.status(400).json({ message: "stockQty invalide" });
+    }
+    if (
+      maxQtyPerOrder !== undefined &&
+      maxQtyPerOrder !== null &&
+      maxQtyPerOrder !== "" &&
+      (!isIntegerLike(maxQtyPerOrder) || Number.parseInt(maxQtyPerOrder, 10) < 1)
+    ) {
+      return res.status(400).json({ message: "maxQtyPerOrder invalide" });
+    }
+    const maxQty =
+      maxQtyPerOrder === undefined || maxQtyPerOrder === null || maxQtyPerOrder === ""
+        ? null
+        : parseStockQty(maxQtyPerOrder, null);
     const det =
       details !== undefined && details !== null ? String(details).trim() : null;
 
@@ -123,6 +144,7 @@ async function createProduct(req, res) {
         category: cat,
         details: det || null,
         stockQty: stock,
+        maxQtyPerOrder: maxQty,
       }),
       select: {
         id: true,
@@ -136,6 +158,7 @@ async function createProduct(req, res) {
         category: true,
         details: true,
         stockQty: true,
+        maxQtyPerOrder: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -202,6 +225,7 @@ async function listProducts(req, res) {
         category: true,
         details: true,
         stockQty: true,
+        maxQtyPerOrder: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -241,6 +265,7 @@ async function getProductById(req, res) {
           category: true,
           details: true,
           stockQty: true,
+          maxQtyPerOrder: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -275,6 +300,7 @@ async function updateProduct(req, res) {
       category,
       details,
       stockQty,
+      maxQtyPerOrder,
     } = req.body || {};
 
     const data = {
@@ -304,6 +330,14 @@ async function updateProduct(req, res) {
       ...(stockQty !== undefined
         ? { stockQty: parseStockQty(stockQty, 0) }
         : {}),
+      ...(maxQtyPerOrder !== undefined
+        ? {
+            maxQtyPerOrder:
+              maxQtyPerOrder === null || maxQtyPerOrder === ""
+                ? null
+                : parseStockQty(maxQtyPerOrder, null),
+          }
+        : {}),
     };
 
     if (
@@ -321,6 +355,22 @@ async function updateProduct(req, res) {
       return res.status(400).json({ message: "cc invalide" });
     if ("poidsKg" in data && !isDecimalLike(data.poidsKg))
       return res.status(400).json({ message: "poidsKg invalide" });
+    if (
+      stockQty !== undefined &&
+      stockQty !== null &&
+      stockQty !== "" &&
+      !isIntegerLike(stockQty)
+    ) {
+      return res.status(400).json({ message: "stockQty invalide" });
+    }
+    if (
+      maxQtyPerOrder !== undefined &&
+      maxQtyPerOrder !== null &&
+      maxQtyPerOrder !== "" &&
+      (!isIntegerLike(maxQtyPerOrder) || Number.parseInt(maxQtyPerOrder, 10) < 1)
+    ) {
+      return res.status(400).json({ message: "maxQtyPerOrder invalide" });
+    }
 
     const exists = await prisma.product.findFirst({
       where: { id, countryId },
@@ -344,6 +394,7 @@ async function updateProduct(req, res) {
         category: true,
         details: true,
         stockQty: true,
+        maxQtyPerOrder: true,
         updatedAt: true,
       },
     });
@@ -417,6 +468,14 @@ async function importProductsCsv(req, res) {
       );
       const details = r.details ? String(r.details).trim() : null;
       const stockQty = parseStockQty(r.stockQty ?? r.stock ?? r.quantite, 0);
+      const maxQtyPerOrderRaw =
+        r.maxQtyPerOrder ?? r.maxqtyperorder ?? r.maxQty ?? r.maxqty ?? r.limiteParCommande;
+      const maxQtyPerOrder =
+        maxQtyPerOrderRaw === undefined ||
+        maxQtyPerOrderRaw === null ||
+        String(maxQtyPerOrderRaw).trim() === ""
+          ? null
+          : parseStockQty(maxQtyPerOrderRaw, null);
 
       const rowErr = [];
       if (!sku) rowErr.push("sku manquant");
@@ -425,6 +484,24 @@ async function importProductsCsv(req, res) {
         rowErr.push("prixBaseFcfa invalide");
       if (!isDecimalLike(cc)) rowErr.push("cc invalide");
       if (!isDecimalLike(poidsKg)) rowErr.push("poidsKg invalide");
+      if (
+        (r.stockQty ?? r.stock ?? r.quantite) !== undefined &&
+        (r.stockQty ?? r.stock ?? r.quantite) !== null &&
+        String(r.stockQty ?? r.stock ?? r.quantite).trim() !== "" &&
+        (!isIntegerLike(r.stockQty ?? r.stock ?? r.quantite) ||
+          Number.parseInt(r.stockQty ?? r.stock ?? r.quantite, 10) < 0)
+      ) {
+        rowErr.push("stockQty invalide");
+      }
+      if (
+        maxQtyPerOrderRaw !== undefined &&
+        maxQtyPerOrderRaw !== null &&
+        String(maxQtyPerOrderRaw).trim() !== "" &&
+        (!isIntegerLike(maxQtyPerOrderRaw) ||
+          Number.parseInt(maxQtyPerOrderRaw, 10) < 1)
+      ) {
+        rowErr.push("maxQtyPerOrder invalide");
+      }
 
       if (rowErr.length) {
         errors.push({ index: i + 1, sku, errors: rowErr });
@@ -442,6 +519,7 @@ async function importProductsCsv(req, res) {
         category,
         details,
         stockQty,
+        maxQtyPerOrder,
       });
     }
 
@@ -479,6 +557,7 @@ async function importProductsCsv(req, res) {
               category: p.category,
               details: p.details,
               stockQty: p.stockQty,
+              maxQtyPerOrder: p.maxQtyPerOrder,
             },
           });
           updated++;
@@ -496,6 +575,7 @@ async function importProductsCsv(req, res) {
               category: p.category,
               details: p.details,
               stockQty: p.stockQty,
+              maxQtyPerOrder: p.maxQtyPerOrder,
             },
           });
           created++;

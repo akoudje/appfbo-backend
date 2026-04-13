@@ -211,6 +211,8 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
       category: product.category,
       details: product.details || null,
       stockQty: Number(product.stockQty || 0),
+      maxQtyPerOrder:
+        product.maxQtyPerOrder == null ? null : Number(product.maxQtyPerOrder),
 
       prixBaseFcfa,
       discountPercent,
@@ -272,6 +274,10 @@ async function computePreorderTotals(preorderId, countryId) {
       sku: it.product.sku,
       imageUrl: it.product.imageUrl || null,
       stockQty: Number(it.product.stockQty || 0),
+      maxQtyPerOrder:
+        it.product.maxQtyPerOrder == null
+          ? null
+          : Number(it.product.maxQtyPerOrder),
       category: it.product.category,
       details: it.product.details || null,
     });
@@ -352,6 +358,10 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
       sku: it.product.sku,
       imageUrl: it.product.imageUrl || null,
       stockQty: Number(it.product.stockQty || 0),
+      maxQtyPerOrder:
+        it.product.maxQtyPerOrder == null
+          ? null
+          : Number(it.product.maxQtyPerOrder),
       category: it.product.category,
       details: it.product.details || null,
     });

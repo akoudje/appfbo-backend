@@ -67,6 +67,41 @@ function mapDeliveryToPersistedStatus(deliveryStatus) {
   return null;
 }
 
+function resolveMaxQtyForProduct(product, globalMaxQtyPerProduct) {
+  const globalLimit = Math.max(1, Number(globalMaxQtyPerProduct || 10));
+  const productLimit = Number(product?.maxQtyPerOrder);
+
+  if (Number.isFinite(productLimit) && productLimit > 0) {
+    return Math.min(globalLimit, Math.floor(productLimit));
+  }
+
+  return globalLimit;
+}
+
+function findItemsExceedingProductLimits(items, productsById, globalMaxQtyPerProduct) {
+  const violations = [];
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const product = productsById.get(item.productId);
+    if (!product) continue;
+
+    const limit = resolveMaxQtyForProduct(product, globalMaxQtyPerProduct);
+    const qty = Math.max(0, parseInt(item.qty || 0, 10) || 0);
+
+    if (qty > limit) {
+      violations.push({
+        productId: item.productId,
+        sku: product.sku || null,
+        nom: product.nom || "Produit",
+        qty,
+        limit,
+      });
+    }
+  }
+
+  return violations;
+}
+
 async function createDraft(req, res) {
   try {
     const {
@@ -290,22 +325,20 @@ async function setItems(req, res) {
       return res.status(400).json({ error: "Preorder not editable" });
     }
 
-    const maxQtyPerProduct = Math.max(
+    const globalMaxQtyPerProduct = Math.max(
       1,
       Number(preorder?.country?.settings?.maxQtyPerProduct || 10),
     );
 
-    const normalized = items
+    const requestedItems = items
       .map((it) => ({
         productId: String(it.productId || "").trim(),
-        qty: Math.max(
-          0,
-          Math.min(parseInt(it.qty || 0, 10), maxQtyPerProduct),
-        ),
+        qty: Math.max(0, parseInt(it.qty || 0, 10) || 0),
       }))
       .filter((it) => it.productId && it.qty > 0);
 
-    const productIds = [...new Set(normalized.map((it) => it.productId))];
+    const productIds = [...new Set(requestedItems.map((it) => it.productId))];
+    const productsById = new Map();
 
     if (productIds.length > 0) {
       const products = await prisma.product.findMany({
@@ -313,7 +346,12 @@ async function setItems(req, res) {
           id: { in: productIds },
           actif: true,
         }),
-        select: { id: true },
+        select: {
+          id: true,
+          sku: true,
+          nom: true,
+          maxQtyPerOrder: true,
+        },
       });
 
       if (products.length !== productIds.length) {
@@ -321,7 +359,21 @@ async function setItems(req, res) {
           error: "Certains produits sont invalides pour le pays courant",
         });
       }
+
+      for (const product of products) {
+        productsById.set(product.id, product);
+      }
     }
+
+    const normalized = requestedItems.map((it) => {
+      const product = productsById.get(it.productId);
+      const limit = resolveMaxQtyForProduct(product, globalMaxQtyPerProduct);
+
+      return {
+        productId: it.productId,
+        qty: Math.min(it.qty, limit),
+      };
+    });
 
     await prisma.$transaction(async (tx) => {
       await tx.preorderItem.deleteMany({ where: { preorderId } });
@@ -461,6 +513,21 @@ async function submit(req, res) {
       return res
         .status(400)
         .json({ error: "Panier vide. Ajoute au moins 1 article." });
+    }
+
+    const violations = findItemsExceedingProductLimits(
+      preorder.items,
+      new Map((preorder.items || []).map((item) => [item.productId, item.product])),
+      preorder?.country?.settings?.maxQtyPerProduct || 10,
+    );
+
+    if (violations.length > 0) {
+      const first = violations[0];
+      return res.status(400).json({
+        error: `${first.nom} est limité à ${first.limit} unité${first.limit > 1 ? "s" : ""} par commande.`,
+        code: "PRODUCT_MAX_QTY_EXCEEDED",
+        violations,
+      });
     }
 
     if (!preorder.deliveryMode) {

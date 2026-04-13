@@ -519,6 +519,7 @@ model Product {
   category ProductCategory @default(NON_CLASSE)
   details  String?         @db.Text
   stockQty Int             @default(0)
+  maxQtyPerOrder Int?
 
   prixBaseFcfa Int
   cc           Decimal @db.Decimal(10, 3)
