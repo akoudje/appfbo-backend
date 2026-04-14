@@ -75,6 +75,15 @@ function formatFcfa(value) {
   return `${new Intl.NumberFormat("fr-FR").format(Math.max(0, Math.round(num)))} FCFA`;
 }
 
+function formatCc(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return "0,000 CC";
+  return `${new Intl.NumberFormat("fr-FR", {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  }).format(Math.max(0, num))} CC`;
+}
+
 function buildPublicAssetUrl(filename = "") {
   const cleanFilename = String(filename || "").trim().replace(/^\/+/, "");
   if (!cleanFilename) return "";
@@ -135,6 +144,7 @@ function buildDefaultEmailBodyByPurpose({
   const paymentCollectionCode =
     preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-";
   const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
+  const totalCc = formatCc(preorder?.totalCc || 0);
   const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
   const pickupCode = preorder?.pickupSecretCode || "-";
   const supportLine = formatOptionalContactLine("Assistance", supportPhone);
@@ -151,6 +161,7 @@ function buildDefaultEmailBodyByPurpose({
       `Référence facture: ${invoiceRef}`,
       `Code encaissement: ${paymentCollectionCode}`,
       `Montant à payer: ${total}`,
+      `Total CC: ${totalCc}`,
       paymentLink
         ? `Lien de paiement sécurisé: ${paymentLink}`
         : "Mode de paiement: règlement à la caisse FLP",
