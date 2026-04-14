@@ -1467,9 +1467,11 @@ async function switchWaveToManualPayment(req, res) {
     const paymentMode = String(order.preorderPaymentMode || "").toUpperCase();
     const provider = String(order.paymentProvider || "").toUpperCase();
     const isWave = paymentMode === "WAVE" || provider === "WAVE";
-    if (!isWave) {
+    const isBankTransfer =
+      paymentMode === "BANK_TRANSFER" || provider === "BANK_TRANSFER";
+    if (!isWave && !isBankTransfer) {
       return res.status(400).json({
-        message: "La commande n'est pas en mode Wave.",
+        message: "Seules les commandes Wave ou virement bancaire peuvent être basculées en paiement à la caisse.",
       });
     }
 
@@ -1478,6 +1480,8 @@ async function switchWaveToManualPayment(req, res) {
         message: "Impossible de changer le mode de paiement sur une commande déjà soldée ou clôturée.",
       });
     }
+
+    const sourceLabel = isBankTransfer ? "virement bancaire" : "Wave";
 
     const now = new Date();
     await prisma.$transaction(async (tx) => {
@@ -1527,7 +1531,7 @@ async function switchWaveToManualPayment(req, res) {
         tx,
         order.id,
         "WAIT_CUSTOMER_DATA",
-        "Bascule du mode de paiement Wave vers paiement à la caisse",
+        `Bascule du mode de paiement ${sourceLabel} vers paiement à la caisse`,
         {
           fromPreorderPaymentMode: order.preorderPaymentMode || null,
           toPreorderPaymentMode: "ESPECES",
