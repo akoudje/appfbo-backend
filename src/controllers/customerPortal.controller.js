@@ -5,10 +5,9 @@ const prisma = require("../prisma");
 const { computePreorderTotals } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
+const { uploadBuffer } = require("../services/cloudinary");
 const {
-  ensurePrivateBankProofDir,
-  buildPrivateBankProofRef,
-  resolveBankProofAbsolutePath,
+  streamBankProofFileToResponse,
 } = require("../utils/bankProofFiles");
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -17,34 +16,8 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
 ]);
 
-function getUploadsDir() {
-  return ensurePrivateBankProofDir();
-}
-
-function ensureUploadsDir() {
-  return getUploadsDir();
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    try {
-      cb(null, ensureUploadsDir());
-    } catch (err) {
-      cb(err);
-    }
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase();
-    const safeExt = [".jpg", ".jpeg", ".png", ".pdf"].includes(ext) ? ext : "";
-    const stamp = Date.now();
-    const rand = Math.random().toString(36).slice(2, 8);
-    const orderId = String(req.params?.id || "order").slice(0, 12);
-    cb(null, `${orderId}-${stamp}-${rand}${safeExt}`);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 8 * 1024 * 1024,
   },
@@ -239,7 +212,21 @@ async function submitMyBankProof(req, res) {
     }
 
     const now = new Date();
-    const fileUrl = buildPrivateBankProofRef(path.basename(file.path));
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const safeExt = [".jpg", ".jpeg", ".png", ".pdf"].includes(ext) ? ext : "";
+    const orderIdPart = String(order.id || "order").slice(0, 12);
+    const stamp = Date.now();
+    const uploaded = await uploadBuffer(file.buffer, {
+      folder: "appfbo/bank-proofs",
+      resource_type: "auto",
+      use_filename: true,
+      unique_filename: true,
+      filename_override: `${orderIdPart}-${stamp}${safeExt}`,
+    });
+    const fileUrl = uploaded?.secure_url || uploaded?.url || null;
+    if (!fileUrl) {
+      throw new Error("UPLOAD_PREUVE_PERSISTANTE_INDISPONIBLE");
+    }
     const parsedAmount = Number.parseInt(declaredAmountFcfa, 10);
     const amount =
       Number.isFinite(parsedAmount) && parsedAmount >= 0 ? parsedAmount : null;
@@ -519,18 +506,16 @@ async function downloadMyBankProof(req, res) {
       return res.status(404).json({ message: "Preuve introuvable" });
     }
 
-    const absPath = resolveBankProofAbsolutePath(proof.fileUrl);
-    if (!absPath || !fs.existsSync(absPath)) {
+    const streamed = await streamBankProofFileToResponse({
+      res,
+      fileUrl: proof.fileUrl,
+      fileMimeType: proof.fileMimeType,
+      originalFileName: proof.originalFileName,
+    });
+    if (!streamed) {
       return res.status(404).json({ message: "Fichier preuve introuvable" });
     }
-
-    const fileName = path.basename(proof.originalFileName || absPath);
-    const stat = fs.statSync(absPath);
-
-    res.setHeader("Content-Type", proof.fileMimeType || "application/octet-stream");
-    res.setHeader("Content-Length", String(stat.size || 0));
-    res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
-    return fs.createReadStream(absPath).pipe(res);
+    return undefined;
   } catch (e) {
     console.error("downloadMyBankProof error:", e);
     return res.status(500).json({ message: "Erreur serveur (downloadMyBankProof)" });
