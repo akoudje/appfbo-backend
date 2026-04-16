@@ -3,6 +3,7 @@ const { sendSms } = require("./sms.service");
 const whatsappService = require("./whatsapp.service");
 const { normalizeEmail, sendEmail } = require("./email.service");
 const { MAX_SMS_LENGTH } = require("./sms.orange.service");
+const { getPaymentExpiryHours } = require("./notification-template-defaults");
 
 function compactText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -165,6 +166,7 @@ function buildDefaultEmailBodyByPurpose({
   );
 
   if (normalizedPurpose === "INVOICE" || normalizedPurpose === "PAYMENT_LINK") {
+    const expiryHours = getPaymentExpiryHours();
     return [
       `Bonjour ${customer},`,
       "",
@@ -176,12 +178,14 @@ function buildDefaultEmailBodyByPurpose({
         ? `Lien de paiement sécurisé: ${paymentLink}`
         : "Mode de paiement: règlement à la caisse FLP",
       "",
+      `Cette préfacture reste payable pendant ${expiryHours}h maximum après émission.`,
       "Étapes recommandées:",
       "1. Vérifiez le montant et votre numéro de précommande.",
       paymentLink
         ? "2. Ouvrez le lien et finalisez le paiement en ligne."
         : "2. Présentez le code encaissement au comptoir pour régler.",
-      "3. Conservez cette notification jusqu'à confirmation du paiement.",
+      `3. Finalisez le paiement dans un délai maximal de ${expiryHours}h.`,
+      "4. Conservez cette notification jusqu'à confirmation du paiement.",
       supportLine,
       "",
       "Merci de votre confiance.",
@@ -229,7 +233,8 @@ function buildDefaultEmailBodyByPurpose({
       "",
       `Votre paiement pour la commande ${preorderNumber} a été confirmé.`,
       `Montant confirmé: ${total}`,
-      "Votre commande suit son traitement normal.",
+      "Votre commande suit désormais son traitement normal.",
+      "Vous recevrez une nouvelle notification dès le lancement de la préparation.",
       supportLine,
       "",
       "Merci pour votre confiance.",
@@ -494,6 +499,7 @@ function buildTemplateContext({
     paymentLink,
     paymentFlow,
     pickupCode,
+    paymentExpiryHours: String(getPaymentExpiryHours()),
     supportPhone: supportPhone || "",
     pickupAddress: pickupAddress || "",
   };

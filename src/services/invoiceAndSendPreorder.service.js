@@ -133,6 +133,14 @@ function compactText(value = "") {
     .trim();
 }
 
+function getPaymentExpiryHours() {
+  const parsed = Number.parseInt(
+    String(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS || "3"),
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+}
+
 function buildPaymentCollectionCode(preorder = {}) {
   const countryCode = String(preorder?.country?.code || "CIV")
     .trim()
@@ -258,25 +266,28 @@ function buildInvoiceMessage({
     normalizedMode.includes("BANK");
 
   if (normalizedLink && !isCashFlow) {
+    const expiryHours = getPaymentExpiryHours();
     return firstSmsCandidate([
-      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Paiement Wave: ${normalizedLink}`,
-      `FOREVER: Code ${collectionCode}. ${amountFmt}F. ${normalizedLink}`,
-      `FOREVER: Code ${collectionCode}. ${normalizedLink}`,
+      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Reglez sous ${expiryHours}H. Paiement Wave: ${normalizedLink}`,
+      `FOREVER: Code ${collectionCode}. ${amountFmt}F. Paiement sous ${expiryHours}H. ${normalizedLink}`,
+      `FOREVER: Code ${collectionCode}. Paiement sous ${expiryHours}H. ${normalizedLink}`,
     ]);
   }
 
   if (isBankTransferFlow) {
+    const expiryHours = getPaymentExpiryHours();
     return firstSmsCandidate([
-      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Virement: voir email ou espace client.`,
-      `FOREVER: Code ${collectionCode}. ${amountFmt}F. Instructions bancaires par email.`,
-      `FOREVER: Code ${collectionCode}. Voir espace client pour le virement.`,
+      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Virement a effectuer sous ${expiryHours}H. Voir email ou espace client.`,
+      `FOREVER: Code ${collectionCode}. ${amountFmt}F. Instructions bancaires par email. Paiement sous ${expiryHours}H.`,
+      `FOREVER: Code ${collectionCode}. Voir espace client pour le virement. Delai ${expiryHours}H.`,
     ]);
   }
 
+  const expiryHours = getPaymentExpiryHours();
   return firstSmsCandidate([
-    `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Paiement a la caisse FLP.`,
-    `FOREVER: Code ${collectionCode}. ${amountFmt}F. Paiement caisse FLP.`,
-    `FOREVER: Code ${collectionCode}. Paiement caisse FLP.`,
+    `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Paiement a la caisse FLP sous ${expiryHours}H.`,
+    `FOREVER: Code ${collectionCode}. ${amountFmt}F. Paiement caisse FLP sous ${expiryHours}H.`,
+    `FOREVER: Code ${collectionCode}. Paiement caisse FLP sous ${expiryHours}H.`,
   ]);
 }
 

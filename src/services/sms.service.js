@@ -20,8 +20,8 @@ function buildPreorderSmsMessage({ preorder, totals }) {
   const total = Number(totals?.totalFcfa ?? preorder?.totalFcfa ?? 0);
   const totalFmt = new Intl.NumberFormat("fr-FR").format(total);
   const candidates = [
-    `FOREVER: Votre précommande ${number} est enregistrée. Montant indicatif: ${totalFmt}F. Vous recevrez la facture et les modalités de paiement.`,
-    `FOREVER: Précommande ${number} enregistrée. Montant indicatif: ${totalFmt}F. Facture en cours de préparation.`,
+    `FOREVER: Votre precommande ${number} est enregistree. Montant indicatif: ${totalFmt}F. Vous recevrez votre prefacture et les modalites de paiement.`,
+    `FOREVER: Precommande ${number} enregistree. Montant indicatif: ${totalFmt}F. Prefacture en cours de preparation.`,
     `FOREVER: Précommande ${number} enregistrée. Montant: ${totalFmt}F.`,
   ];
 

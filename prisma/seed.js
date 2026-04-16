@@ -3,6 +3,9 @@
 
 const { PrismaClient, AdminRole } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
+const {
+  buildDefaultNotificationTemplates,
+} = require("../src/services/notification-template-defaults");
 
 const prisma = new PrismaClient();
 
@@ -99,6 +102,7 @@ async function main() {
     15,
   );
   const forceSettingsUpdate = readBoolEnv("SEED_FORCE_SETTINGS_UPDATE", false);
+  const defaultNotificationTemplates = buildDefaultNotificationTemplates();
 
   const countriesToSeed = [
     { code: "CIV", name: "Cote d'Ivoire", currencyCode: "XOF" },
@@ -146,6 +150,7 @@ async function main() {
             minCartFcfa,
             maxActiveBillingPerInvoicer,
             billingClaimTimeoutMin,
+            notificationTemplates: defaultNotificationTemplates,
           }
         : {},
       create: {
@@ -153,6 +158,7 @@ async function main() {
         minCartFcfa,
         maxActiveBillingPerInvoicer,
         billingClaimTimeoutMin,
+        notificationTemplates: defaultNotificationTemplates,
       },
     });
 
