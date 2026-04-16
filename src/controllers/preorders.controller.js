@@ -13,6 +13,7 @@ const {
 const {
   sendPreorderNotification,
 } = require("../services/preorder-notifications.service");
+const billingQueueService = require("../services/billingQueue.service");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
@@ -703,13 +704,23 @@ async function submit(req, res) {
       });
     });
 
+    const autoAssignment = await billingQueueService.autoAssignQueuedPreorder({
+      preorderId,
+      countryId: preorder.countryId || req.countryId,
+    });
+    const effectivePreorder = autoAssignment?.ok ? autoAssignment.preorder : null;
+    const effectiveBillingWorkStatus =
+      effectivePreorder?.billingWorkStatus || "QUEUED";
+
     publishRealtimeEvent({
       countryId: preorder.countryId || req.countryId,
       eventKey: "billing_queue_new",
       orderId: preorderId,
       meta: {
         status: "SUBMITTED",
-        billingWorkStatus: "QUEUED",
+        billingWorkStatus: effectiveBillingWorkStatus,
+        assignedInvoicerId: effectivePreorder?.assignedInvoicerId || null,
+        autoAssigned: Boolean(autoAssignment?.ok),
       },
     });
 
@@ -718,7 +729,8 @@ async function submit(req, res) {
       preorderNumber:
         summary?.preorder?.preorderNumber || preorder.preorderNumber,
       status: "SUBMITTED",
-      billingWorkStatus: "QUEUED",
+      billingWorkStatus: effectiveBillingWorkStatus,
+      assignedInvoicerId: effectivePreorder?.assignedInvoicerId || null,
       totals: summary.totals,
       smsTo,
       smsStatus: uiSmsStatus,

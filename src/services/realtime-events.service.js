@@ -146,6 +146,28 @@ function getRealtimeHealth() {
   };
 }
 
+function getConnectedRealtimeUserIds({ countryId } = {}) {
+  const ids = new Set();
+  const normalizedCountryId = countryId ? String(countryId) : null;
+
+  for (const listener of listeners.values()) {
+    const listenerUserId = listener?.userId ? String(listener.userId) : null;
+    if (!listenerUserId) continue;
+
+    if (
+      normalizedCountryId &&
+      listener?.countryId &&
+      String(listener.countryId) !== normalizedCountryId
+    ) {
+      continue;
+    }
+
+    ids.add(listenerUserId);
+  }
+
+  return Array.from(ids);
+}
+
 const heartbeatTimer = setInterval(() => {
   const pingPayload = { type: "PING", at: new Date().toISOString() };
   for (const [listenerId, listener] of listeners.entries()) {
@@ -167,4 +189,5 @@ module.exports = {
   publishRealtimeEvent,
   recordAlertPlayback,
   getRealtimeHealth,
+  getConnectedRealtimeUserIds,
 };

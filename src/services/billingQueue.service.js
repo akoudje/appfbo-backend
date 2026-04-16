@@ -2,25 +2,256 @@
 // Service pour gérer la file de précommandes à facturer
 
 const prisma = require("../prisma");
+const { Permission, ROLE_PERMISSIONS } = require("../auth/permissions");
+const { getConnectedRealtimeUserIds } = require("./realtime-events.service");
+
+const BILLING_QUEUE_CLAIMABLE_STATUSES = ["QUEUED", "RELEASED"];
+const BILLING_ACTIVE_STATUSES = [
+  "ASSIGNED",
+  "IN_PROGRESS",
+  "WAITING_CUSTOMER_DATA",
+  "WAITING_PAYMENT",
+];
+const BILLING_CONNECTED_ELIGIBLE_ROLES = Object.entries(ROLE_PERMISSIONS)
+  .filter(([, permissions]) => permissions.includes(Permission.INVOICE_CREATE))
+  .map(([role]) => role);
 
 function isBillingActiveStatus(status) {
-  return [
-    "ASSIGNED",
-    "IN_PROGRESS",
-    "WAITING_CUSTOMER_DATA",
-    "WAITING_PAYMENT",
-  ].includes(status);
+  return BILLING_ACTIVE_STATUSES.includes(status);
 }
 
-async function releaseExpiredAssignments({ countryId }) {
+function normalizeIdList(values = []) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+async function getBillingSettings(countryId) {
   const settings = await prisma.countrySettings.findUnique({
     where: { countryId },
     select: {
       billingClaimTimeoutMin: true,
+      maxActiveBillingPerInvoicer: true,
     },
   });
 
-  const timeoutMin = settings?.billingClaimTimeoutMin || 15;
+  return {
+    billingClaimTimeoutMin: settings?.billingClaimTimeoutMin || 15,
+    maxActiveBillingPerInvoicer: settings?.maxActiveBillingPerInvoicer || 5,
+  };
+}
+
+async function countActiveAssignments(tx, { countryId, userId }) {
+  return tx.preorder.count({
+    where: {
+      countryId,
+      assignedInvoicerId: userId,
+      billingWorkStatus: {
+        in: BILLING_ACTIVE_STATUSES,
+      },
+    },
+  });
+}
+
+async function loadConnectedBillingInvoicers({
+  countryId,
+  excludeUserIds = [],
+}) {
+  const connectedUserIds = normalizeIdList(
+    getConnectedRealtimeUserIds({ countryId }),
+  ).filter((id) => !excludeUserIds.includes(id));
+
+  if (!connectedUserIds.length) return [];
+
+  const admins = await prisma.adminUser.findMany({
+    where: {
+      id: { in: connectedUserIds },
+      actif: true,
+      countryId,
+      role: { in: BILLING_CONNECTED_ELIGIBLE_ROLES },
+    },
+    select: {
+      id: true,
+      fullName: true,
+      email: true,
+      role: true,
+      lastLoginAt: true,
+    },
+  });
+
+  if (!admins.length) return [];
+
+  const loads = await prisma.preorder.groupBy({
+    by: ["assignedInvoicerId"],
+    where: {
+      countryId,
+      assignedInvoicerId: { in: admins.map((admin) => admin.id) },
+      billingWorkStatus: { in: BILLING_ACTIVE_STATUSES },
+    },
+    _count: { _all: true },
+  });
+
+  const loadMap = new Map(
+    loads.map((item) => [String(item.assignedInvoicerId), Number(item._count?._all || 0)]),
+  );
+
+  return admins
+    .map((admin) => ({
+      ...admin,
+      activeCount: loadMap.get(String(admin.id)) || 0,
+    }))
+    .sort((a, b) => {
+      if (a.activeCount !== b.activeCount) return a.activeCount - b.activeCount;
+      const aLogin = a.lastLoginAt ? new Date(a.lastLoginAt).getTime() : 0;
+      const bLogin = b.lastLoginAt ? new Date(b.lastLoginAt).getTime() : 0;
+      if (aLogin !== bLogin) return bLogin - aLogin;
+      return String(a.fullName || a.email || a.id).localeCompare(
+        String(b.fullName || b.email || b.id),
+      );
+    });
+}
+
+async function assignQueuedPreorderToInvoicer({
+  tx,
+  preorderId,
+  countryId,
+  userId,
+  actorAdminId = null,
+  mode = "AUTO_ASSIGN",
+  note = "Précommande attribuée automatiquement à un facturier",
+  maxActive,
+}) {
+  const activeCount = await countActiveAssignments(tx, { countryId, userId });
+  if (activeCount >= maxActive) {
+    return {
+      ok: false,
+      reason: "MAX_ACTIVE_REACHED",
+      activeCount,
+      maxActive,
+    };
+  }
+
+  const now = new Date();
+  const claimed = await tx.preorder.updateMany({
+    where: {
+      id: preorderId,
+      countryId,
+      assignedInvoicerId: null,
+      status: "SUBMITTED",
+      billingWorkStatus: { in: BILLING_QUEUE_CLAIMABLE_STATUSES },
+    },
+    data: {
+      assignedInvoicerId: userId,
+      assignedAt: now,
+      billingWorkStatus: "ASSIGNED",
+      billingLastActivityAt: now,
+    },
+  });
+
+  if (claimed.count !== 1) {
+    return {
+      ok: false,
+      reason: "PREORDER_NOT_AVAILABLE",
+    };
+  }
+
+  const updated = await tx.preorder.findUnique({
+    where: { id: preorderId },
+    include: {
+      assignedInvoicer: {
+        select: { id: true, fullName: true, email: true, role: true },
+      },
+    },
+  });
+
+  if (!updated) {
+    return {
+      ok: false,
+      reason: "PREORDER_NOT_FOUND",
+    };
+  }
+
+  await tx.preorderLog.create({
+    data: {
+      preorderId: updated.id,
+      action: "ASSIGN_INVOICER",
+      note,
+      actorAdminId,
+      meta: {
+        assignedInvoicerId: userId,
+        mode,
+      },
+    },
+  });
+
+  return {
+    ok: true,
+    preorder: updated,
+  };
+}
+
+async function autoAssignQueuedPreorder({
+  preorderId,
+  countryId,
+  actorAdminId = null,
+  excludeUserIds = [],
+}) {
+  if (!preorderId || !countryId) {
+    return {
+      ok: false,
+      reason: "MISSING_ASSIGNMENT_CONTEXT",
+    };
+  }
+
+  await releaseExpiredAssignments({ countryId });
+  const settings = await getBillingSettings(countryId);
+  const connectedInvoicers = await loadConnectedBillingInvoicers({
+    countryId,
+    excludeUserIds: normalizeIdList(excludeUserIds),
+  });
+
+  if (!connectedInvoicers.length) {
+    return {
+      ok: false,
+      reason: "NO_CONNECTED_INVOICER",
+    };
+  }
+
+  for (const invoicer of connectedInvoicers) {
+    const result = await prisma.$transaction((tx) =>
+      assignQueuedPreorderToInvoicer({
+        tx,
+        preorderId,
+        countryId,
+        userId: invoicer.id,
+        actorAdminId,
+        mode: "AUTO_CONNECTED_BALANCER",
+        note: "Précommande attribuée automatiquement à un facturier connecté",
+        maxActive: settings.maxActiveBillingPerInvoicer,
+      }),
+    );
+
+    if (result?.ok) {
+      return {
+        ...result,
+        autoAssigned: true,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    reason: "NO_CONNECTED_INVOICER_WITH_CAPACITY",
+  };
+}
+
+async function releaseExpiredAssignments({ countryId }) {
+  const settings = await getBillingSettings(countryId);
+  const timeoutMin = settings.billingClaimTimeoutMin;
   const cutoff = new Date(Date.now() - timeoutMin * 60 * 1000);
   const now = new Date();
 
@@ -80,25 +311,9 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
   }
 
   await releaseExpiredAssignments({ countryId });
-
-  const settings = await prisma.countrySettings.findUnique({
-    where: { countryId },
-    select: {
-      maxActiveBillingPerInvoicer: true,
-    },
-  });
-
-  const maxActive = settings?.maxActiveBillingPerInvoicer || 5;
-
-  const activeCount = await prisma.preorder.count({
-    where: {
-      countryId,
-      assignedInvoicerId: userId,
-      billingWorkStatus: {
-        in: ["ASSIGNED", "IN_PROGRESS", "WAITING_CUSTOMER_DATA", "WAITING_PAYMENT"],
-      },
-    },
-  });
+  const settings = await getBillingSettings(countryId);
+  const maxActive = settings.maxActiveBillingPerInvoicer;
+  const activeCount = await countActiveAssignments(prisma, { countryId, userId });
 
   if (activeCount >= maxActive) {
     return {
@@ -114,7 +329,7 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
       where: {
         countryId,
         status: "SUBMITTED",
-        billingWorkStatus: { in: ["QUEUED", "RELEASED"] },
+        billingWorkStatus: { in: BILLING_QUEUE_CLAIMABLE_STATUSES },
         assignedInvoicerId: null,
       },
       orderBy: [
@@ -135,58 +350,21 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
       };
     }
 
-    const now = new Date();
-
     for (const candidate of candidates) {
-      const claimed = await tx.preorder.updateMany({
-        where: {
-          id: candidate.id,
-          assignedInvoicerId: null,
-          status: "SUBMITTED",
-          billingWorkStatus: { in: ["QUEUED", "RELEASED"] },
-        },
-        data: {
-          assignedInvoicerId: userId,
-          assignedAt: now,
-          billingWorkStatus: "ASSIGNED",
-          billingLastActivityAt: now,
-        },
+      const result = await assignQueuedPreorderToInvoicer({
+        tx,
+        preorderId: candidate.id,
+        countryId,
+        userId,
+        actorAdminId: userId,
+        mode: "AUTO_CLAIM",
+        note: "Précommande attribuée automatiquement à un facturier",
+        maxActive,
       });
 
-      if (claimed.count !== 1) {
-        continue;
+      if (result?.ok) {
+        return result;
       }
-
-      const updated = await tx.preorder.findUnique({
-        where: { id: candidate.id },
-        include: {
-          assignedInvoicer: {
-            select: { id: true, fullName: true, email: true },
-          },
-        },
-      });
-
-      if (!updated) {
-        continue;
-      }
-
-      await tx.preorderLog.create({
-        data: {
-          preorderId: updated.id,
-          action: "ASSIGN_INVOICER",
-          note: "Précommande attribuée automatiquement à un facturier",
-          actorAdminId: userId,
-          meta: {
-            assignedInvoicerId: userId,
-            mode: "AUTO_CLAIM",
-          },
-        },
-      });
-
-      return {
-        ok: true,
-        preorder: updated,
-      };
     }
 
     return {
@@ -339,6 +517,7 @@ async function escalateBillingWork({ preorderId, userId, countryId, reason }) {
 
 module.exports = {
   claimNextPreorderForInvoicer,
+  autoAssignQueuedPreorder,
   startBillingWork,
   releaseBillingWork,
   escalateBillingWork,
