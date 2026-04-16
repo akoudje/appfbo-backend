@@ -48,7 +48,7 @@ function buildAutoCancelMessage(preorder) {
   );
 
   return compactText(`
-    FOREVER: Bonjour ${customer}, votre precommande ${preorderNumber} a ete annulee
+    Bonjour ${customer}, votre precommande ${preorderNumber} a ete annulee
     faute de paiement confirme dans le delai maximal de ${getExpiryHours()}H apres
     prefacturation. Vous pouvez lancer une nouvelle precommande si besoin.
   `);

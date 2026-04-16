@@ -141,7 +141,7 @@ async function requestOtp(req, res) {
       if (ch === "SMS" && resolved.smsPhone) {
         const smsResult = await sendSms({
           to: resolved.smsPhone,
-          message: `FOREVER: code connexion ${otp}. Expire dans ${expiresMin} min.`,
+          message: `Code connexion ${otp}. Expire dans ${expiresMin} min.`,
         });
         if (smsResult?.accepted) {
           sent = smsResult;

@@ -147,12 +147,13 @@ function buildPaymentCollectionCode(preorder = {}) {
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "")
     .slice(0, 3) || "CIV";
-  const baseRef = String(preorder?.preorderNumber || preorder?.id || "000000")
+  const digitRef = String(preorder?.preorderNumber || preorder?.id || "000000").replace(/\D/g, "");
+  const alphaNumRef = String(preorder?.preorderNumber || preorder?.id || "000000")
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
-  const compactRef = baseRef.slice(-10) || "000000";
-  return `PC-${countryCode}-${compactRef}`;
+  const compactRef = (digitRef.slice(-6) || alphaNumRef.slice(-6) || "000000").padStart(6, "0");
+  return `${countryCode}-${compactRef}`;
 }
 
 function firstSmsCandidate(candidates = [], maxLength = MAX_SMS_LENGTH) {
@@ -268,26 +269,26 @@ function buildInvoiceMessage({
   if (normalizedLink && !isCashFlow) {
     const expiryHours = getPaymentExpiryHours();
     return firstSmsCandidate([
-      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Reglez sous ${expiryHours}H. Paiement Wave: ${normalizedLink}`,
-      `FOREVER: Code ${collectionCode}. ${amountFmt}F. Paiement sous ${expiryHours}H. ${normalizedLink}`,
-      `FOREVER: Code ${collectionCode}. Paiement sous ${expiryHours}H. ${normalizedLink}`,
+      `Code ${collectionCode}. Montant ${amountFmt}F. Reglez sous ${expiryHours}H via le lien Wave: ${normalizedLink}`,
+      `Code ${collectionCode}. ${amountFmt}F. Paiement sous ${expiryHours}H: ${normalizedLink}`,
+      `Code ${collectionCode}. Paiement sous ${expiryHours}H: ${normalizedLink}`,
     ]);
   }
 
   if (isBankTransferFlow) {
     const expiryHours = getPaymentExpiryHours();
     return firstSmsCandidate([
-      `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Virement a effectuer sous ${expiryHours}H. Voir email ou espace client.`,
-      `FOREVER: Code ${collectionCode}. ${amountFmt}F. Instructions bancaires par email. Paiement sous ${expiryHours}H.`,
-      `FOREVER: Code ${collectionCode}. Voir espace client pour le virement. Delai ${expiryHours}H.`,
+      `Code ${collectionCode}. Montant ${amountFmt}F. Effectuez le virement sous ${expiryHours}H. Consultez votre email ou l'espace client.`,
+      `Code ${collectionCode}. ${amountFmt}F. Instructions bancaires envoyees. Paiement sous ${expiryHours}H.`,
+      `Code ${collectionCode}. Voir espace client pour le virement. Delai ${expiryHours}H.`,
     ]);
   }
 
   const expiryHours = getPaymentExpiryHours();
   return firstSmsCandidate([
-    `FOREVER: Code ${collectionCode}. Montant ${amountFmt}F. Paiement a la caisse FLP sous ${expiryHours}H.`,
-    `FOREVER: Code ${collectionCode}. ${amountFmt}F. Paiement caisse FLP sous ${expiryHours}H.`,
-    `FOREVER: Code ${collectionCode}. Paiement caisse FLP sous ${expiryHours}H.`,
+    `Code ${collectionCode}. Montant ${amountFmt}F. Rendez-vous a la caisse FLP pour regler sous ${expiryHours}H.`,
+    `Code ${collectionCode}. ${amountFmt}F. Merci de regler a la caisse FLP sous ${expiryHours}H.`,
+    `Code ${collectionCode}. Paiement attendu a la caisse FLP sous ${expiryHours}H.`,
   ]);
 }
 

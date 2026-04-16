@@ -13,19 +13,19 @@ function buildDefaultNotificationTemplates() {
   return {
     sms: {
       INVOICE:
-        `FOREVER: Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Paiement a effectuer sous ${expiryHours}H pour la precommande {{preorderNumber}}.`,
+        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Paiement a effectuer sous ${expiryHours}H pour la precommande {{preorderNumber}}.`,
       INVOICE_WAVE:
-        `FOREVER: Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Paiement Wave sous ${expiryHours}H: {{paymentLink}}`,
+        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Reglez sous ${expiryHours}H via le lien Wave: {{paymentLink}}`,
       INVOICE_BANK_TRANSFER:
-        `FOREVER: Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Virement a effectuer sous ${expiryHours}H. Voir email ou espace client.`,
+        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Effectuez le virement sous ${expiryHours}H. Consultez votre email ou l'espace client.`,
       INVOICE_CASH:
-        `FOREVER: Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Paiement a la caisse FLP sous ${expiryHours}H.`,
+        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Rendez-vous a la caisse FLP pour regler sous ${expiryHours}H.`,
       PAYMENT_CONFIRMED:
-        "FOREVER: Bonjour {{customerName}}, le paiement de votre precommande {{preorderNumber}} est confirme pour {{totalFcfaLabel}}.",
+        "Bonjour {{customerName}}, le paiement de votre precommande {{preorderNumber}} est confirme pour {{totalFcfaLabel}}.",
     },
     email: {
       INVOICE: {
-        subject: "FOREVER - Précommande {{preorderNumber}} disponible pour paiement",
+        subject: "FOREVER CI - Précommande {{preorderNumber}} disponible pour paiement",
         body: [
           "Bonjour {{customerName}},",
           "",
@@ -44,7 +44,7 @@ function buildDefaultNotificationTemplates() {
         ].join("\n"),
       },
       PAYMENT_CONFIRMED: {
-        subject: "FOREVER - Paiement confirmé ({{preorderNumber}})",
+        subject: "FOREVER CI - Paiement confirmé ({{preorderNumber}})",
         body: [
           "Bonjour {{customerName}},",
           "",

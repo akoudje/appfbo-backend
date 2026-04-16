@@ -41,8 +41,8 @@ function buildPreparationStartedSmsMessage({ preorder }) {
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
   return firstSmsCandidate([
-    `FOREVER: Bonjour ${customer}, votre colis ${parcelNumber} est en préparation. Vous serez notifié dès qu'il sera prêt.`,
-    `FOREVER: Colis ${parcelNumber} en préparation. Notification dès disponibilité.`,
+    `Bonjour ${customer}, votre colis ${parcelNumber} est en préparation. Vous serez notifié dès qu'il sera prêt.`,
+    `Colis ${parcelNumber} en préparation. Notification dès disponibilité.`,
     `Colis ${parcelNumber} en préparation.`,
   ]);
 }
@@ -53,9 +53,9 @@ function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
   return firstSmsCandidate([
-    `FOREVER: Bonjour ${customer}, votre colis ${parcelNumber} est prêt. Code retrait: ${pickupSecretCode}. Présentez-le au comptoir.`,
-    `FOREVER: Colis ${parcelNumber} prêt. Code retrait: ${pickupSecretCode}.`,
-    `FOREVER: Colis ${parcelNumber} prêt. Code: ${pickupSecretCode}.`,
+    `Bonjour ${customer}, votre colis ${parcelNumber} est prêt. Code retrait: ${pickupSecretCode}. Présentez-le au comptoir.`,
+    `Colis ${parcelNumber} prêt. Code retrait: ${pickupSecretCode}.`,
+    `Colis ${parcelNumber} prêt. Code: ${pickupSecretCode}.`,
   ]);
 }
 
@@ -65,8 +65,8 @@ function buildOrderFulfilledSmsMessage({ preorder }) {
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
   return firstSmsCandidate([
-    `FOREVER: Bonjour ${customer}, le retrait du colis ${parcelNumber} a été confirmé. Merci pour votre confiance.`,
-    `FOREVER: Retrait du colis ${parcelNumber} confirmé. Merci.`,
+    `Bonjour ${customer}, le retrait du colis ${parcelNumber} a été confirmé. Merci pour votre confiance.`,
+    `Retrait du colis ${parcelNumber} confirmé. Merci.`,
   ]);
 }
 
@@ -77,9 +77,9 @@ function buildPaymentConfirmedSmsMessage({ preorder }) {
   const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
 
   return firstSmsCandidate([
-    `FOREVER: Bonjour ${customer}, le paiement de votre precommande ${preorderNumber} est confirme pour ${total}.`,
-    `FOREVER: Paiement confirme pour la precommande ${preorderNumber}. Montant ${total}.`,
-    `FOREVER: Paiement confirme pour ${preorderNumber}.`,
+    `Bonjour ${customer}, le paiement de votre precommande ${preorderNumber} est confirme pour ${total}.`,
+    `Paiement confirme pour la precommande ${preorderNumber}. Montant ${total}.`,
+    `Paiement confirme pour ${preorderNumber}.`,
   ]);
 }
 
@@ -123,21 +123,21 @@ function buildEmailSubjectByPurpose({ purpose, preorder }) {
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
 
   if (normalizedPurpose === "INVOICE" || normalizedPurpose === "PAYMENT_LINK") {
-    return `FOREVER - Facture ${preorderNumber}`;
+    return `FOREVER CI - Précommande ${preorderNumber} disponible pour paiement`;
   }
   if (normalizedPurpose === "ORDER_READY") {
-    return `FOREVER - Colis prêt (${preorderNumber})`;
+    return `FOREVER CI - Colis prêt (${preorderNumber})`;
   }
   if (normalizedPurpose === "PREPARATION_STARTED") {
-    return `FOREVER - Préparation en cours (${preorderNumber})`;
+    return `FOREVER CI - Préparation en cours (${preorderNumber})`;
   }
   if (normalizedPurpose === "ORDER_FULFILLED") {
-    return `FOREVER - Commande clôturée (${preorderNumber})`;
+    return `FOREVER CI - Commande clôturée (${preorderNumber})`;
   }
   if (normalizedPurpose === "PAYMENT_CONFIRMED") {
-    return `FOREVER - Paiement confirmé (${preorderNumber})`;
+    return `FOREVER CI - Paiement confirmé (${preorderNumber})`;
   }
-  return `FOREVER - Notification commande (${preorderNumber})`;
+  return `FOREVER CI - Notification commande (${preorderNumber})`;
 }
 
 function buildDefaultEmailBodyByPurpose({
@@ -523,7 +523,8 @@ function sanitizeInvoiceSmsMessage(value = "") {
   let msg = compactText(value || "");
   if (!msg) return msg;
 
-  msg = msg.replace(/^FOREVER:\s*FOREVER:\s*/i, "FOREVER: ");
+  msg = msg.replace(/^FOREVER:\s*FOREVER:\s*/i, "");
+  msg = msg.replace(/^FOREVER:\s*/i, "");
   msg = msg.replace(/\s*(Paiement|Lien)\s*:\s*$/i, "");
   msg = msg.replace(/\s{2,}/g, " ").trim();
   return msg;
@@ -546,17 +547,13 @@ function ensureInvoiceSmsIncludesCollectionCode({
     return firstSmsCandidate([normalizedMessage]);
   }
 
-  if (/^FOREVER:/i.test(normalizedMessage)) {
-    const withCodeAfterBrand = normalizedMessage.replace(
-      /^FOREVER:\s*/i,
-      `FOREVER: Code ${normalizedCode}. `,
-    );
-    return firstSmsCandidate([withCodeAfterBrand]);
+  if (/^Code\s+/i.test(normalizedMessage)) {
+    return firstSmsCandidate([normalizedMessage]);
   }
 
   return firstSmsCandidate([
-    `FOREVER: Code ${normalizedCode}. ${normalizedMessage}`,
-    `FOREVER: Code caisse ${normalizedCode}.`,
+    `Code ${normalizedCode}. ${normalizedMessage}`,
+    `Code caisse ${normalizedCode}.`,
   ]);
 }
 
