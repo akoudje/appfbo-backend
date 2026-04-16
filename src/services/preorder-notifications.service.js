@@ -69,6 +69,19 @@ function buildOrderFulfilledSmsMessage({ preorder }) {
   ]);
 }
 
+function buildPaymentConfirmedSmsMessage({ preorder }) {
+  const customer = preorder?.fboNomComplet || "";
+  const preorderNumber =
+    preorder?.preorderNumber || preorder?.paymentCollectionCode || preorder?.id || "-";
+  const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
+
+  return firstSmsCandidate([
+    `FOREVER: Bonjour ${customer}, le paiement de votre precommande ${preorderNumber} est confirme pour ${total}.`,
+    `FOREVER: Paiement confirme pour la precommande ${preorderNumber}. Montant ${total}.`,
+    `FOREVER: Paiement confirme pour ${preorderNumber}.`,
+  ]);
+}
+
 function formatFcfa(value) {
   const num = Number(value || 0);
   if (!Number.isFinite(num)) return "0 FCFA";
@@ -984,6 +997,7 @@ module.exports = {
   resolveNotificationPhone,
   resolveNotificationEmail,
   buildPreparationStartedSmsMessage,
+  buildPaymentConfirmedSmsMessage,
   buildOrderReadySmsMessage,
   buildOrderFulfilledSmsMessage,
   sendPreorderNotification,

@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const { sendPreorderNotification } = require("./preorder-notifications.service");
+const { publishRealtimeEvent } = require("./realtime-events.service");
 
 const FINAL_PAYMENT_STATUSES = new Set([
   "SUCCEEDED",
@@ -77,6 +78,9 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
   if (!["INVOICED", "PAYMENT_PENDING"].includes(status) || paymentStatus === "PAID") {
     return { ok: false, reason: "PREORDER_NOT_ELIGIBLE", preorder: order };
   }
+  if (String(order.lastWhatsappStatus || "").toUpperCase() === "FAILED") {
+    return { ok: false, reason: "INITIAL_PAYMENT_NOTIFICATION_FAILED", preorder: order };
+  }
   if (
     String(order.preorderPaymentMode || "").toUpperCase() === "BANK_TRANSFER" &&
     ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(
@@ -112,6 +116,9 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
       !["INVOICED", "PAYMENT_PENDING"].includes(currentStatus) ||
       currentPaymentStatus === "PAID"
     ) {
+      return null;
+    }
+    if (String(current.lastWhatsappStatus || "").toUpperCase() === "FAILED") {
       return null;
     }
     if (
@@ -184,6 +191,8 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
         paidAt: null,
         stockRestoredAt:
           mustRollbackStock && !current.stockRestoredAt ? now : current.stockRestoredAt,
+        billingWorkStatus: "COMPLETED",
+        billingCompletedAt: current.billingCompletedAt || now,
         billingLastActivityAt: now,
       },
     });
@@ -233,6 +242,17 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     });
   }
 
+  publishRealtimeEvent({
+    countryId: order.countryId || order.country?.id || null,
+    eventKey: "billing_queue_new",
+    orderId: updated.id,
+    meta: {
+      status: "CANCELLED",
+      billingWorkStatus: updated.billingWorkStatus || "COMPLETED",
+      autoCancelled: true,
+    },
+  });
+
   return { ok: true, preorder: updated };
 }
 
@@ -245,6 +265,10 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
       paymentStatus: { not: "PAID" },
       cancelledAt: null,
       invoicedAt: { not: null, lte: expiryCutoff },
+      OR: [
+        { lastWhatsappStatus: null },
+        { lastWhatsappStatus: { not: "FAILED" } },
+      ],
       NOT: {
         AND: [
           { preorderPaymentMode: "BANK_TRANSFER" },

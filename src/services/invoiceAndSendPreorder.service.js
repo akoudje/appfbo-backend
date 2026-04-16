@@ -506,7 +506,7 @@ async function invoiceAndSendPreorder({
 
   console.log("[invoiceAndSendPreorder] billingMessage =", whatsappMessage);
 
-  const finalMessageStatus = notificationResult?.smsSent ? "SENT" : "FAILED";
+  const finalMessageStatus = notificationResult?.sent ? "SENT" : "FAILED";
 
   const updatedPreorder = await prisma.$transaction(async (tx) => {
     const nextPreorder = await tx.preorder.update({

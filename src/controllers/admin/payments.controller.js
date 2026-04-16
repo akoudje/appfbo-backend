@@ -1,6 +1,10 @@
 const prisma = require("../../prisma");
 const { scopeWhere } = require("../../helpers/countryScope");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
+const {
+  buildPaymentConfirmedSmsMessage,
+  sendPreorderNotification,
+} = require("../../services/preorder-notifications.service");
 
 const ALLOWED = {
   DRAFT: ["CANCELLED"],
@@ -279,6 +283,17 @@ async function validateManualPayment(req, res) {
       },
     });
 
+    try {
+      await sendPreorderNotification({
+        preorder: updated,
+        purpose: "PAYMENT_CONFIRMED",
+        message: buildPaymentConfirmedSmsMessage({ preorder: updated }),
+        actorName: req.user?.fullName || req.user?.email || req.user?.id || "admin",
+      });
+    } catch (error) {
+      console.error("validateManualPayment notification error:", error);
+    }
+
     return res.json(updated);
   } catch (e) {
     console.error("validateManualPayment error:", e);
@@ -411,6 +426,17 @@ async function markCashPayment(req, res) {
 
       return saved;
     });
+
+    try {
+      await sendPreorderNotification({
+        preorder: updated,
+        purpose: "PAYMENT_CONFIRMED",
+        message: buildPaymentConfirmedSmsMessage({ preorder: updated }),
+        actorName: req.user?.fullName || req.user?.email || req.user?.id || "admin",
+      });
+    } catch (error) {
+      console.error("markCashPayment notification error:", error);
+    }
 
     return res.json(updated);
   } catch (e) {

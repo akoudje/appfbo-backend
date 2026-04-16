@@ -9,6 +9,10 @@ const { scopeWhere, pickCountryId } = require("../helpers/countryScope");
 const { computePaymentPricing } = require("./payment-pricing");
 const { normalizeCI } = require("../utils/phone");
 const {
+  buildPaymentConfirmedSmsMessage,
+  sendPreorderNotification,
+} = require("../services/preorder-notifications.service");
+const {
   addPaymentTransactionLogTx,
 } = require("./payment-transaction-log.helper");
 
@@ -1623,6 +1627,22 @@ async function syncWavePaymentStatus({ req, preorderId }) {
       actorAdminId: req.user?.id || null,
     });
   });
+
+  if (
+    preorder.paymentStatus !== "PAID" &&
+    String(result?.preorder?.paymentStatus || "").toUpperCase() === "PAID"
+  ) {
+    try {
+      await sendPreorderNotification({
+        preorder: result.preorder,
+        purpose: "PAYMENT_CONFIRMED",
+        message: buildPaymentConfirmedSmsMessage({ preorder: result.preorder }),
+        actorName: req.user?.fullName || req.user?.email || req.user?.id || "SYSTEM_WAVE_SYNC",
+      });
+    } catch (error) {
+      console.error("syncWavePaymentStatus notification error:", error);
+    }
+  }
 
   return {
     ok: true,
