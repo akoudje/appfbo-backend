@@ -18,6 +18,9 @@ const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
+const PREORDER_SUBMISSION_DISABLED_MESSAGE =
+  process.env.PREORDER_SUBMISSION_DISABLED_MESSAGE ||
+  "Les soumissions de précommandes sont temporairement suspendues.";
 
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -491,6 +494,13 @@ async function submit(req, res) {
   const preorderId = req.params.id;
   const { phoneRaw, phoneNormalized } = req.body || {};
   const countryId = req.country.id;
+
+  if (String(process.env.PREORDER_SUBMISSION_DISABLED || "false").toLowerCase() === "true") {
+    return res.status(503).json({
+      error: PREORDER_SUBMISSION_DISABLED_MESSAGE,
+      code: "PREORDER_SUBMISSION_DISABLED",
+    });
+  }
 
   try {
     const preorder = await prisma.preorder.findFirst({
