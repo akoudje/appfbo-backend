@@ -20,10 +20,10 @@ function parsePositiveInt(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function getCutoffHourUtc() {
-  return Math.min(
-    23,
-    Math.max(0, parsePositiveInt(process.env.PREINVOICED_AUTO_CANCEL_HOUR_UTC, 16)),
+function getExpiryHours() {
+  return Math.max(
+    1,
+    parsePositiveInt(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS, 3),
   );
 }
 
@@ -34,20 +34,10 @@ function getSchedulerEveryMinutes() {
   );
 }
 
-function startOfUtcDay(date = new Date()) {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0),
-  );
-}
-
-function buildTodayCutoffUtc(now = new Date()) {
-  const dayStart = startOfUtcDay(now);
-  dayStart.setUTCHours(getCutoffHourUtc(), 0, 0, 0);
-  return dayStart;
-}
-
-function isEligibleForAutoCancelRun(now = new Date()) {
-  return now.getTime() >= buildTodayCutoffUtc(now).getTime();
+function buildInvoiceExpiryAt(invoicedAt) {
+  const baseTime = new Date(invoicedAt);
+  if (Number.isNaN(baseTime.getTime())) return null;
+  return new Date(baseTime.getTime() + getExpiryHours() * 60 * 60 * 1000);
 }
 
 function buildAutoCancelMessage(preorder) {
@@ -58,8 +48,8 @@ function buildAutoCancelMessage(preorder) {
 
   return compactText(`
     FOREVER: Bonjour ${customer}, votre precommande ${preorderNumber} a ete annulee
-    faute de paiement confirme avant 16H. Vous pouvez lancer une nouvelle precommande
-    si besoin.
+    faute de paiement confirme dans le delai maximal de ${getExpiryHours()}H apres
+    prefacturation. Vous pouvez lancer une nouvelle precommande si besoin.
   `);
 }
 
@@ -87,9 +77,21 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
   if (!["INVOICED", "PAYMENT_PENDING"].includes(status) || paymentStatus === "PAID") {
     return { ok: false, reason: "PREORDER_NOT_ELIGIBLE", preorder: order };
   }
+  if (
+    String(order.preorderPaymentMode || "").toUpperCase() === "BANK_TRANSFER" &&
+    ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(
+      String(order.bankPaymentStatus || "").toUpperCase(),
+    )
+  ) {
+    return { ok: false, reason: "BANK_PROOF_ALREADY_SUBMITTED", preorder: order };
+  }
+  const expiryAt = buildInvoiceExpiryAt(order.invoicedAt);
+  if (!expiryAt || now.getTime() < expiryAt.getTime()) {
+    return { ok: false, reason: "PAYMENT_WINDOW_NOT_EXPIRED", preorder: order };
+  }
 
   const cancelReason =
-    "Précommande préfacturée annulée automatiquement à 16H faute de paiement confirmé.";
+    `Précommande préfacturée annulée automatiquement après ${getExpiryHours()}H sans paiement confirmé.`;
 
   const updated = await prisma.$transaction(async (tx) => {
     const current = await tx.preorder.findUnique({
@@ -110,6 +112,18 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
       !["INVOICED", "PAYMENT_PENDING"].includes(currentStatus) ||
       currentPaymentStatus === "PAID"
     ) {
+      return null;
+    }
+    if (
+      String(current.preorderPaymentMode || "").toUpperCase() === "BANK_TRANSFER" &&
+      ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(
+        String(current.bankPaymentStatus || "").toUpperCase(),
+      )
+    ) {
+      return null;
+    }
+    const currentExpiryAt = buildInvoiceExpiryAt(current.invoicedAt);
+    if (!currentExpiryAt || now.getTime() < currentExpiryAt.getTime()) {
       return null;
     }
 
@@ -136,7 +150,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
               preorderId: current.id,
               productId: item.productId,
               qty: item.qty,
-              mode: "AUTO_CANCEL_UNPAID_16H",
+              mode: "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW",
             },
             createdById: null,
           },
@@ -183,8 +197,10 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
           fromStatus: current.status,
           toStatus: "CANCELLED",
           stockRollback: mustRollbackStock,
-          mode: "AUTO_CANCEL_UNPAID_16H",
-          cutoffHourUtc: getCutoffHourUtc(),
+          mode: "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW",
+          expiryHours: getExpiryHours(),
+          invoicedAt: current.invoicedAt ? new Date(current.invoicedAt).toISOString() : null,
+          expiredAt: currentExpiryAt.toISOString(),
         },
         actorAdminId: null,
       },
@@ -208,7 +224,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
         ...order,
         ...updated,
       }),
-      actorName: "SYSTEM_AUTO_CANCEL_16H",
+      actorName: "SYSTEM_AUTO_CANCEL_EXPIRY_WINDOW",
     });
   } catch (error) {
     console.error("[preorder-expiration] notification failed", {
@@ -221,25 +237,20 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
 }
 
 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
-  if (!isEligibleForAutoCancelRun(now)) {
-    return {
-      ok: true,
-      skipped: true,
-      reason: "CUTOFF_NOT_REACHED",
-      cutoffAt: buildTodayCutoffUtc(now).toISOString(),
-      checkedAt: now.toISOString(),
-      cancelledCount: 0,
-      cancelled: [],
-    };
-  }
-
-  const cutoffAt = buildTodayCutoffUtc(now);
+  const expiryHours = getExpiryHours();
+  const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
   const candidates = await prisma.preorder.findMany({
     where: {
       status: { in: ["INVOICED", "PAYMENT_PENDING"] },
       paymentStatus: { not: "PAID" },
       cancelledAt: null,
-      invoicedAt: { not: null, lte: cutoffAt },
+      invoicedAt: { not: null, lte: expiryCutoff },
+      NOT: {
+        AND: [
+          { preorderPaymentMode: "BANK_TRANSFER" },
+          { bankPaymentStatus: { in: ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"] } },
+        ],
+      },
     },
     select: {
       id: true,
@@ -247,6 +258,8 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
       invoicedAt: true,
       status: true,
       paymentStatus: true,
+      preorderPaymentMode: true,
+      bankPaymentStatus: true,
     },
     orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
   });
@@ -254,9 +267,9 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
   if (dryRun) {
     return {
       ok: true,
-      skipped: false,
       dryRun: true,
-      cutoffAt: cutoffAt.toISOString(),
+      expiryHours,
+      expiresBefore: expiryCutoff.toISOString(),
       checkedAt: now.toISOString(),
       cancelledCount: candidates.length,
       cancelled: candidates,
@@ -279,9 +292,9 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
 
   return {
     ok: true,
-    skipped: false,
     dryRun: false,
-    cutoffAt: cutoffAt.toISOString(),
+    expiryHours,
+    expiresBefore: expiryCutoff.toISOString(),
     checkedAt: now.toISOString(),
     cancelledCount: cancelled.length,
     cancelled,
