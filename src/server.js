@@ -17,6 +17,9 @@ const paymentsRoutes = require("./routes/payments.routes");
 const webhooksRoutes = require("./routes/webhooks.routes");
 const smsRoutes = require("./routes/sms.routes");
 const customerRoutes = require("./routes/customer.routes");
+const {
+  startExpiredInvoiceAutoCancelScheduler,
+} = require("./services/preorder-expiration.service");
 
 
 const app = express();
@@ -238,3 +241,5 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on port ${PORT}`);
 });
+
+startExpiredInvoiceAutoCancelScheduler();

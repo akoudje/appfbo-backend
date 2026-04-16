@@ -139,8 +139,6 @@ function buildDefaultEmailBodyByPurpose({
   const customer = preorder?.fboNomComplet || "Client";
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
   const parcelNumber = preorder?.parcelNumber || preorderNumber;
-  const invoiceRef =
-    preorder?.factureReference || preorder?.preorderNumber || preorder?.id || "-";
   const paymentCollectionCode =
     preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-";
   const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
@@ -158,7 +156,6 @@ function buildDefaultEmailBodyByPurpose({
       `Bonjour ${customer},`,
       "",
       `Votre précommande ${preorderNumber} est disponible pour paiement.`,
-      `Référence facture: ${invoiceRef}`,
       `Code encaissement: ${paymentCollectionCode}`,
       `Montant à payer: ${total}`,
       `Total CC: ${totalCc}`,
@@ -167,7 +164,7 @@ function buildDefaultEmailBodyByPurpose({
         : "Mode de paiement: règlement à la caisse FLP",
       "",
       "Étapes recommandées:",
-      "1. Vérifiez le montant et la référence de commande.",
+      "1. Vérifiez le montant et votre numéro de précommande.",
       paymentLink
         ? "2. Ouvrez le lien et finalisez le paiement en ligne."
         : "2. Présentez le code encaissement au comptoir pour régler.",
@@ -218,7 +215,6 @@ function buildDefaultEmailBodyByPurpose({
       `Bonjour ${customer},`,
       "",
       `Votre paiement pour la commande ${preorderNumber} a été confirmé.`,
-      `Référence facture: ${invoiceRef}`,
       `Montant confirmé: ${total}`,
       "Votre commande suit son traitement normal.",
       supportLine,
@@ -463,8 +459,6 @@ function buildTemplateContext({
   const customerName = preorder?.fboNomComplet || "Client";
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
   const parcelNumber = preorder?.parcelNumber || preorderNumber;
-  const invoiceRef =
-    preorder?.factureReference || preorder?.preorderNumber || preorder?.id || "-";
   const paymentCollectionCode =
     preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-";
   const totalFcfa = Number(
@@ -480,7 +474,7 @@ function buildTemplateContext({
     customerName,
     preorderNumber,
     parcelNumber,
-    invoiceRef,
+    invoiceRef: preorderNumber,
     paymentCollectionCode,
     totalFcfa: String(Math.max(0, Math.round(totalFcfa))),
     totalFcfaLabel: formatFcfa(totalFcfa),

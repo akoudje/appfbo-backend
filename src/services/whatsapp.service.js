@@ -104,7 +104,6 @@ function buildPaymentWhatsAppMessage({
     "",
     "Votre précommande FOREVER a bien été enregistrée et votre préfacture est prête.",
     "",
-    `Référence : ${factureReference || "-"}`,
     `Numéro FBO : ${fboNumero || "-"}`,
     `Montant à payer : ${formatFcfa(totalFcfa)}`,
   ];
