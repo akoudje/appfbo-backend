@@ -6,6 +6,7 @@ const { computePreorderTotals } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
 const { uploadBuffer } = require("../services/cloudinary");
+const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
 const {
   streamBankProofFileToResponse,
 } = require("../utils/bankProofFiles");
@@ -44,6 +45,23 @@ function uploadBankProofMiddleware(req, res, next) {
   });
 }
 
+function attachCustomerPaymentWindow(order) {
+  if (!order || typeof order !== "object") return order;
+
+  const paymentExpiryHours = getPaymentExpiryHours();
+  const invoicedAt = order.invoicedAt ? new Date(order.invoicedAt) : null;
+  const paymentExpiresAt =
+    invoicedAt && !Number.isNaN(invoicedAt.getTime())
+      ? new Date(invoicedAt.getTime() + paymentExpiryHours * 60 * 60 * 1000).toISOString()
+      : null;
+
+  return {
+    ...order,
+    paymentExpiryHours,
+    paymentExpiresAt,
+  };
+}
+
 async function listMyOrders(req, res) {
   try {
     const countryId = req.country?.id || req.countryId;
@@ -61,6 +79,8 @@ async function listMyOrders(req, res) {
         preorderPaymentMode: true,
         totalFcfa: true,
         factureReference: true,
+        paymentCollectionCode: true,
+        invoicedAt: true,
         parcelNumber: true,
         bankPaymentStatus: true,
         bankPaymentDueAt: true,
@@ -83,10 +103,12 @@ async function listMyOrders(req, res) {
     });
 
     return res.json({
-      data: rows.map((row) => ({
-        ...row,
-        latestBankProof: row.bankPaymentProofs?.[0] || null,
-      })),
+      data: rows.map((row) =>
+        attachCustomerPaymentWindow({
+          ...row,
+          latestBankProof: row.bankPaymentProofs?.[0] || null,
+        }),
+      ),
     });
   } catch (e) {
     console.error("listMyOrders error:", e);
@@ -149,7 +171,7 @@ async function getMyOrder(req, res) {
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
-    return res.json(order);
+    return res.json(attachCustomerPaymentWindow(order));
   } catch (e) {
     console.error("getMyOrder error:", e);
     return res.status(500).json({ message: "Erreur serveur (getMyOrder)" });

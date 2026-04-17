@@ -56,17 +56,146 @@ function buildWaveUrls(preorderId, countryCode = "CIV") {
   };
 }
 
-function buildPublicWavePaymentUrl(preorderId, countryCode = "CIV") {
-  const publicBaseUrl =
+function buildPublicAppBaseUrl() {
+  return (
     process.env.APP_PUBLIC_BASE_URL ||
     process.env.FRONTEND_PUBLIC_URL ||
     process.env.ADMIN_APP_PUBLIC_URL ||
-    "http://localhost:5173";
+    "http://localhost:5173"
+  );
+}
+
+function buildPublicWavePaymentUrl(preorderId, countryCode = "CIV") {
+  const publicBaseUrl = buildPublicAppBaseUrl();
   const normalizedCountryCode = String(countryCode || "CIV").trim().toUpperCase();
   const encodedOrderId = encodeURIComponent(String(preorderId || ""));
   const encodedCountryCode = encodeURIComponent(normalizedCountryCode || "CIV");
 
   return `${publicBaseUrl}/payment/wave/${encodedOrderId}?country=${encodedCountryCode}`;
+}
+
+function getShortPaymentLinkSecret() {
+  return (
+    process.env.PUBLIC_PAYMENT_LINK_SECRET ||
+    process.env.CUSTOMER_JWT_SECRET ||
+    process.env.JWT_SECRET ||
+    ""
+  );
+}
+
+function signShortPaymentLinkPayload(payload) {
+  return crypto
+    .createHmac("sha256", getShortPaymentLinkSecret())
+    .update(payload)
+    .digest("base64url")
+    .slice(0, 10);
+}
+
+function buildShortWavePaymentToken(preorderId, countryCode = "CIV", paymentCollectionCode = "") {
+  const normalizedOrderId = String(preorderId || "").trim();
+  const normalizedCountryCode = String(countryCode || "CIV").trim().toUpperCase();
+  const normalizedCollectionCode = String(paymentCollectionCode || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toUpperCase();
+  const orderSuffix = normalizedOrderId.slice(-6);
+  const secret = getShortPaymentLinkSecret();
+
+  if (!normalizedOrderId || !normalizedCollectionCode || !orderSuffix || !secret) {
+    return null;
+  }
+
+  const payload = `${normalizedCollectionCode}.${normalizedCountryCode}.${orderSuffix}`;
+  const signature = signShortPaymentLinkPayload(payload);
+  return `${payload}.${signature}`;
+}
+
+function buildShortWavePaymentUrl(preorderId, countryCode = "CIV", paymentCollectionCode = "") {
+  const publicBaseUrl = buildPublicAppBaseUrl();
+  const token = buildShortWavePaymentToken(
+    preorderId,
+    countryCode,
+    paymentCollectionCode,
+  );
+
+  if (!token) {
+    return buildPublicWavePaymentUrl(preorderId, countryCode);
+  }
+
+  return `${publicBaseUrl}/payment/w/${encodeURIComponent(token)}`;
+}
+
+async function resolveShortWavePaymentLink(token) {
+  const normalizedToken = String(token || "").trim();
+  const match = normalizedToken.match(
+    /^([A-Z0-9-]+)\.([A-Z0-9_-]+)\.([A-Za-z0-9_-]{6})\.([A-Za-z0-9_-]{10})$/,
+  );
+
+  if (!match) {
+    const err = new Error("Lien de paiement invalide");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const [, paymentCollectionCode, countryCode, orderSuffix, signature] = match;
+  const payload = `${paymentCollectionCode}.${countryCode}.${orderSuffix}`;
+  const secret = getShortPaymentLinkSecret();
+
+  if (!secret) {
+    const err = new Error("Signature de lien public indisponible");
+    err.statusCode = 500;
+    throw err;
+  }
+
+  const expectedSignature = signShortPaymentLinkPayload(payload);
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+
+  if (
+    signatureBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+  ) {
+    const err = new Error("Lien de paiement invalide");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const matches = await prisma.preorder.findMany({
+    where: {
+      paymentCollectionCode,
+      id: { endsWith: orderSuffix },
+      country: {
+        code: String(countryCode).trim().toUpperCase(),
+      },
+    },
+    select: {
+      id: true,
+      paymentCollectionCode: true,
+      country: {
+        select: {
+          code: true,
+        },
+      },
+    },
+    take: 2,
+  });
+
+  if (matches.length !== 1) {
+    const err = new Error("Commande introuvable pour ce lien");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const preorder = matches[0];
+  return {
+    ok: true,
+    orderId: preorder.id,
+    countryCode: preorder.country?.code || String(countryCode).trim().toUpperCase(),
+    redirectUrl: buildPublicWavePaymentUrl(
+      preorder.id,
+      preorder.country?.code || countryCode,
+    ),
+  };
 }
 
 async function resolvePublicWavePreorder(req, preorderId) {
@@ -2114,8 +2243,10 @@ async function listPaymentTransactionLogs({ req, preorderId, take = 200 }) {
 
 module.exports = {
   buildPublicWavePaymentUrl,
+  buildShortWavePaymentUrl,
   getPublicWavePaymentContext,
   initiateWavePayment,
+  resolveShortWavePaymentLink,
   syncWavePaymentStatus,
   simulateWaveStatus,
   handleWaveWebhook,

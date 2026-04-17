@@ -16,6 +16,11 @@ const webhookLimiter = createRateLimiter({
 });
 
 router.get(
+  "/wave/short/:token/resolve",
+  paymentsController.resolveShortWavePaymentLink
+);
+
+router.get(
   "/wave/public/:orderId/context",
   resolveCountry,
   paymentsController.getPublicWavePaymentContext

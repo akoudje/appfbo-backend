@@ -116,6 +116,24 @@ async function getPublicWavePaymentContext(req, res) {
   }
 }
 
+async function resolveShortWavePaymentLink(req, res) {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ message: "token requis" });
+    }
+
+    const result = await paymentsService.resolveShortWavePaymentLink(token);
+    return res.json(result);
+  } catch (e) {
+    console.error("resolveShortWavePaymentLink error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (resolveShortWavePaymentLink)" });
+  }
+}
+
 async function initiatePublicWavePayment(req, res) {
   try {
     const { orderId, payerPhone } = req.body || {};
@@ -192,6 +210,7 @@ async function listPaymentTransactionLogs(req, res) {
 module.exports = {
   initiateWavePayment,
   getPublicWavePaymentContext,
+  resolveShortWavePaymentLink,
   initiatePublicWavePayment,
   syncPublicWavePaymentStatus,
   syncWavePaymentStatus,

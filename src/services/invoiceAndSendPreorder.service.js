@@ -476,9 +476,10 @@ async function invoiceAndSendPreorder({
   let paymentLink = null;
 
   if (isWavePreorder(invoicedPreorder) && req) {
-    paymentLink = paymentsService.buildPublicWavePaymentUrl(
+    paymentLink = paymentsService.buildShortWavePaymentUrl(
       invoicedPreorder.id,
       invoicedPreorder.country?.code || "CIV",
+      paymentCollectionCode,
     );
   }
 
