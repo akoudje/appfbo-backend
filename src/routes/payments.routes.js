@@ -5,6 +5,7 @@ const express = require("express");
 const router = express.Router();
 
 const paymentsController = require("../payments/payments.controller");
+const customerPortalController = require("../controllers/customerPortal.controller");
 const { requireAuth } = require("../middlewares/rbac");
 const { resolveCountry } = require("../middlewares/resolveCountry");
 const { createRateLimiter } = require("../middlewares/rateLimit");
@@ -18,6 +19,17 @@ const webhookLimiter = createRateLimiter({
 router.get(
   "/wave/short/:token/resolve",
   paymentsController.resolveShortWavePaymentLink
+);
+
+router.get(
+  "/bank-proof/public/:token/context",
+  customerPortalController.getPublicBankProofContext
+);
+
+router.post(
+  "/bank-proof/public/:token/upload",
+  customerPortalController.uploadBankProofMiddleware,
+  customerPortalController.submitPublicBankProof
 );
 
 router.get(

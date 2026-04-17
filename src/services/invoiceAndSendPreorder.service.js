@@ -277,6 +277,13 @@ function buildInvoiceMessage({
 
   if (isBankTransferFlow) {
     const expiryHours = getPaymentExpiryHours();
+    if (normalizedLink) {
+      return firstSmsCandidate([
+        `Code ${collectionCode}. Montant ${amountFmt}F. Virement puis depot preuve sous ${expiryHours}H: ${normalizedLink}`,
+        `Code ${collectionCode}. ${amountFmt}F. Deposez votre preuve ici sous ${expiryHours}H: ${normalizedLink}`,
+        `Code ${collectionCode}. Lien securise de depot preuve: ${normalizedLink}`,
+      ]);
+    }
     return firstSmsCandidate([
       `Code ${collectionCode}. Montant ${amountFmt}F. Effectuez le virement sous ${expiryHours}H. Consultez votre email ou l'espace client.`,
       `Code ${collectionCode}. ${amountFmt}F. Instructions bancaires envoyees. Paiement sous ${expiryHours}H.`,
@@ -472,19 +479,40 @@ async function invoiceAndSendPreorder({
   console.log("[invoiceAndSendPreorder] isWavePreorder =", isWavePreorder(invoicedPreorder));
   console.log("[invoiceAndSendPreorder] hasReq =", Boolean(req));
 
-  // 3) Générer le lien public de paiement Wave si nécessaire
+  // 3) Générer le lien public d'action client (Wave ou dépôt preuve bancaire) si nécessaire
   let paymentLink = null;
+  const normalizedPaymentMode = String(
+    invoicedPreorder?.preorderPaymentMode ||
+      invoicedPreorder?.paymentMode ||
+      invoicedPreorder?.paymentProvider ||
+      "",
+  )
+    .trim()
+    .toUpperCase();
+  const isBankTransferPreorder =
+    normalizedPaymentMode === "BANK_TRANSFER" ||
+    normalizedPaymentMode.includes("BANK_TRANSFER") ||
+    normalizedPaymentMode.includes("VIREMENT") ||
+    normalizedPaymentMode.includes("BANK");
 
-  if (isWavePreorder(invoicedPreorder) && req) {
-    paymentLink = paymentsService.buildShortWavePaymentUrl(
-      invoicedPreorder.id,
-      invoicedPreorder.country?.code || "CIV",
-      paymentCollectionCode,
-    );
+  if (req) {
+    if (isWavePreorder(invoicedPreorder)) {
+      paymentLink = paymentsService.buildShortWavePaymentUrl(
+        invoicedPreorder.id,
+        invoicedPreorder.country?.code || "CIV",
+        paymentCollectionCode,
+      );
+    } else if (isBankTransferPreorder) {
+      paymentLink = paymentsService.buildShortBankProofUploadUrl(
+        invoicedPreorder.id,
+        invoicedPreorder.country?.code || "CIV",
+        paymentCollectionCode,
+      );
+    }
   }
 
   // 4) Construire le message SMS/WhatsApp historique
-  const messagePurpose = paymentLink ? "PAYMENT_LINK" : "INVOICE";
+  const messagePurpose = isWavePreorder(invoicedPreorder) && paymentLink ? "PAYMENT_LINK" : "INVOICE";
 
   let whatsappMessage = buildInvoiceMessage({
     preorder: invoicedPreorder,

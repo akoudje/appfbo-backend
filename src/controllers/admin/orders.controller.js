@@ -1217,7 +1217,13 @@ async function resendInvoiceSms(req, res) {
 
     const actorName = actorLabel(req);
     const now = new Date();
-    const notificationPurpose = paymentLink ? "PAYMENT_LINK" : "INVOICE";
+    const paymentMode = String(
+      order?.preorderPaymentMode || order?.paymentProvider || "",
+    )
+      .trim()
+      .toUpperCase();
+    const notificationPurpose =
+      paymentLink && paymentMode.includes("WAVE") ? "PAYMENT_LINK" : "INVOICE";
     const sendResult = await sendPreorderNotification({
       preorder: {
         ...order,

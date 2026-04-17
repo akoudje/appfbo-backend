@@ -159,6 +159,16 @@ function buildDefaultEmailBodyByPurpose({
   const totalCc = formatCc(preorder?.totalCc || 0);
   const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
   const pickupCode = preorder?.pickupSecretCode || "-";
+  const paymentMode = String(
+    preorder?.preorderPaymentMode || preorder?.paymentMode || preorder?.paymentProvider || "",
+  )
+    .trim()
+    .toUpperCase();
+  const isBankTransferFlow =
+    paymentMode === "BANK_TRANSFER" ||
+    paymentMode.includes("BANK_TRANSFER") ||
+    paymentMode.includes("VIREMENT") ||
+    paymentMode.includes("BANK");
   const supportLine = formatOptionalContactLine("Assistance", supportPhone);
   const pickupAddressLine = formatOptionalContactLine(
     "Adresse de retrait",
@@ -175,14 +185,18 @@ function buildDefaultEmailBodyByPurpose({
       `Montant à payer: ${total}`,
       `Total CC: ${totalCc}`,
       paymentLink
-        ? `Lien de paiement sécurisé: ${paymentLink}`
+        ? isBankTransferFlow
+          ? `Lien sécurisé de dépôt de preuve: ${paymentLink}`
+          : `Lien de paiement sécurisé: ${paymentLink}`
         : "Mode de paiement: règlement à la caisse FLP",
       "",
       `Cette préfacture reste payable pendant ${expiryHours}h maximum après émission.`,
       "Étapes recommandées:",
       "1. Vérifiez le montant et votre numéro de précommande.",
       paymentLink
-        ? "2. Ouvrez le lien et finalisez le paiement en ligne."
+        ? isBankTransferFlow
+          ? "2. Ouvrez le lien, joignez votre preuve de virement et validez l'envoi."
+          : "2. Ouvrez le lien et finalisez le paiement en ligne."
         : "2. Présentez le code encaissement au comptoir pour régler.",
       `3. Finalisez le paiement dans un délai maximal de ${expiryHours}h.`,
       "4. Conservez cette notification jusqu'à confirmation du paiement.",
@@ -393,8 +407,8 @@ function resolvePaymentFlowKey(preorder = {}, paymentLink = "") {
     mode.includes("BANK");
   const isCash = mode.includes("ESPE") || mode === "MANUAL" || mode === "CASH";
 
-  if (hasPaymentLink || mode.includes("WAVE")) return "WAVE";
   if (isBankTransfer) return "BANK_TRANSFER";
+  if (hasPaymentLink || mode.includes("WAVE")) return "WAVE";
   if (isCash) return "CASH";
   return "CASH";
 }
@@ -485,6 +499,8 @@ function buildTemplateContext({
   const paymentLink = String(paymentLinkTracked || paymentLinkTarget || "").trim();
   const pickupCode = preorder?.pickupSecretCode || "-";
   const paymentFlow = resolvePaymentFlowKey(preorder, paymentLink);
+  const bankProofUploadLink =
+    paymentFlow === "BANK_TRANSFER" ? paymentLink : "";
 
   return {
     purpose: normalizePurposeKey(purpose),
@@ -497,6 +513,7 @@ function buildTemplateContext({
     totalFcfa: String(Math.max(0, Math.round(totalFcfa))),
     totalFcfaLabel: formatFcfa(totalFcfa),
     paymentLink,
+    bankProofUploadLink,
     paymentFlow,
     pickupCode,
     paymentExpiryHours: String(getPaymentExpiryHours()),
@@ -517,6 +534,21 @@ function buildSmsTemplateCandidates({ purpose, context }) {
     return ["INVOICE_BANK_TRANSFER", "INVOICE"];
   }
   return ["INVOICE_CASH", "INVOICE"];
+}
+
+function buildEmailTemplateCandidates({ purpose, context }) {
+  const purposeKey = normalizePurposeKey(purpose);
+  const flow = String(context?.paymentFlow || "CASH").toUpperCase();
+
+  if (purposeKey === "INVOICE" && flow === "BANK_TRANSFER") {
+    return ["INVOICE_BANK_TRANSFER", "INVOICE"];
+  }
+
+  if (purposeKey === "REMINDER" && flow === "BANK_TRANSFER") {
+    return ["REMINDER_BANK_TRANSFER", "REMINDER"];
+  }
+
+  return [purposeKey];
 }
 
 function sanitizeInvoiceSmsMessage(value = "") {
@@ -567,20 +599,17 @@ function resolveConfiguredTemplates({
 }) {
   const purposeKey = normalizePurposeKey(purpose);
   const smsPurposeCandidates = buildSmsTemplateCandidates({ purpose, context });
+  const emailPurposeCandidates = buildEmailTemplateCandidates({ purpose, context });
 
   const smsTemplate = smsPurposeCandidates
     .map((key) => getNestedTemplate(templatesRoot, ["sms", key]))
     .find(Boolean);
-  const emailSubjectTemplate = getNestedTemplate(templatesRoot, [
-    "email",
-    purposeKey,
-    "subject",
-  ]);
-  const emailBodyTemplate = getNestedTemplate(templatesRoot, [
-    "email",
-    purposeKey,
-    "body",
-  ]);
+  const emailSubjectTemplate = emailPurposeCandidates
+    .map((key) => getNestedTemplate(templatesRoot, ["email", key, "subject"]))
+    .find(Boolean);
+  const emailBodyTemplate = emailPurposeCandidates
+    .map((key) => getNestedTemplate(templatesRoot, ["email", key, "body"]))
+    .find(Boolean);
 
   const resolvedSms = compactText(
     smsTemplate ? interpolateTemplate(smsTemplate, context) : fallbackSms,

@@ -17,7 +17,7 @@ function buildDefaultNotificationTemplates() {
       INVOICE_WAVE:
         `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Reglez sous ${expiryHours}H via le lien Wave: {{paymentLink}}`,
       INVOICE_BANK_TRANSFER:
-        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Effectuez le virement sous ${expiryHours}H. Consultez votre email ou l'espace client.`,
+        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Effectuez le virement puis deposez votre preuve ici sous ${expiryHours}H: {{bankProofUploadLink}}`,
       INVOICE_CASH:
         `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Rendez-vous a la caisse FLP pour regler sous ${expiryHours}H.`,
       PAYMENT_CONFIRMED:
@@ -40,6 +40,39 @@ function buildDefaultNotificationTemplates() {
           "3. Conservez cette notification jusqu'à confirmation du paiement.",
           "",
           "Merci de votre confiance.",
+          "Equipe FOREVER",
+        ].join("\n"),
+      },
+      INVOICE_BANK_TRANSFER: {
+        subject: "FOREVER CI - Dépôt de preuve bancaire ({{preorderNumber}})",
+        body: [
+          "Bonjour {{customerName}},",
+          "",
+          "Votre précommande {{preorderNumber}} attend votre preuve de virement.",
+          "Code encaissement: {{paymentCollectionCode}}",
+          "Montant à payer: {{totalFcfaLabel}}",
+          "Lien sécurisé de dépôt de preuve: {{bankProofUploadLink}}",
+          "Cette préfacture reste payable pendant {{paymentExpiryHours}}h maximum après émission.",
+          "",
+          "Étapes recommandées:",
+          "1. Effectuez le virement bancaire.",
+          "2. Ouvrez le lien sécurisé et joignez votre justificatif.",
+          "3. Finalisez le dépôt dans un délai maximal de {{paymentExpiryHours}}h.",
+          "",
+          "Merci de votre confiance.",
+          "Equipe FOREVER",
+        ].join("\n"),
+      },
+      REMINDER_BANK_TRANSFER: {
+        subject: "FOREVER CI - Rappel dépôt preuve bancaire ({{preorderNumber}})",
+        body: [
+          "Bonjour {{customerName}},",
+          "",
+          "Nous attendons toujours votre preuve de virement pour la précommande {{preorderNumber}}.",
+          "Montant à payer: {{totalFcfaLabel}}",
+          "Lien sécurisé de dépôt de preuve: {{bankProofUploadLink}}",
+          "",
+          "Merci de transmettre votre justificatif dès que possible.",
           "Equipe FOREVER",
         ].join("\n"),
       },
@@ -79,6 +112,14 @@ function mergeNotificationTemplates(baseTemplates = {}, overrideTemplates = {}) 
       INVOICE: {
         ...(baseTemplates?.email?.INVOICE || {}),
         ...(overrideTemplates?.email?.INVOICE || {}),
+      },
+      INVOICE_BANK_TRANSFER: {
+        ...(baseTemplates?.email?.INVOICE_BANK_TRANSFER || {}),
+        ...(overrideTemplates?.email?.INVOICE_BANK_TRANSFER || {}),
+      },
+      REMINDER_BANK_TRANSFER: {
+        ...(baseTemplates?.email?.REMINDER_BANK_TRANSFER || {}),
+        ...(overrideTemplates?.email?.REMINDER_BANK_TRANSFER || {}),
       },
       PAYMENT_CONFIRMED: {
         ...(baseTemplates?.email?.PAYMENT_CONFIRMED || {}),
