@@ -1179,6 +1179,7 @@ async function resendInvoiceSms(req, res) {
       select: {
         id: true,
         body: true,
+        purpose: true,
         toPhone: true,
         paymentLinkTarget: true,
         paymentLinkTracked: true,
@@ -1217,14 +1218,21 @@ async function resendInvoiceSms(req, res) {
 
     const actorName = actorLabel(req);
     const now = new Date();
+    const notificationPurpose = paymentLink ? "PAYMENT_LINK" : "INVOICE";
     const sendResult = await sendPreorderNotification({
       preorder: {
         ...order,
         factureWhatsappTo: destination,
       },
-      purpose: "REMINDER",
+      purpose:
+        latestMessage?.purpose === "PAYMENT_LINK" ||
+        latestMessage?.purpose === "INVOICE"
+          ? latestMessage.purpose
+          : notificationPurpose,
       message: smsBody,
       actorName,
+      paymentLinkTarget: latestMessage?.paymentLinkTarget || paymentLink || null,
+      paymentLinkTracked: latestMessage?.paymentLinkTracked || paymentLink || null,
     });
     const smsDispatched = Boolean(sendResult?.smsSent);
 
@@ -1263,6 +1271,7 @@ async function resendInvoiceSms(req, res) {
       ok: true,
       sent: Boolean(sendResult?.sent),
       toPhone: destination,
+      toEmail: sendResult?.toEmail || null,
       channel: sendResult?.channel || null,
       attempts: sendResult?.attempts || [],
       messageId: sendResult?.messageId || null,
