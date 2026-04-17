@@ -1155,7 +1155,6 @@ async function resendInvoiceSms(req, res) {
         totalFcfa: true,
         preorderPaymentMode: true,
         paymentProvider: true,
-        paymentMode: true,
         factureWhatsappTo: true,
         whatsappMessage: true,
         activePayment: {
@@ -1308,7 +1307,6 @@ async function resendConfirmationSms(req, res) {
         totalFcfa: true,
         preorderPaymentMode: true,
         paymentProvider: true,
-        paymentMode: true,
         factureWhatsappTo: true,
         activePayment: {
           select: {
