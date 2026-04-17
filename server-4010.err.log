@@ -1,0 +1,42 @@
+[preorder-expiration] scheduler error PrismaClientValidationError: 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T18:12:14.036Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+    at wn (C:\AppDesktop\appfbo\backend\node_modules\@prisma\client\runtime\library.js:29:1363)
+    at $n.handleRequestError (C:\AppDesktop\appfbo\backend\node_modules\@prisma\client\runtime\library.js:121:6958)
+    at $n.handleAndLogRequestError (C:\AppDesktop\appfbo\backend\node_modules\@prisma\client\runtime\library.js:121:6623)
+    at $n.request (C:\AppDesktop\appfbo\backend\node_modules\@prisma\client\runtime\library.js:121:6307)
+    at async l (C:\AppDesktop\appfbo\backend\node_modules\@prisma\client\runtime\library.js:130:9633)
+    at async C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:5
+    at async Proxy._transactionWithCallback (C:\AppDesktop\appfbo\backend\node_modules\@prisma\client\runtime\library.js:130:8000)
+    at async cancelPreorderAsExpiredUnpaid (C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:100:19)
+    at async cancelExpiredInvoicedPreorders (C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:305:20)
+    at async tick (C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:340:22) {
+  clientVersion: '5.22.0'
+}

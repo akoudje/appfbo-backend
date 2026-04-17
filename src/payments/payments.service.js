@@ -315,10 +315,7 @@ async function resolveShortBankProofUploadLink(token) {
     ok: true,
     orderId: preorder.id,
     countryCode: preorder.country?.code || String(countryCode).trim().toUpperCase(),
-    redirectUrl: buildPublicBankProofUploadUrl(
-      preorder.id,
-      preorder.country?.code || countryCode,
-    ),
+    redirectUrl: `${buildPublicAppBaseUrl()}/payment/b/${encodeURIComponent(normalizedToken)}`,
   };
 }
 
