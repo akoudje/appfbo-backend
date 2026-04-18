@@ -1,0 +1,813 @@
+[dotenv@17.3.1] injecting env (33) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+CORS allowlist (exact): https://appfbo-frontend.vercel.app, https://appfbo-admin.vercel.app, https://forevercivstore.com, https://www.forevercivstore.com, https://admin.forevercivstore.com
+CORS allowlist (patterns): /^https:\/\/[a-z0-9-]+\.forevercivstore\.com$/i
+API running on port 4010
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T18:27:45.051Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T18:32:45.054Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T18:37:45.060Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T18:42:36.865Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error Error in PostgreSQL connection: Error { kind: Io, cause: Some(Os { code: 10054, kind: ConnectionReset, message: "Une connexion existante a dû être fermée par l’hôte distant." }) }
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:17:53.659Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:22:53.673Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:27:53.676Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:32:53.690Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:37:53.700Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:42:53.715Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:47:53.723Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:52:53.737Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T20:57:53.742Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:12:53.761Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:17:53.771Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:27:53.790Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:37:53.797Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:42:53.805Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:47:53.813Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:52:53.815Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T21:57:53.816Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T22:02:53.832Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo1y9knn006ltmnj4rmtwbzj",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-17T22:12:53.854Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `prisma.preorder.findMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:262:44
+
+  259 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
+  260   const expiryHours = getExpiryHours();
+  261   const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
+→ 262   const candidates = await prisma.preorder.findMany(
+Can't reach database server at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`
+
+Please make sure your database server is running at `dpg-d6aeq524d50c73c0itu0-a.oregon-postgres.render.com:5432`.
+prisma:error 
+Invalid `tx.payment.updateMany()` invocation in
+C:\AppDesktop\appfbo\backend\src\services\preorder-expiration.service.js:168:22
+
+  165   }
+  166 }
+  167 
+→ 168 await tx.payment.updateMany({
+        where: {
+          preorderId: "cmo2er0r2006qmhvpqkuwclzn",
+          status: {
+            notIn: [
+              "SUCCEEDED",
+              "PAID",
+              "REFUNDED",
+              "PARTIALLY_REFUNDED",
+              "CANCELLED",
+              "EXPIRED",
+              "FAILED"
+            ]
+            ~~~~~~~~~~~~~~~~~~~~~~
+          }
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-04-18T03:15:29.352Z")
+        }
+      })
+
+Invalid value for argument `notIn`. Expected PaymentStatus.
