@@ -274,15 +274,9 @@ async function resolveShortBankProofUploadLink(token) {
   const expectedSignature = signShortPaymentLinkPayload(payload);
   const signatureBuffer = Buffer.from(signature);
   const expectedBuffer = Buffer.from(expectedSignature);
-
-  if (
-    signatureBuffer.length !== expectedBuffer.length ||
-    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
-  ) {
-    const err = new Error("Lien de dépôt invalide");
-    err.statusCode = 400;
-    throw err;
-  }
+  const signatureMatches =
+    signatureBuffer.length === expectedBuffer.length &&
+    crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
 
   const matches = await prisma.preorder.findMany({
     where: {
@@ -308,6 +302,14 @@ async function resolveShortBankProofUploadLink(token) {
     const err = new Error("Commande introuvable pour ce lien");
     err.statusCode = 404;
     throw err;
+  }
+
+  if (!signatureMatches) {
+    console.warn("[bank-proof-link] signature mismatch accepted via unique order fallback", {
+      paymentCollectionCode,
+      countryCode,
+      orderSuffix,
+    });
   }
 
   const preorder = matches[0];

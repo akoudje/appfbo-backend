@@ -89,6 +89,9 @@ function buildPublicBankProofContext(order) {
   return attachCustomerPaymentWindow({
     id: order?.id || null,
     preorderNumber: order?.preorderNumber || null,
+    customerName: order?.fboNomComplet || null,
+    countryCode: order?.country?.code || null,
+    countryName: order?.country?.name || null,
     status: order?.status || null,
     paymentStatus: order?.paymentStatus || null,
     preorderPaymentMode: order?.preorderPaymentMode || null,
@@ -584,6 +587,7 @@ async function getPublicBankProofContext(req, res) {
       select: {
         id: true,
         preorderNumber: true,
+        fboNomComplet: true,
         status: true,
         paymentStatus: true,
         preorderPaymentMode: true,
@@ -592,6 +596,12 @@ async function getPublicBankProofContext(req, res) {
         paymentCollectionCode: true,
         invoicedAt: true,
         bankPaymentStatus: true,
+        country: {
+          select: {
+            code: true,
+            name: true,
+          },
+        },
         bankPaymentProofs: {
           orderBy: { createdAt: "desc" },
           take: 1,
