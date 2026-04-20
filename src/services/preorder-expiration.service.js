@@ -4,7 +4,6 @@ const { publishRealtimeEvent } = require("./realtime-events.service");
 
 const FINAL_PAYMENT_STATUSES = new Set([
   "SUCCEEDED",
-  "PAID",
   "REFUNDED",
   "PARTIALLY_REFUNDED",
   "CANCELLED",
