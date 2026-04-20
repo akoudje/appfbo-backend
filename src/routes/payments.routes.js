@@ -26,10 +26,23 @@ router.get(
   customerPortalController.getPublicBankProofContext
 );
 
+router.get(
+  "/bank-proof/public/order/:orderId/context",
+  resolveCountry,
+  customerPortalController.getPublicBankProofContextByOrderId
+);
+
 router.post(
   "/bank-proof/public/:token/upload",
   customerPortalController.uploadBankProofMiddleware,
   customerPortalController.submitPublicBankProof
+);
+
+router.post(
+  "/bank-proof/public/order/:orderId/upload",
+  resolveCountry,
+  customerPortalController.uploadBankProofMiddleware,
+  customerPortalController.submitPublicBankProofByOrderId
 );
 
 router.get(

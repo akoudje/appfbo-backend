@@ -654,6 +654,88 @@ async function getPublicBankProofContext(req, res) {
   }
 }
 
+async function getPublicBankProofContextByOrderId(req, res) {
+  try {
+    const { orderId } = req.params;
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId requis" });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: {
+        id: orderId,
+        countryId: req.country?.id || req.countryId || undefined,
+      },
+      select: {
+        id: true,
+        preorderNumber: true,
+        fboNomComplet: true,
+        status: true,
+        paymentStatus: true,
+        preorderPaymentMode: true,
+        totalFcfa: true,
+        factureReference: true,
+        paymentCollectionCode: true,
+        invoicedAt: true,
+        bankPaymentStatus: true,
+        country: {
+          select: {
+            code: true,
+            name: true,
+          },
+        },
+        bankPaymentProofs: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            submittedAt: true,
+            rejectionReason: true,
+            originalFileName: true,
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
+      return res.status(400).json({
+        message: "Ce lien est réservé au dépôt de preuve bancaire.",
+      });
+    }
+
+    const paymentWindow = resolveCustomerPaymentWindow(order);
+    const paymentStatus = String(order.paymentStatus || "").toUpperCase();
+    const status = String(order.status || "").toUpperCase();
+    const canUpload =
+      !paymentWindow.isExpired &&
+      ["INVOICED", "PAYMENT_PENDING"].includes(status) &&
+      !["PAID", "PAYMENT_CONFIRMED"].includes(paymentStatus);
+
+    return res.json({
+      ok: true,
+      order: buildPublicBankProofContext(order),
+      uploadAllowed: canUpload,
+      uploadBlockedReason: canUpload
+        ? ""
+        : paymentWindow.isExpired
+          ? "La fenêtre de dépôt a expiré pour cette préfacture."
+          : ["PAID", "PAYMENT_CONFIRMED"].includes(paymentStatus)
+            ? "Le paiement est déjà validé pour cette commande."
+            : "Le dépôt de preuve n'est plus disponible pour cette commande.",
+    });
+  } catch (e) {
+    console.error("getPublicBankProofContextByOrderId error:", e);
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (getPublicBankProofContextByOrderId)",
+    });
+  }
+}
+
 async function submitPublicBankProof(req, res) {
   try {
     const { token } = req.params;
@@ -737,6 +819,91 @@ async function submitPublicBankProof(req, res) {
   }
 }
 
+async function submitPublicBankProofByOrderId(req, res) {
+  try {
+    const { orderId } = req.params;
+    const { reference, declaredAmountFcfa, note } = req.body || {};
+    const file = req.file;
+
+    if (!orderId) {
+      return res.status(400).json({ message: "orderId requis" });
+    }
+
+    if (!file) {
+      return res.status(400).json({ message: "Fichier preuve requis" });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: {
+        id: orderId,
+        countryId: req.country?.id || req.countryId || undefined,
+      },
+      select: {
+        id: true,
+        status: true,
+        paymentStatus: true,
+        countryId: true,
+        fboId: true,
+        preorderNumber: true,
+        preorderPaymentMode: true,
+        factureReference: true,
+        invoicedAt: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
+      return res
+        .status(400)
+        .json({ message: "Le dépôt de preuve est réservé au mode virement bancaire." });
+    }
+
+    const paymentWindow = resolveCustomerPaymentWindow(order);
+    const paymentStatus = String(order.paymentStatus || "").toUpperCase();
+    const status = String(order.status || "").toUpperCase();
+
+    if (paymentWindow.isExpired) {
+      return res.status(400).json({
+        message: "Le lien sécurisé de dépôt a expiré pour cette préfacture.",
+      });
+    }
+
+    if (!["INVOICED", "PAYMENT_PENDING"].includes(status)) {
+      return res.status(400).json({
+        message: "Le dépôt de preuve n'est plus disponible pour cette commande.",
+      });
+    }
+
+    if (["PAID", "PAYMENT_CONFIRMED"].includes(paymentStatus)) {
+      return res.status(400).json({
+        message: "Le paiement est déjà validé pour cette commande.",
+      });
+    }
+
+    const proof = await createBankProofSubmission({
+      order,
+      file,
+      reference,
+      declaredAmountFcfa,
+      note,
+      source: "PUBLIC_BANK_PROOF_LINK",
+    });
+
+    return res.json({
+      ok: true,
+      proof,
+    });
+  } catch (e) {
+    console.error("submitPublicBankProofByOrderId error:", e);
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (submitPublicBankProofByOrderId)",
+    });
+  }
+}
+
 async function downloadMyBankProof(req, res) {
   try {
     const countryId = req.country?.id || req.countryId;
@@ -783,8 +950,10 @@ module.exports = {
   listMyOrders,
   getMyOrder,
   getPublicBankProofContext,
+  getPublicBankProofContextByOrderId,
   submitMyBankProof,
   submitPublicBankProof,
+  submitPublicBankProofByOrderId,
   reorderMyOrder,
   downloadMyBankProof,
 };
