@@ -22,6 +22,10 @@ const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
 const PREORDER_SUBMISSION_DISABLED_MESSAGE =
   process.env.PREORDER_SUBMISSION_DISABLED_MESSAGE ||
   "Les soumissions de précommandes sont temporairement suspendues.";
+const FBO_SERVICE_URL = String(process.env.FBO_SERVICE_URL || "").trim().replace(/\/+$/, "");
+const FBO_SERVICE_INTERNAL_TOKEN = String(
+  process.env.FBO_SERVICE_INTERNAL_TOKEN || "",
+).trim();
 
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -47,6 +51,40 @@ function mapSmsStatus(rawStatus) {
 
 function digitsOnly(v = "") {
   return String(v || "").replace(/\D/g, "");
+}
+
+async function fetchFboDirectoryProfile(numeroFbo) {
+  if (!FBO_SERVICE_URL) {
+    const err = new Error("Service FBO non configuré");
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const headers = {};
+  if (FBO_SERVICE_INTERNAL_TOKEN) {
+    headers["x-internal-token"] = FBO_SERVICE_INTERNAL_TOKEN;
+  }
+
+  const response = await fetch(
+    `${FBO_SERVICE_URL}/fbo/check/${encodeURIComponent(numeroFbo)}`,
+    { headers },
+  );
+
+  const rawText = await response.text();
+  let payload = null;
+  try {
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const err = new Error(payload?.error || "Service FBO indisponible");
+    err.statusCode = response.status || 502;
+    throw err;
+  }
+
+  return payload;
 }
 
 function isBillingNumber(phone = "") {
@@ -274,6 +312,26 @@ async function createDraft(req, res) {
 
     return res.status(500).json({
       error: e.message || "Erreur createDraft",
+    });
+  }
+}
+
+async function checkFboDirectory(req, res) {
+  try {
+    const numero = String(req.params.numero || "").trim();
+    if (digitsOnly(numero).length !== 12) {
+      return res.status(400).json({ error: "Numéro FBO invalide" });
+    }
+
+    const payload = await fetchFboDirectoryProfile(numero);
+    return res.json(payload || { exists: false });
+  } catch (e) {
+    console.error("checkFboDirectory error:", {
+      message: e?.message || String(e),
+      statusCode: e?.statusCode || null,
+    });
+    return res.status(e?.statusCode || 502).json({
+      error: e?.message || "Service FBO indisponible",
     });
   }
 }
@@ -928,6 +986,7 @@ async function getSmsStatus(req, res) {
 
 module.exports = {
   createDraft,
+  checkFboDirectory,
   getCatalog,
   setItems,
   getSummary,

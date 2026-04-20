@@ -3,6 +3,7 @@
 const router = require("express").Router();
 const {
   createDraft,
+  checkFboDirectory,
   setItems,
   getCatalog,
   getSummary,
@@ -14,6 +15,7 @@ const { resolveCountry } = require("../middlewares/resolveCountry");
 
 router.use(resolveCountry);
 
+router.get("/fbo/check/:numero", checkFboDirectory);
 router.post("/draft", createDraft);
 router.post("/", createDraft);
 router.get("/:id/catalog", getCatalog);

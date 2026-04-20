@@ -278,6 +278,12 @@ async function resolveShortBankProofUploadLink(token) {
     signatureBuffer.length === expectedBuffer.length &&
     crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
 
+  if (!signatureMatches) {
+    const err = new Error("Lien de dépôt invalide");
+    err.statusCode = 400;
+    throw err;
+  }
+
   const matches = await prisma.preorder.findMany({
     where: {
       paymentCollectionCode,
@@ -302,14 +308,6 @@ async function resolveShortBankProofUploadLink(token) {
     const err = new Error("Commande introuvable pour ce lien");
     err.statusCode = 404;
     throw err;
-  }
-
-  if (!signatureMatches) {
-    console.warn("[bank-proof-link] signature mismatch accepted via unique order fallback", {
-      paymentCollectionCode,
-      countryCode,
-      orderSuffix,
-    });
   }
 
   const preorder = matches[0];
@@ -376,6 +374,60 @@ function buildSyntheticWebhookId(parsed) {
   const base = JSON.stringify(parsed.body || {});
   const hash = crypto.createHash("sha256").update(base).digest("hex");
   return `hash:${hash}`;
+}
+
+function buildSafeWaveWebhookPayload(parsed, syntheticEventId) {
+  const body = parsed.body || {};
+
+  return {
+    providerEventId: parsed.providerEventId || null,
+    syntheticEventId,
+    eventType: parsed.eventType || null,
+    signatureValid: Boolean(parsed.signatureValid),
+    signatureMode: parsed.signatureMode || null,
+    signatureReason: parsed.signatureReason || null,
+    clientReference:
+      body?.data?.client_reference ||
+      body?.client_reference ||
+      body?.checkout_session?.client_reference ||
+      null,
+    invoiceReferenceHint:
+      body?.data?.custom_fields?.["numero-facture"] ||
+      body?.custom_fields?.["numero-facture"] ||
+      body?.data?.custom_fields?.numero_facture ||
+      body?.custom_fields?.numero_facture ||
+      null,
+    providerSessionId:
+      body?.data?.id ||
+      body?.id ||
+      body?.checkout_session?.id ||
+      null,
+    providerTransactionId:
+      body?.data?.transaction_id ||
+      body?.transaction_id ||
+      body?.checkout_session?.transaction_id ||
+      null,
+    checkoutStatus:
+      body?.data?.checkout_status ||
+      body?.checkout_status ||
+      body?.checkout_session?.checkout_status ||
+      null,
+    paymentStatus:
+      body?.data?.payment_status ||
+      body?.payment_status ||
+      body?.checkout_session?.payment_status ||
+      null,
+  };
+}
+
+function buildSafeWaveWebhookHeaders(headers = {}) {
+  return {
+    contentType: headers["content-type"] || null,
+    userAgent: headers["user-agent"] || null,
+    hasWaveSignature: Boolean(headers["wave-signature"]),
+    hasAuthorization: Boolean(headers.authorization),
+    xRequestId: headers["x-request-id"] || null,
+  };
 }
 
 function firstNonEmptyString(...values) {
@@ -2075,6 +2127,8 @@ async function simulateWaveStatus({ req, preorderId, scenario }) {
 async function handleWaveWebhook({ req }) {
   const parsed = await paymentOrchestrator.parseWebhook("WAVE", { req });
   const syntheticEventId = buildSyntheticWebhookId(parsed);
+  const safeWebhookPayload = buildSafeWaveWebhookPayload(parsed, syntheticEventId);
+  const safeWebhookHeaders = buildSafeWaveWebhookHeaders(parsed.headers || {});
   const webhookPreorderHint =
     parsed.body?.data?.client_reference ||
     parsed.body?.client_reference ||
@@ -2089,7 +2143,6 @@ async function handleWaveWebhook({ req }) {
     signatureMode: parsed.signatureMode || null,
     signatureReason: parsed.signatureReason || null,
   });
-  console.log("[wave webhook payload]", JSON.stringify(parsed.body, null, 2));
 
   await addPaymentTransactionLogTx(prisma, {
     preorderId: null,
@@ -2109,14 +2162,8 @@ async function handleWaveWebhook({ req }) {
       null,
     note: "Webhook Wave reçu",
     payloadJson: {
-      providerEventId: parsed.providerEventId || null,
-      syntheticEventId,
-      eventType: parsed.eventType || null,
-      signatureValid: Boolean(parsed.signatureValid),
-      signatureMode: parsed.signatureMode || null,
-      signatureReason: parsed.signatureReason || null,
-      body: parsed.body || null,
-      headers: parsed.headers || null,
+      ...safeWebhookPayload,
+      headers: safeWebhookHeaders,
       preorderHint: webhookPreorderHint,
     },
     actorAdminId: null,
@@ -2132,8 +2179,8 @@ async function handleWaveWebhook({ req }) {
         eventType: parsed.eventType || null,
         signatureValid: Boolean(parsed.signatureValid),
         processingStatus: "RECEIVED",
-        requestHeadersJson: parsed.headers || {},
-        payloadJson: parsed.body || {},
+        requestHeadersJson: safeWebhookHeaders,
+        payloadJson: safeWebhookPayload,
       },
     });
   } catch (_e) {

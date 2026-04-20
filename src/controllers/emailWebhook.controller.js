@@ -9,12 +9,11 @@ function pickString(values = []) {
 
 function isWebhookAuthorized(req) {
   const expectedToken = String(process.env.BREVO_WEBHOOK_TOKEN || "").trim();
-  if (!expectedToken) return true;
+  if (!expectedToken) return false;
 
   const headerToken =
     req.get("x-webhook-token") || req.get("x-brevo-webhook-token") || "";
-  const queryToken = String(req.query?.token || "");
-  return expectedToken === headerToken || expectedToken === queryToken;
+  return expectedToken === headerToken;
 }
 
 function normalizeProviderMessageId(value = "") {

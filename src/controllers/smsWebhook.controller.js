@@ -98,12 +98,11 @@ function parseOrangeDeliveryPayload(body = {}) {
 
 function isWebhookAuthorized(req) {
   const expectedToken = String(process.env.ORANGE_WEBHOOK_TOKEN || "").trim();
-  if (!expectedToken) return true;
+  if (!expectedToken) return false;
 
   const headerToken =
     req.get("x-webhook-token") || req.get("x-orange-webhook-token") || "";
-  const queryToken = String(req.query?.token || "");
-  return expectedToken === headerToken || expectedToken === queryToken;
+  return expectedToken === headerToken;
 }
 
 async function findPreorderForDelivery(parsed) {
