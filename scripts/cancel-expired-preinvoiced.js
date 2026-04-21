@@ -2,12 +2,23 @@ require("dotenv").config();
 
 const {
   cancelExpiredInvoicedPreorders,
+  getAutoCancelRunnerMode,
 } = require("../src/services/preorder-expiration.service");
 
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
   const result = await cancelExpiredInvoicedPreorders({ dryRun });
-  console.log(JSON.stringify(result, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        runnerMode: getAutoCancelRunnerMode(),
+        dryRun,
+        ...result,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 main()

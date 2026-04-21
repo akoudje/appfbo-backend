@@ -7,16 +7,32 @@ const customerPortalController = require("../controllers/customerPortal.controll
 
 const router = express.Router();
 
+function normalizeNumeroFbo(value = "") {
+  return String(value || "").replace(/\D/g, "").slice(0, 12);
+}
+
 const otpRequestLimiter = createRateLimiter({
   keyPrefix: "customer_otp_request",
   windowMs: 10 * 60 * 1000,
   max: 5,
+  keyFn: (req) => ({
+    ip: req.ip,
+    country:
+      req.header("X-Country") || req.query?.country || req.query?.countryCode || "",
+    numeroFbo: normalizeNumeroFbo(req.body?.numeroFbo),
+  }),
 });
 
 const otpVerifyLimiter = createRateLimiter({
   keyPrefix: "customer_otp_verify",
   windowMs: 10 * 60 * 1000,
   max: 10,
+  keyFn: (req) => ({
+    ip: req.ip,
+    country:
+      req.header("X-Country") || req.query?.country || req.query?.countryCode || "",
+    numeroFbo: normalizeNumeroFbo(req.body?.numeroFbo),
+  }),
 });
 
 router.use(resolveCountry);

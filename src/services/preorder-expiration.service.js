@@ -34,6 +34,12 @@ function getSchedulerEveryMinutes() {
   );
 }
 
+function getAutoCancelRunnerMode() {
+  return String(process.env.PREINVOICED_AUTO_CANCEL_RUNNER || "embedded")
+    .trim()
+    .toLowerCase();
+}
+
 function buildInvoiceExpiryAt(invoicedAt) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
@@ -326,6 +332,15 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
 
 function startExpiredInvoiceAutoCancelScheduler() {
   if (String(process.env.PREINVOICED_AUTO_CANCEL_ENABLED || "true").toLowerCase() !== "true") {
+    console.info("[preorder-expiration] embedded scheduler disabled via PREINVOICED_AUTO_CANCEL_ENABLED");
+    return null;
+  }
+
+  const runnerMode = getAutoCancelRunnerMode();
+  if (!["embedded", "both"].includes(runnerMode)) {
+    console.info("[preorder-expiration] embedded scheduler skipped", {
+      runnerMode,
+    });
     return null;
   }
 
@@ -337,7 +352,7 @@ function startExpiredInvoiceAutoCancelScheduler() {
     running = true;
     try {
       const result = await cancelExpiredInvoicedPreorders();
-      if (!result?.skipped && result?.cancelledCount) {
+      if (!result?.skipped) {
         console.log("[preorder-expiration] auto-cancel summary", result);
       }
     } catch (error) {
@@ -360,5 +375,6 @@ module.exports = {
   buildAutoCancelMessage,
   cancelPreorderAsExpiredUnpaid,
   cancelExpiredInvoicedPreorders,
+  getAutoCancelRunnerMode,
   startExpiredInvoiceAutoCancelScheduler,
 };

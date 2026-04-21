@@ -11,6 +11,10 @@ const authLoginLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 12,
   keyPrefix: "admin-login",
+  keyFn: (req) => ({
+    ip: req.ip,
+    email: String(req.body?.email || "").trim().toLowerCase(),
+  }),
 });
 
 router.post("/login", authLoginLimiter, adminLogin);

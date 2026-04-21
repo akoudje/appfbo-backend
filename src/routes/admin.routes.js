@@ -173,4 +173,17 @@ router.put(
   marketingCampaignsController.updateMarketingCampaigns,
 );
 
+router.post(
+  "/marketing-campaigns/publish",
+  requirePermission(Permission.COUNTRY_WRITE),
+  marketingCampaignsController.publishMarketingCampaigns,
+);
+
+router.post(
+  "/marketing-campaigns/assets",
+  requirePermission(Permission.COUNTRY_WRITE),
+  marketingCampaignsController.uploadMarketingAssetMiddleware,
+  marketingCampaignsController.uploadMarketingAsset,
+);
+
 module.exports = router;

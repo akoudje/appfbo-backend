@@ -4,6 +4,10 @@ const prisma = require("../prisma");
 const { normalizeEmail, sendEmail } = require("../services/email.service");
 const { normalizePhone, sendSms } = require("../services/sms.service");
 
+const GENERIC_OTP_REQUEST_MESSAGE =
+  "Si ce compte existe, un code de vérification sera envoyé sur le canal disponible.";
+const GENERIC_OTP_VERIFY_MESSAGE = "Code OTP invalide ou expiré.";
+
 function canonicalFboNumber(raw = "") {
   const digits = String(raw || "").replace(/\D/g, "");
   if (digits.length === 12) {
@@ -33,9 +37,45 @@ function otpExpiresInMinutes() {
   return value;
 }
 
+function isProduction() {
+  return String(process.env.NODE_ENV || "").toLowerCase() === "production";
+}
+
+function shouldIncludeDebugOtp() {
+  return String(process.env.CUSTOMER_OTP_INCLUDE_DEBUG_CODE || "").toLowerCase() === "true";
+}
+
+function getOtpPepper() {
+  const pepper = String(process.env.CUSTOMER_OTP_PEPPER || "").trim();
+  if (pepper) return pepper;
+  if (isProduction()) {
+    const err = new Error("CUSTOMER_OTP_PEPPER_MISSING");
+    err.statusCode = 500;
+    throw err;
+  }
+  return "appfbo_customer_otp_dev_only";
+}
+
 function otpHash(code) {
-  const pepper = process.env.CUSTOMER_OTP_PEPPER || "appfbo_customer_otp";
+  const pepper = getOtpPepper();
   return crypto.createHash("sha256").update(`${pepper}:${String(code || "")}`).digest("hex");
+}
+
+function hashesEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""), "hex");
+  const rightBuffer = Buffer.from(String(right || ""), "hex");
+  if (leftBuffer.length === 0 || leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function buildGenericOtpRequestResponse({ channel = "", destinationMasked = "" } = {}) {
+  return {
+    ok: true,
+    channel: channel || "SMS/EMAIL",
+    destinationMasked: destinationMasked || "destination masquée",
+    expiresInMinutes: otpExpiresInMinutes(),
+    message: GENERIC_OTP_REQUEST_MESSAGE,
+  };
 }
 
 function signCustomerToken({ fboId, countryId, numeroFbo, email }) {
@@ -124,7 +164,9 @@ async function requestOtp(req, res) {
     });
 
     if (!resolved) {
-      return res.status(404).json({ message: "Client introuvable ou canal OTP indisponible" });
+      return res.json(buildGenericOtpRequestResponse({
+        channel: channel || "",
+      }));
     }
 
     const otp = String(Math.floor(100000 + Math.random() * 900000));
@@ -218,13 +260,13 @@ async function requestOtp(req, res) {
       });
     });
 
-    const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
     return res.json({
-      ok: true,
-      channel: usedChannel,
-      destinationMasked,
+      ...buildGenericOtpRequestResponse({
+        channel: usedChannel,
+        destinationMasked,
+      }),
       expiresInMinutes: expiresMin,
-      ...(isProd ? {} : { debugOtp: otp }),
+      ...(shouldIncludeDebugOtp() ? { debugOtp: otp } : {}),
     });
   } catch (e) {
     console.error("requestOtp error:", e);
@@ -257,7 +299,7 @@ async function verifyOtp(req, res) {
       },
     });
     if (!fbo) {
-      return res.status(404).json({ message: "Client introuvable" });
+      return res.status(400).json({ message: GENERIC_OTP_VERIFY_MESSAGE });
     }
 
     const now = new Date();
@@ -273,19 +315,19 @@ async function verifyOtp(req, res) {
     });
 
     if (!challenge) {
-      return res.status(400).json({ message: "Code expiré ou introuvable" });
+      return res.status(400).json({ message: GENERIC_OTP_VERIFY_MESSAGE });
     }
 
     if (challenge.attempts >= challenge.maxAttempts) {
       return res.status(429).json({ message: "Trop de tentatives OTP" });
     }
 
-    if (challenge.codeHash !== otpHash(code)) {
+    if (!hashesEqual(challenge.codeHash, otpHash(code))) {
       await prisma.customerOtpChallenge.update({
         where: { id: challenge.id },
         data: { attempts: { increment: 1 } },
       });
-      return res.status(400).json({ message: "Code OTP invalide" });
+      return res.status(400).json({ message: GENERIC_OTP_VERIFY_MESSAGE });
     }
 
     await prisma.customerOtpChallenge.update({
