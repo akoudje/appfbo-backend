@@ -3,7 +3,8 @@ const { resolveCountry } = require("../middlewares/resolveCountry");
 const { createRateLimiter } = require("../middlewares/rateLimit");
 const { requireCustomerAuth } = require("../middlewares/customerAuth");
 const customerAuthController = require("../controllers/customerAuth.controller");
-const customerPortalController = require("../controllers/customerPortal.controller");
+const customerOrdersController = require("../controllers/customerOrders.controller");
+const customerBankProofController = require("../controllers/customerBankProof.controller");
 
 const router = express.Router();
 
@@ -39,21 +40,22 @@ router.use(resolveCountry);
 
 router.post("/auth/otp/request", otpRequestLimiter, customerAuthController.requestOtp);
 router.post("/auth/otp/verify", otpVerifyLimiter, customerAuthController.verifyOtp);
+router.post("/auth/logout", customerAuthController.logout);
 
 router.get("/me", requireCustomerAuth, customerAuthController.me);
-router.get("/me/orders", requireCustomerAuth, customerPortalController.listMyOrders);
-router.get("/me/orders/:id", requireCustomerAuth, customerPortalController.getMyOrder);
-router.post("/me/orders/:id/reorder", requireCustomerAuth, customerPortalController.reorderMyOrder);
+router.get("/me/orders", requireCustomerAuth, customerOrdersController.listMyOrders);
+router.get("/me/orders/:id", requireCustomerAuth, customerOrdersController.getMyOrder);
+router.post("/me/orders/:id/reorder", requireCustomerAuth, customerOrdersController.reorderMyOrder);
 router.get(
   "/me/orders/:id/bank-proofs/:proofId/file",
   requireCustomerAuth,
-  customerPortalController.downloadMyBankProof,
+  customerBankProofController.downloadMyBankProof,
 );
 router.post(
   "/me/orders/:id/bank-proof",
   requireCustomerAuth,
-  customerPortalController.uploadBankProofMiddleware,
-  customerPortalController.submitMyBankProof,
+  customerBankProofController.uploadBankProofMiddleware,
+  customerBankProofController.submitMyBankProof,
 );
 
 module.exports = router;

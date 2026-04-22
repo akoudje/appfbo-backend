@@ -5,7 +5,7 @@ const express = require("express");
 const router = express.Router();
 
 const paymentsController = require("../payments/payments.controller");
-const customerPortalController = require("../controllers/customerPortal.controller");
+const customerBankProofController = require("../controllers/customerBankProof.controller");
 const { requireAuth } = require("../middlewares/rbac");
 const { resolveCountry } = require("../middlewares/resolveCountry");
 const { createRateLimiter } = require("../middlewares/rateLimit");
@@ -23,26 +23,26 @@ router.get(
 
 router.get(
   "/bank-proof/public/:token/context",
-  customerPortalController.getPublicBankProofContext
+  customerBankProofController.getPublicBankProofContext
 );
 
 router.get(
   "/bank-proof/public/order/:orderId/context",
   resolveCountry,
-  customerPortalController.getPublicBankProofContextByOrderId
+  customerBankProofController.getPublicBankProofContextByOrderId
 );
 
 router.post(
   "/bank-proof/public/:token/upload",
-  customerPortalController.uploadBankProofMiddleware,
-  customerPortalController.submitPublicBankProof
+  customerBankProofController.uploadBankProofMiddleware,
+  customerBankProofController.submitPublicBankProof
 );
 
 router.post(
   "/bank-proof/public/order/:orderId/upload",
   resolveCountry,
-  customerPortalController.uploadBankProofMiddleware,
-  customerPortalController.submitPublicBankProofByOrderId
+  customerBankProofController.uploadBankProofMiddleware,
+  customerBankProofController.submitPublicBankProofByOrderId
 );
 
 router.get(

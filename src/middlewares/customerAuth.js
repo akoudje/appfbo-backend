@@ -7,8 +7,14 @@ function getBearerToken(req) {
   return token;
 }
 
+function getCookieToken(req) {
+  const header = req.headers?.cookie || "";
+  const match = String(header).match(/(?:^|;\s*)cpt=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function requireCustomerAuth(req, res, next) {
-  const token = getBearerToken(req);
+  const token = getCookieToken(req) || getBearerToken(req);
   if (!token) {
     return res.status(401).json({ message: "Unauthorized customer" });
   }

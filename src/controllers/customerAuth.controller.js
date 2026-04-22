@@ -345,6 +345,18 @@ async function verifyOtp(req, res) {
       email: fbo.email || null,
     });
 
+    const cookieHours = Number.parseInt(process.env.CUSTOMER_JWT_EXPIRES_H || "12", 10);
+    const cookieMaxAge = (Number.isFinite(cookieHours) && cookieHours > 0 ? cookieHours : 12) * 60 * 60 * 1000;
+    const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+
+    res.cookie("cpt", token, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? "strict" : "lax",
+      maxAge: cookieMaxAge,
+      path: "/api/customer",
+    });
+
     return res.json({
       ok: true,
       token,
@@ -360,6 +372,17 @@ async function verifyOtp(req, res) {
     console.error("verifyOtp error:", e);
     return res.status(500).json({ message: "Erreur serveur (verifyOtp)" });
   }
+}
+
+function logout(req, res) {
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  res.clearCookie("cpt", {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "strict" : "lax",
+    path: "/api/customer",
+  });
+  return res.json({ ok: true });
 }
 
 async function me(req, res) {
@@ -394,5 +417,6 @@ async function me(req, res) {
 module.exports = {
   requestOtp,
   verifyOtp,
+  logout,
   me,
 };
