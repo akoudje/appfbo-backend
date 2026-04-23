@@ -83,12 +83,51 @@ function getShortPaymentLinkSecret() {
   );
 }
 
+// Retourne tous les secrets candidats pour la validation (permet la compat ascendante
+// lors d'une rotation de secret : l'ancien JWT_SECRET reste valide pour les anciens liens).
+function getShortPaymentLinkSecretCandidates() {
+  const seen = new Set();
+  const candidates = [];
+  for (const s of [
+    process.env.PUBLIC_PAYMENT_LINK_SECRET,
+    process.env.CUSTOMER_JWT_SECRET,
+    process.env.JWT_SECRET,
+  ]) {
+    const v = String(s || "").trim();
+    if (v && !seen.has(v)) {
+      seen.add(v);
+      candidates.push(v);
+    }
+  }
+  return candidates;
+}
+
 function signShortPaymentLinkPayload(payload) {
   return crypto
     .createHmac("sha256", getShortPaymentLinkSecret())
     .update(payload)
     .digest("base64url")
     .slice(0, 10);
+}
+
+function signPayloadWithSecret(payload, secret) {
+  return crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("base64url")
+    .slice(0, 10);
+}
+
+function verifyShortPaymentLinkSignature(payload, signature) {
+  for (const secret of getShortPaymentLinkSecretCandidates()) {
+    const expected = signPayloadWithSecret(payload, secret);
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildShortWavePaymentToken(preorderId, countryCode = "CIV", paymentCollectionCode = "") {
@@ -192,22 +231,8 @@ async function resolveShortWavePaymentLink(token) {
 
   const [, paymentCollectionCode, countryCode, orderSuffix, signature] = match;
   const payload = `${paymentCollectionCode}.${countryCode}.${orderSuffix}`;
-  const secret = getShortPaymentLinkSecret();
 
-  if (!secret) {
-    const err = new Error("Signature de lien public indisponible");
-    err.statusCode = 500;
-    throw err;
-  }
-
-  const expectedSignature = signShortPaymentLinkPayload(payload);
-  const signatureBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expectedSignature);
-
-  if (
-    signatureBuffer.length !== expectedBuffer.length ||
-    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
-  ) {
+  if (!verifyShortPaymentLinkSignature(payload, signature)) {
     const err = new Error("Lien de paiement invalide");
     err.statusCode = 400;
     throw err;
@@ -265,22 +290,8 @@ async function resolveShortBankProofUploadLink(token) {
 
   const [, actionKey, paymentCollectionCode, countryCode, orderSuffix, signature] = match;
   const payload = `${actionKey}.${paymentCollectionCode}.${countryCode}.${orderSuffix}`;
-  const secret = getShortPaymentLinkSecret();
 
-  if (!secret) {
-    const err = new Error("Signature de lien public indisponible");
-    err.statusCode = 500;
-    throw err;
-  }
-
-  const expectedSignature = signShortPaymentLinkPayload(payload);
-  const signatureBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expectedSignature);
-  const signatureMatches =
-    signatureBuffer.length === expectedBuffer.length &&
-    crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
-
-  if (!signatureMatches) {
+  if (!verifyShortPaymentLinkSignature(payload, signature)) {
     const err = new Error("Lien de dépôt invalide");
     err.statusCode = 400;
     throw err;
