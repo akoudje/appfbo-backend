@@ -266,15 +266,6 @@ function buildInvoiceMessage({
     normalizedMode.includes("VIREMENT") ||
     normalizedMode.includes("BANK");
 
-  if (normalizedLink && !isCashFlow) {
-    const expiryHours = getPaymentExpiryHours();
-    return firstSmsCandidate([
-      `Code ${collectionCode}. Montant ${amountFmt}F. Reglez sous ${expiryHours}H via le lien Wave: ${normalizedLink}`,
-      `Code ${collectionCode}. ${amountFmt}F. Paiement sous ${expiryHours}H: ${normalizedLink}`,
-      `Code ${collectionCode}. Paiement sous ${expiryHours}H: ${normalizedLink}`,
-    ]);
-  }
-
   if (isBankTransferFlow) {
     const expiryHours = getPaymentExpiryHours();
     if (normalizedLink) {

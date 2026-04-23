@@ -3,6 +3,10 @@
 
 require("dotenv").config();
 
+// Validation des secrets au démarrage — crash immédiat si une variable est faible ou manquante
+const { validateEnv } = require("./config/validate-env");
+validateEnv();
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");

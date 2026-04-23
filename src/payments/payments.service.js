@@ -97,7 +97,8 @@ function buildShortWavePaymentToken(preorderId, countryCode = "CIV", paymentColl
   const normalizedCollectionCode = String(paymentCollectionCode || "")
     .trim()
     .replace(/\s+/g, "")
-    .toUpperCase();
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "");
   const orderSuffix = normalizedOrderId.slice(-6);
   const secret = getShortPaymentLinkSecret();
 
@@ -144,7 +145,8 @@ function buildShortBankProofUploadToken(
   const normalizedCollectionCode = String(paymentCollectionCode || "")
     .trim()
     .replace(/\s+/g, "")
-    .toUpperCase();
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "");
   const orderSuffix = normalizedOrderId.slice(-6);
   const secret = getShortPaymentLinkSecret();
 
