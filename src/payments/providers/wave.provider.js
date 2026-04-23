@@ -208,7 +208,9 @@ class WaveProvider extends BasePaymentProvider {
       const err = new Error(
         data?.message ||
           data?.error ||
+          data?.error_message ||
           data?.details?.message ||
+          data?.details?.error_message ||
           `Wave API error (${response.status})`
       );
       err.statusCode = response.status;

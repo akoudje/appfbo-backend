@@ -48,6 +48,12 @@ function shouldIncludeDebugOtp() {
 function getOtpPepper() {
   const pepper = String(process.env.CUSTOMER_OTP_PEPPER || "").trim();
   if (pepper) return pepper;
+  // Fallback: dériver un pepper stable depuis JWT_SECRET pour éviter de bloquer en prod
+  // tant que CUSTOMER_OTP_PEPPER n'est pas encore configuré sur le serveur.
+  const jwtSecret = String(process.env.JWT_SECRET || "").trim();
+  if (jwtSecret) {
+    return crypto.createHash("sha256").update(`otp-pepper:${jwtSecret}`).digest("hex");
+  }
   if (isProduction()) {
     const err = new Error("CUSTOMER_OTP_PEPPER_MISSING");
     err.statusCode = 500;

@@ -47,8 +47,34 @@ async function addLogTx(
   }
 }
 
-function buildWaveUrls(preorderId, countryCode = "CIV") {
-  const publicWaveUrl = buildPublicWavePaymentUrl(preorderId, countryCode);
+function getRequestOrigin(req) {
+  const origin =
+    req?.get?.("origin") ||
+    req?.headers?.origin ||
+    req?.get?.("referer") ||
+    req?.headers?.referer ||
+    "";
+
+  if (!origin) return "";
+
+  try {
+    const url = new URL(origin);
+    return url.origin;
+  } catch (_) {
+    return "";
+  }
+}
+
+function isHttpsUrl(value) {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch (_) {
+    return false;
+  }
+}
+
+function buildWaveUrls(preorderId, countryCode = "CIV", req = null) {
+  const publicWaveUrl = buildPublicWavePaymentUrl(preorderId, countryCode, req);
 
   return {
     successUrl: `${publicWaveUrl}&wave=success`,
@@ -56,17 +82,23 @@ function buildWaveUrls(preorderId, countryCode = "CIV") {
   };
 }
 
-function buildPublicAppBaseUrl() {
-  return (
+function buildPublicAppBaseUrl(req = null) {
+  const configuredBaseUrl =
     process.env.APP_PUBLIC_BASE_URL ||
     process.env.FRONTEND_PUBLIC_URL ||
     process.env.ADMIN_APP_PUBLIC_URL ||
-    "http://localhost:5173"
-  );
+    "";
+
+  if (isHttpsUrl(configuredBaseUrl)) return configuredBaseUrl;
+
+  const requestOrigin = getRequestOrigin(req);
+  if (isHttpsUrl(requestOrigin)) return requestOrigin;
+
+  return configuredBaseUrl || "http://localhost:5173";
 }
 
-function buildPublicWavePaymentUrl(preorderId, countryCode = "CIV") {
-  const publicBaseUrl = buildPublicAppBaseUrl();
+function buildPublicWavePaymentUrl(preorderId, countryCode = "CIV", req = null) {
+  const publicBaseUrl = buildPublicAppBaseUrl(req);
   const normalizedCountryCode = String(countryCode || "CIV").trim().toUpperCase();
   const encodedOrderId = encodeURIComponent(String(preorderId || ""));
   const encodedCountryCode = encodeURIComponent(normalizedCountryCode || "CIV");
@@ -1347,6 +1379,7 @@ async function initiateWavePayment({
   const { successUrl, errorUrl } = buildWaveUrls(
     preorder.id,
     preorder.country?.code || "CIV",
+    req,
   );
   const normalizedPayerMobile = restrictPayerMobile
     ? normalizeCI(restrictPayerMobile)
