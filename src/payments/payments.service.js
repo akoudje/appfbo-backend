@@ -162,6 +162,58 @@ function verifyShortPaymentLinkSignature(payload, signature) {
   return false;
 }
 
+function sanitizeShortLinkToken(token) {
+  return String(token || "")
+    .trim()
+    .replace(/^[<(\[\{"'\s]+/, "")
+    .replace(/[>)\]\}"'.,;:!?…\s]+$/, "");
+}
+
+function parseShortBankProofToken(token) {
+  const normalizedToken = sanitizeShortLinkToken(token);
+
+  const prefixedMatch = normalizedToken.match(
+    /^(BPU)\.([A-Z0-9-]+)\.([A-Z0-9_-]+)\.([A-Za-z0-9_-]{6})\.([A-Za-z0-9_-]{10})$/i,
+  );
+
+  if (prefixedMatch) {
+    const [, actionKey, paymentCollectionCode, countryCode, orderSuffix, signature] =
+      prefixedMatch;
+    return {
+      token: normalizedToken,
+      actionKey: String(actionKey || "BPU").toUpperCase(),
+      paymentCollectionCode: String(paymentCollectionCode || "").toUpperCase(),
+      countryCode: String(countryCode || "").toUpperCase(),
+      orderSuffix,
+      signature,
+      payload: `${String(actionKey || "BPU").toUpperCase()}.${String(
+        paymentCollectionCode || "",
+      ).toUpperCase()}.${String(countryCode || "").toUpperCase()}.${orderSuffix}`,
+    };
+  }
+
+  const legacyMatch = normalizedToken.match(
+    /^([A-Z0-9-]+)\.([A-Z0-9_-]+)\.([A-Za-z0-9_-]{6})\.([A-Za-z0-9_-]{10})$/,
+  );
+
+  if (legacyMatch) {
+    const [, paymentCollectionCode, countryCode, orderSuffix, signature] = legacyMatch;
+    return {
+      token: normalizedToken,
+      actionKey: "BPU",
+      paymentCollectionCode: String(paymentCollectionCode || "").toUpperCase(),
+      countryCode: String(countryCode || "").toUpperCase(),
+      orderSuffix,
+      signature,
+      payload: `${String(paymentCollectionCode || "").toUpperCase()}.${String(
+        countryCode || "",
+      ).toUpperCase()}.${orderSuffix}`,
+    };
+  }
+
+  return null;
+}
+
 function buildShortWavePaymentToken(preorderId, countryCode = "CIV", paymentCollectionCode = "") {
   const normalizedOrderId = String(preorderId || "").trim();
   const normalizedCountryCode = String(countryCode || "CIV").trim().toUpperCase();
@@ -309,21 +361,15 @@ async function resolveShortWavePaymentLink(token) {
 }
 
 async function resolveShortBankProofUploadLink(token) {
-  const normalizedToken = String(token || "").trim();
-  const match = normalizedToken.match(
-    /^(BPU)\.([A-Z0-9-]+)\.([A-Z0-9_-]+)\.([A-Za-z0-9_-]{6})\.([A-Za-z0-9_-]{10})$/,
-  );
+  const parsed = parseShortBankProofToken(token);
 
-  if (!match) {
+  if (!parsed) {
     const err = new Error("Lien de dépôt invalide");
     err.statusCode = 400;
     throw err;
   }
 
-  const [, actionKey, paymentCollectionCode, countryCode, orderSuffix, signature] = match;
-  const payload = `${actionKey}.${paymentCollectionCode}.${countryCode}.${orderSuffix}`;
-
-  if (!verifyShortPaymentLinkSignature(payload, signature)) {
+  if (!verifyShortPaymentLinkSignature(parsed.payload, parsed.signature)) {
     const err = new Error("Lien de dépôt invalide");
     err.statusCode = 400;
     throw err;
@@ -331,10 +377,10 @@ async function resolveShortBankProofUploadLink(token) {
 
   const matches = await prisma.preorder.findMany({
     where: {
-      paymentCollectionCode,
-      id: { endsWith: orderSuffix },
+      paymentCollectionCode: parsed.paymentCollectionCode,
+      id: { endsWith: parsed.orderSuffix },
       country: {
-        code: String(countryCode).trim().toUpperCase(),
+        code: parsed.countryCode,
       },
     },
     select: {
@@ -359,8 +405,8 @@ async function resolveShortBankProofUploadLink(token) {
   return {
     ok: true,
     orderId: preorder.id,
-    countryCode: preorder.country?.code || String(countryCode).trim().toUpperCase(),
-    redirectUrl: `${buildPublicAppBaseUrl()}/payment/b/${encodeURIComponent(normalizedToken)}`,
+    countryCode: preorder.country?.code || parsed.countryCode,
+    redirectUrl: `${buildPublicAppBaseUrl()}/payment/b/${encodeURIComponent(parsed.token)}`,
   };
 }
 
