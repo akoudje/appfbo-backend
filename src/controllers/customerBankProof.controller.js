@@ -88,6 +88,35 @@ function buildPublicBankProofContext(order) {
   };
 }
 
+async function findPublicBankProofOrder({ req, orderId, token, select }) {
+  const normalizedToken = String(token || "").trim();
+
+  if (normalizedToken) {
+    const resolved = await paymentsService.resolveShortBankProofUploadLink(
+      normalizedToken,
+    );
+
+    if (orderId && resolved.orderId !== orderId) {
+      const err = new Error("Lien de dépôt invalide");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    return prisma.preorder.findFirst({
+      where: { id: resolved.orderId },
+      select,
+    });
+  }
+
+  return prisma.preorder.findFirst({
+    where: {
+      id: orderId,
+      countryId: req.country?.id || req.countryId || undefined,
+    },
+    select,
+  });
+}
+
 async function createBankProofSubmission({
   order,
   file,
@@ -352,13 +381,13 @@ async function getPublicBankProofContext(req, res) {
 async function getPublicBankProofContextByOrderId(req, res) {
   try {
     const { orderId } = req.params;
+    const token = String(req.query?.token || "").trim();
     if (!orderId) return res.status(400).json({ message: "orderId requis" });
 
-    const order = await prisma.preorder.findFirst({
-      where: {
-        id: orderId,
-        countryId: req.country?.id || req.countryId || undefined,
-      },
+    const order = await findPublicBankProofOrder({
+      req,
+      orderId,
+      token,
       select: {
         id: true,
         preorderNumber: true,
@@ -468,17 +497,16 @@ async function submitPublicBankProof(req, res) {
 async function submitPublicBankProofByOrderId(req, res) {
   try {
     const { orderId } = req.params;
-    const { reference, declaredAmountFcfa, note } = req.body || {};
+    const { reference, declaredAmountFcfa, note, token } = req.body || {};
     const file = req.file;
 
     if (!orderId) return res.status(400).json({ message: "orderId requis" });
     if (!file) return res.status(400).json({ message: "Fichier preuve requis" });
 
-    const order = await prisma.preorder.findFirst({
-      where: {
-        id: orderId,
-        countryId: req.country?.id || req.countryId || undefined,
-      },
+    const order = await findPublicBankProofOrder({
+      req,
+      orderId,
+      token,
       select: {
         id: true,
         status: true,
