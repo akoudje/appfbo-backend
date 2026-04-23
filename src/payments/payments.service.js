@@ -287,18 +287,18 @@ function buildShortBankProofUploadUrl(
   countryCode = "CIV",
   paymentCollectionCode = "",
 ) {
-  const publicBaseUrl = buildPublicAppBaseUrl();
   const token = buildShortBankProofUploadToken(
     preorderId,
     countryCode,
     paymentCollectionCode,
   );
+  const publicUrl = buildPublicBankProofUploadUrl(preorderId, countryCode);
 
   if (!token) {
-    return buildPublicBankProofUploadUrl(preorderId, countryCode);
+    return publicUrl;
   }
 
-  return `${publicBaseUrl}/payment/b/${encodeURIComponent(token)}`;
+  return `${publicUrl}&token=${encodeURIComponent(token)}`;
 }
 
 async function resolveShortWavePaymentLink(token) {
