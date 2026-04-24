@@ -162,7 +162,16 @@ function firstSmsCandidate(candidates = [], maxLength = MAX_SMS_LENGTH) {
     if (!candidate) continue;
     if (candidate.length <= maxLength) return candidate;
   }
-  return compactText(candidates[0] || "").slice(0, maxLength);
+  const fallback = compactText(candidates[0] || "");
+  if (
+    fallback.includes("http://") ||
+    fallback.includes("https://") ||
+    fallback.includes("www.") ||
+    fallback.includes("forevercivstore.com")
+  ) {
+    return fallback;
+  }
+  return fallback.slice(0, maxLength);
 }
 
 async function buildInvoicePreview({

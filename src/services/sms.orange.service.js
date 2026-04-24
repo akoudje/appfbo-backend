@@ -45,8 +45,22 @@ function buildOrangeSmsUrl(senderAddress) {
   return `${ORANGE_SMS_API_BASE_URL}/outbound/${encodeURIComponent(senderAddress)}/requests`;
 }
 
+function smsContainsLink(message = "") {
+  const text = String(message || "").trim().toLowerCase();
+  return (
+    text.includes("http://") ||
+    text.includes("https://") ||
+    text.includes("www.") ||
+    text.includes("forevercivstore.com")
+  );
+}
+
 function clampSmsContent(message = "") {
-  return String(message || "").slice(0, MAX_SMS_LENGTH);
+  const normalized = String(message || "");
+  if (smsContainsLink(normalized)) {
+    return normalized;
+  }
+  return normalized.slice(0, MAX_SMS_LENGTH);
 }
 
 function buildOrangeError(error, fallbackMessage) {
