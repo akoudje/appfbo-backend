@@ -1,8 +1,11 @@
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
+const crypto = require("crypto");
 const multer = require("multer");
 const prisma = require("../prisma");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
-const { uploadBuffer } = require("../services/cloudinary");
+const { uploadFile } = require("../services/cloudinary");
 const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
 const { streamBankProofFileToResponse } = require("../utils/bankProofFiles");
 const paymentsService = require("../payments/payments.service");
@@ -13,8 +16,32 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
 ]);
 
+const BANK_PROOF_TMP_DIR = path.join(os.tmpdir(), "appfbo-bank-proofs");
+
+function ensureBankProofTmpDir() {
+  fs.mkdirSync(BANK_PROOF_TMP_DIR, { recursive: true });
+}
+
+function buildTempBankProofFilename(originalName = "") {
+  const ext = path.extname(String(originalName || "")).toLowerCase();
+  const safeExt = [".jpg", ".jpeg", ".png", ".pdf"].includes(ext) ? ext : "";
+  return `bank-proof-${Date.now()}-${crypto.randomBytes(6).toString("hex")}${safeExt}`;
+}
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      try {
+        ensureBankProofTmpDir();
+        cb(null, BANK_PROOF_TMP_DIR);
+      } catch (err) {
+        cb(err);
+      }
+    },
+    filename: (_req, file, cb) => {
+      cb(null, buildTempBankProofFilename(file?.originalname));
+    },
+  }),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (!ALLOWED_MIME_TYPES.has(String(file.mimetype || "").toLowerCase())) {
@@ -210,14 +237,30 @@ async function createBankProofSubmission({
   const safeExt = [".jpg", ".jpeg", ".png", ".pdf"].includes(ext) ? ext : "";
   const orderIdPart = String(order.id || "order").slice(0, 12);
   const stamp = Date.now();
+  const tempFilePath = String(file?.path || "").trim();
 
-  const uploaded = await uploadBuffer(file.buffer, {
-    folder: "appfbo/bank-proofs",
-    resource_type: "auto",
-    use_filename: true,
-    unique_filename: true,
-    filename_override: `${orderIdPart}-${stamp}${safeExt}`,
-  });
+  if (!tempFilePath) {
+    const err = new Error("FICHIER_TEMPORAIRE_ABSENT");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let uploaded;
+  try {
+    uploaded = await uploadFile(tempFilePath, {
+      folder: "appfbo/bank-proofs",
+      resource_type: "auto",
+      use_filename: true,
+      unique_filename: true,
+      filename_override: `${orderIdPart}-${stamp}${safeExt}`,
+    });
+  } finally {
+    try {
+      fs.unlinkSync(tempFilePath);
+    } catch (_err) {
+      // best effort cleanup only
+    }
+  }
 
   const fileUrl = uploaded?.secure_url || uploaded?.url || null;
   if (!fileUrl) throw new Error("UPLOAD_PREUVE_PERSISTANTE_INDISPONIBLE");

@@ -17,4 +17,8 @@ function uploadBuffer(buffer, options = {}) {
   });
 }
 
-module.exports = { cloudinary, uploadBuffer };
+function uploadFile(filePath, options = {}) {
+  return cloudinary.uploader.upload(filePath, options);
+}
+
+module.exports = { cloudinary, uploadBuffer, uploadFile };
