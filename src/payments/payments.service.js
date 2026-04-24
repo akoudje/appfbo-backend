@@ -169,6 +169,27 @@ function sanitizeShortLinkToken(token) {
     .replace(/[>)\]\}"'.,;:!?…\s]+$/, "");
 }
 
+function maskShortLinkToken(token) {
+  const normalized = sanitizeShortLinkToken(token);
+  if (!normalized) return "";
+  if (normalized.length <= 10) return normalized;
+  return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+}
+
+function logBankProofLinkEvent(level, event, data = {}) {
+  const logger =
+    level === "error"
+      ? console.error
+      : level === "warn"
+        ? console.warn
+        : console.log;
+
+  logger("[payments][bank-proof-link]", {
+    event,
+    ...data,
+  });
+}
+
 function parseShortBankProofToken(token) {
   const normalizedToken = sanitizeShortLinkToken(token);
 
@@ -360,18 +381,33 @@ async function resolveShortWavePaymentLink(token) {
   };
 }
 
-async function resolveShortBankProofUploadLink(token) {
+async function resolveShortBankProofUploadLink(token, options = {}) {
+  const requestId = options?.requestId || null;
   const parsed = parseShortBankProofToken(token);
 
   if (!parsed) {
+    logBankProofLinkEvent("warn", "parse_failed", {
+      requestId,
+      tokenMasked: maskShortLinkToken(token),
+    });
     const err = new Error("Lien de dépôt invalide");
     err.statusCode = 400;
+    err.debugCode = "BANK_PROOF_TOKEN_PARSE_FAILED";
     throw err;
   }
 
   if (!verifyShortPaymentLinkSignature(parsed.payload, parsed.signature)) {
+    logBankProofLinkEvent("warn", "signature_invalid", {
+      requestId,
+      tokenMasked: maskShortLinkToken(parsed.token),
+      payload: parsed.payload,
+      paymentCollectionCode: parsed.paymentCollectionCode,
+      countryCode: parsed.countryCode,
+      orderSuffix: parsed.orderSuffix,
+    });
     const err = new Error("Lien de dépôt invalide");
     err.statusCode = 400;
+    err.debugCode = "BANK_PROOF_TOKEN_SIGNATURE_INVALID";
     throw err;
   }
 
@@ -395,13 +431,33 @@ async function resolveShortBankProofUploadLink(token) {
     take: 2,
   });
 
+  logBankProofLinkEvent(matches.length === 1 ? "log" : "warn", "lookup_result", {
+    requestId,
+    tokenMasked: maskShortLinkToken(parsed.token),
+    paymentCollectionCode: parsed.paymentCollectionCode,
+    countryCode: parsed.countryCode,
+    orderSuffix: parsed.orderSuffix,
+    matchCount: matches.length,
+    matchedOrderIds: matches.map((item) => item.id),
+  });
+
   if (matches.length !== 1) {
     const err = new Error("Commande introuvable pour ce lien");
     err.statusCode = 404;
+    err.debugCode =
+      matches.length === 0
+        ? "BANK_PROOF_TOKEN_LOOKUP_EMPTY"
+        : "BANK_PROOF_TOKEN_LOOKUP_AMBIGUOUS";
     throw err;
   }
 
   const preorder = matches[0];
+  logBankProofLinkEvent("log", "resolved", {
+    requestId,
+    tokenMasked: maskShortLinkToken(parsed.token),
+    orderId: preorder.id,
+    countryCode: preorder.country?.code || parsed.countryCode,
+  });
   return {
     ok: true,
     orderId: preorder.id,

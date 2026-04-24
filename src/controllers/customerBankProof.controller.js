@@ -88,33 +88,113 @@ function buildPublicBankProofContext(order) {
   };
 }
 
+function maskBankProofToken(token) {
+  const normalized = String(token || "").trim();
+  if (!normalized) return "";
+  if (normalized.length <= 10) return normalized;
+  return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+}
+
+function logBankProofRequest(req, event, data = {}, level = "log") {
+  const logger =
+    level === "error"
+      ? console.error
+      : level === "warn"
+        ? console.warn
+        : console.log;
+
+  logger("[customer-bank-proof]", {
+    requestId: req.requestId || null,
+    method: req.method,
+    path: req.originalUrl || req.url,
+    event,
+    ...data,
+  });
+}
+
+function getResponseRequestId(req, res, error = null) {
+  return (
+    res?.getHeader?.("X-Request-Id") ||
+    req?.requestId ||
+    error?.requestId ||
+    null
+  );
+}
+
 async function findPublicBankProofOrder({ req, orderId, token, select }) {
   const normalizedToken = String(token || "").trim();
+  const countryContext = {
+    headerCountryCode: req.get?.("x-country") || null,
+    resolvedCountryId: req.country?.id || req.countryId || null,
+    resolvedCountryCode: req.country?.code || null,
+  };
+
+  logBankProofRequest(req, "find_order_start", {
+    orderId: orderId || null,
+    hasToken: Boolean(normalizedToken),
+    tokenMasked: maskBankProofToken(normalizedToken),
+    ...countryContext,
+  });
 
   if (normalizedToken) {
     const resolved = await paymentsService.resolveShortBankProofUploadLink(
       normalizedToken,
+      { requestId: req.requestId || null },
     );
 
+    logBankProofRequest(req, "token_resolved", {
+      requestedOrderId: orderId || null,
+      resolvedOrderId: resolved.orderId,
+      resolvedCountryCode: resolved.countryCode || null,
+      tokenMasked: maskBankProofToken(normalizedToken),
+    });
+
     if (orderId && resolved.orderId !== orderId) {
+      logBankProofRequest(
+        req,
+        "token_order_mismatch",
+        {
+          requestedOrderId: orderId,
+          resolvedOrderId: resolved.orderId,
+          tokenMasked: maskBankProofToken(normalizedToken),
+        },
+        "warn",
+      );
       const err = new Error("Lien de dépôt invalide");
       err.statusCode = 400;
+      err.debugCode = "BANK_PROOF_TOKEN_ORDER_MISMATCH";
       throw err;
     }
 
-    return prisma.preorder.findFirst({
+    const order = await prisma.preorder.findFirst({
       where: { id: resolved.orderId },
       select,
     });
+
+    logBankProofRequest(req, "find_order_by_token_result", {
+      resolvedOrderId: resolved.orderId,
+      found: Boolean(order),
+      tokenMasked: maskBankProofToken(normalizedToken),
+    });
+
+    return order;
   }
 
-  return prisma.preorder.findFirst({
+  const order = await prisma.preorder.findFirst({
     where: {
       id: orderId,
       countryId: req.country?.id || req.countryId || undefined,
     },
     select,
   });
+
+  logBankProofRequest(req, "find_order_by_orderid_result", {
+    orderId: orderId || null,
+    found: Boolean(order),
+    ...countryContext,
+  });
+
+  return order;
 }
 
 async function createBankProofSubmission({
@@ -322,7 +402,13 @@ async function getPublicBankProofContext(req, res) {
     const { token } = req.params;
     if (!token) return res.status(400).json({ message: "token requis" });
 
-    const resolved = await paymentsService.resolveShortBankProofUploadLink(token);
+    logBankProofRequest(req, "context_by_token_start", {
+      tokenMasked: maskBankProofToken(token),
+    });
+
+    const resolved = await paymentsService.resolveShortBankProofUploadLink(token, {
+      requestId: req.requestId || null,
+    });
     const order = await prisma.preorder.findFirst({
       where: { id: resolved.orderId },
       select: {
@@ -346,10 +432,31 @@ async function getPublicBankProofContext(req, res) {
       },
     });
 
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order) {
+      logBankProofRequest(
+        req,
+        "context_by_token_order_not_found",
+        {
+          resolvedOrderId: resolved.orderId,
+          tokenMasked: maskBankProofToken(token),
+        },
+        "warn",
+      );
+      return res.status(404).json({
+        message: "Commande introuvable",
+        requestId: getResponseRequestId(req, res),
+      });
+    }
 
     if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
-      return res.status(400).json({ message: "Ce lien est réservé au dépôt de preuve bancaire." });
+      logBankProofRequest(req, "context_by_token_wrong_payment_mode", {
+        orderId: order.id,
+        preorderPaymentMode: order.preorderPaymentMode || null,
+      });
+      return res.status(400).json({
+        message: "Ce lien est réservé au dépôt de preuve bancaire.",
+        requestId: getResponseRequestId(req, res),
+      });
     }
 
     const paymentWindow = resolveCustomerPaymentWindow(order);
@@ -359,6 +466,15 @@ async function getPublicBankProofContext(req, res) {
       !paymentWindow.isExpired &&
       ["INVOICED", "PAYMENT_PENDING"].includes(status) &&
       !["PAID", "PAYMENT_CONFIRMED"].includes(paymentStatus);
+
+    logBankProofRequest(req, "context_by_token_success", {
+      orderId: order.id,
+      preorderNumber: order.preorderNumber || null,
+      uploadAllowed: canUpload,
+      status,
+      paymentStatus,
+      tokenMasked: maskBankProofToken(token),
+    });
 
     return res.json({
       ok: true,
@@ -373,8 +489,21 @@ async function getPublicBankProofContext(req, res) {
             : "Le dépôt de preuve n'est plus disponible pour cette commande.",
     });
   } catch (e) {
-    console.error("getPublicBankProofContext error:", e);
-    return res.status(e.statusCode || 500).json({ message: e.message || "Erreur serveur (getPublicBankProofContext)" });
+    logBankProofRequest(
+      req,
+      "context_by_token_error",
+      {
+        tokenMasked: maskBankProofToken(req.params?.token),
+        message: e.message || null,
+        statusCode: e.statusCode || 500,
+        debugCode: e.debugCode || null,
+      },
+      "error",
+    );
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (getPublicBankProofContext)",
+      requestId: getResponseRequestId(req, res, e),
+    });
   }
 }
 
@@ -384,6 +513,15 @@ async function getPublicBankProofContextByOrderId(req, res) {
     const token = String(req.query?.token || "").trim();
     if (!orderId) return res.status(400).json({ message: "orderId requis" });
 
+    logBankProofRequest(req, "context_by_order_start", {
+      orderId,
+      hasToken: Boolean(token),
+      tokenMasked: maskBankProofToken(token),
+      headerCountryCode: req.get?.("x-country") || null,
+      resolvedCountryId: req.country?.id || req.countryId || null,
+      resolvedCountryCode: req.country?.code || null,
+    });
+
     const order = await findPublicBankProofOrder({
       req,
       orderId,
@@ -409,10 +547,35 @@ async function getPublicBankProofContextByOrderId(req, res) {
       },
     });
 
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order) {
+      logBankProofRequest(
+        req,
+        "context_by_order_not_found",
+        {
+          orderId,
+          hasToken: Boolean(token),
+          tokenMasked: maskBankProofToken(token),
+          headerCountryCode: req.get?.("x-country") || null,
+          resolvedCountryId: req.country?.id || req.countryId || null,
+          resolvedCountryCode: req.country?.code || null,
+        },
+        "warn",
+      );
+      return res.status(404).json({
+        message: "Commande introuvable",
+        requestId: getResponseRequestId(req, res),
+      });
+    }
 
     if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
-      return res.status(400).json({ message: "Ce lien est réservé au dépôt de preuve bancaire." });
+      logBankProofRequest(req, "context_by_order_wrong_payment_mode", {
+        orderId: order.id,
+        preorderPaymentMode: order.preorderPaymentMode || null,
+      });
+      return res.status(400).json({
+        message: "Ce lien est réservé au dépôt de preuve bancaire.",
+        requestId: getResponseRequestId(req, res),
+      });
     }
 
     const paymentWindow = resolveCustomerPaymentWindow(order);
@@ -422,6 +585,16 @@ async function getPublicBankProofContextByOrderId(req, res) {
       !paymentWindow.isExpired &&
       ["INVOICED", "PAYMENT_PENDING"].includes(status) &&
       !["PAID", "PAYMENT_CONFIRMED"].includes(paymentStatus);
+
+    logBankProofRequest(req, "context_by_order_success", {
+      orderId: order.id,
+      preorderNumber: order.preorderNumber || null,
+      uploadAllowed: canUpload,
+      status,
+      paymentStatus,
+      hasToken: Boolean(token),
+      tokenMasked: maskBankProofToken(token),
+    });
 
     return res.json({
       ok: true,
@@ -436,8 +609,22 @@ async function getPublicBankProofContextByOrderId(req, res) {
             : "Le dépôt de preuve n'est plus disponible pour cette commande.",
     });
   } catch (e) {
-    console.error("getPublicBankProofContextByOrderId error:", e);
-    return res.status(e.statusCode || 500).json({ message: e.message || "Erreur serveur (getPublicBankProofContextByOrderId)" });
+    logBankProofRequest(
+      req,
+      "context_by_order_error",
+      {
+        orderId: req.params?.orderId || null,
+        tokenMasked: maskBankProofToken(req.query?.token),
+        message: e.message || null,
+        statusCode: e.statusCode || 500,
+        debugCode: e.debugCode || null,
+      },
+      "error",
+    );
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (getPublicBankProofContextByOrderId)",
+      requestId: getResponseRequestId(req, res, e),
+    });
   }
 }
 
@@ -447,10 +634,18 @@ async function submitPublicBankProof(req, res) {
     const { reference, declaredAmountFcfa, note } = req.body || {};
     const file = req.file;
 
-    if (!token) return res.status(400).json({ message: "token requis" });
-    if (!file) return res.status(400).json({ message: "Fichier preuve requis" });
+    if (!token) return res.status(400).json({ message: "token requis", requestId: getResponseRequestId(req, res) });
+    if (!file) return res.status(400).json({ message: "Fichier preuve requis", requestId: getResponseRequestId(req, res) });
 
-    const resolved = await paymentsService.resolveShortBankProofUploadLink(token);
+    logBankProofRequest(req, "submit_by_token_start", {
+      tokenMasked: maskBankProofToken(token),
+      fileName: file?.originalname || null,
+      fileSize: file?.size || null,
+    });
+
+    const resolved = await paymentsService.resolveShortBankProofUploadLink(token, {
+      requestId: req.requestId || null,
+    });
     const order = await prisma.preorder.findFirst({
       where: { id: resolved.orderId },
       select: {
@@ -466,10 +661,16 @@ async function submitPublicBankProof(req, res) {
       },
     });
 
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order) {
+      logBankProofRequest(req, "submit_by_token_order_not_found", {
+        resolvedOrderId: resolved.orderId,
+        tokenMasked: maskBankProofToken(token),
+      }, "warn");
+      return res.status(404).json({ message: "Commande introuvable", requestId: getResponseRequestId(req, res) });
+    }
 
     if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
-      return res.status(400).json({ message: "Le dépôt de preuve est réservé au mode virement bancaire." });
+      return res.status(400).json({ message: "Le dépôt de preuve est réservé au mode virement bancaire.", requestId: getResponseRequestId(req, res) });
     }
 
     const paymentWindow = resolveCustomerPaymentWindow(order);
@@ -477,20 +678,30 @@ async function submitPublicBankProof(req, res) {
     const status = String(order.status || "").toUpperCase();
 
     if (paymentWindow.isExpired) {
-      return res.status(400).json({ message: "Le lien sécurisé de dépôt a expiré pour cette préfacture." });
+      return res.status(400).json({ message: "Le lien sécurisé de dépôt a expiré pour cette préfacture.", requestId: getResponseRequestId(req, res) });
     }
     if (!["INVOICED", "PAYMENT_PENDING"].includes(status)) {
-      return res.status(400).json({ message: "Le dépôt de preuve n'est plus disponible pour cette commande." });
+      return res.status(400).json({ message: "Le dépôt de preuve n'est plus disponible pour cette commande.", requestId: getResponseRequestId(req, res) });
     }
     if (["PAID", "PAYMENT_CONFIRMED"].includes(paymentStatus)) {
-      return res.status(400).json({ message: "Le paiement est déjà validé pour cette commande." });
+      return res.status(400).json({ message: "Le paiement est déjà validé pour cette commande.", requestId: getResponseRequestId(req, res) });
     }
 
     const proof = await createBankProofSubmission({ order, file, reference, declaredAmountFcfa, note, source: "PUBLIC_BANK_PROOF_LINK" });
+    logBankProofRequest(req, "submit_by_token_success", {
+      orderId: order.id,
+      proofId: proof.id,
+      tokenMasked: maskBankProofToken(token),
+    });
     return res.json({ ok: true, proof });
   } catch (e) {
-    console.error("submitPublicBankProof error:", e);
-    return res.status(e.statusCode || 500).json({ message: e.message || "Erreur serveur (submitPublicBankProof)" });
+    logBankProofRequest(req, "submit_by_token_error", {
+      tokenMasked: maskBankProofToken(req.params?.token),
+      message: e.message || null,
+      statusCode: e.statusCode || 500,
+      debugCode: e.debugCode || null,
+    }, "error");
+    return res.status(e.statusCode || 500).json({ message: e.message || "Erreur serveur (submitPublicBankProof)", requestId: getResponseRequestId(req, res, e) });
   }
 }
 
@@ -500,8 +711,19 @@ async function submitPublicBankProofByOrderId(req, res) {
     const { reference, declaredAmountFcfa, note, token } = req.body || {};
     const file = req.file;
 
-    if (!orderId) return res.status(400).json({ message: "orderId requis" });
-    if (!file) return res.status(400).json({ message: "Fichier preuve requis" });
+    if (!orderId) return res.status(400).json({ message: "orderId requis", requestId: getResponseRequestId(req, res) });
+    if (!file) return res.status(400).json({ message: "Fichier preuve requis", requestId: getResponseRequestId(req, res) });
+
+    logBankProofRequest(req, "submit_by_order_start", {
+      orderId,
+      hasToken: Boolean(token),
+      tokenMasked: maskBankProofToken(token),
+      fileName: file?.originalname || null,
+      fileSize: file?.size || null,
+      headerCountryCode: req.get?.("x-country") || null,
+      resolvedCountryId: req.country?.id || req.countryId || null,
+      resolvedCountryCode: req.country?.code || null,
+    });
 
     const order = await findPublicBankProofOrder({
       req,
@@ -520,10 +742,10 @@ async function submitPublicBankProofByOrderId(req, res) {
       },
     });
 
-    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    if (!order) return res.status(404).json({ message: "Commande introuvable", requestId: getResponseRequestId(req, res) });
 
     if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
-      return res.status(400).json({ message: "Le dépôt de preuve est réservé au mode virement bancaire." });
+      return res.status(400).json({ message: "Le dépôt de preuve est réservé au mode virement bancaire.", requestId: getResponseRequestId(req, res) });
     }
 
     const paymentWindow = resolveCustomerPaymentWindow(order);
@@ -531,20 +753,32 @@ async function submitPublicBankProofByOrderId(req, res) {
     const status = String(order.status || "").toUpperCase();
 
     if (paymentWindow.isExpired) {
-      return res.status(400).json({ message: "Le lien sécurisé de dépôt a expiré pour cette préfacture." });
+      return res.status(400).json({ message: "Le lien sécurisé de dépôt a expiré pour cette préfacture.", requestId: getResponseRequestId(req, res) });
     }
     if (!["INVOICED", "PAYMENT_PENDING"].includes(status)) {
-      return res.status(400).json({ message: "Le dépôt de preuve n'est plus disponible pour cette commande." });
+      return res.status(400).json({ message: "Le dépôt de preuve n'est plus disponible pour cette commande.", requestId: getResponseRequestId(req, res) });
     }
     if (["PAID", "PAYMENT_CONFIRMED"].includes(paymentStatus)) {
-      return res.status(400).json({ message: "Le paiement est déjà validé pour cette commande." });
+      return res.status(400).json({ message: "Le paiement est déjà validé pour cette commande.", requestId: getResponseRequestId(req, res) });
     }
 
     const proof = await createBankProofSubmission({ order, file, reference, declaredAmountFcfa, note, source: "PUBLIC_BANK_PROOF_LINK" });
+    logBankProofRequest(req, "submit_by_order_success", {
+      orderId: order.id,
+      proofId: proof.id,
+      hasToken: Boolean(token),
+      tokenMasked: maskBankProofToken(token),
+    });
     return res.json({ ok: true, proof });
   } catch (e) {
-    console.error("submitPublicBankProofByOrderId error:", e);
-    return res.status(e.statusCode || 500).json({ message: e.message || "Erreur serveur (submitPublicBankProofByOrderId)" });
+    logBankProofRequest(req, "submit_by_order_error", {
+      orderId: req.params?.orderId || null,
+      tokenMasked: maskBankProofToken(req.body?.token),
+      message: e.message || null,
+      statusCode: e.statusCode || 500,
+      debugCode: e.debugCode || null,
+    }, "error");
+    return res.status(e.statusCode || 500).json({ message: e.message || "Erreur serveur (submitPublicBankProofByOrderId)", requestId: getResponseRequestId(req, res, e) });
   }
 }
 
