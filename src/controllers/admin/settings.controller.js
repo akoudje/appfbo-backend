@@ -11,6 +11,8 @@ async function getCountrySettings(req, res) {
         countryId: true,
         minCartFcfa: true,
         maxQtyPerProduct: true,
+        preorderSubmissionEnabled: true,
+        preorderSubmissionDisabledMessage: true,
         supportPhone: true,
         pickupAddress: true,
         enableWave: true,
@@ -50,6 +52,8 @@ async function getCountrySettings(req, res) {
         countryCode: req.country?.code || null,
         minCartFcfa: 100,
         maxQtyPerProduct: 10,
+        preorderSubmissionEnabled: true,
+        preorderSubmissionDisabledMessage: null,
         supportPhone: null,
         pickupAddress: null,
         enableWave: true,
@@ -99,6 +103,8 @@ async function updateCountrySettings(req, res) {
     const {
       minCartFcfa,
       maxQtyPerProduct,
+      preorderSubmissionEnabled,
+      preorderSubmissionDisabledMessage,
       supportPhone,
       pickupAddress,
       enableWave,
@@ -144,6 +150,16 @@ async function updateCountrySettings(req, res) {
         return res.status(400).json({ message: "maxQtyPerProduct invalide" });
       }
       data.maxQtyPerProduct = parsed;
+    }
+
+    if (preorderSubmissionEnabled !== undefined) {
+      data.preorderSubmissionEnabled = Boolean(preorderSubmissionEnabled);
+    }
+
+    if (preorderSubmissionDisabledMessage !== undefined) {
+      data.preorderSubmissionDisabledMessage = preorderSubmissionDisabledMessage
+        ? String(preorderSubmissionDisabledMessage).trim()
+        : null;
     }
 
     if (maxActiveBillingPerInvoicer !== undefined) {
@@ -270,6 +286,12 @@ async function updateCountrySettings(req, res) {
             data.minCartFcfa !== undefined ? data.minCartFcfa : 100,
           maxQtyPerProduct:
             data.maxQtyPerProduct !== undefined ? data.maxQtyPerProduct : 10,
+          preorderSubmissionEnabled:
+            data.preorderSubmissionEnabled !== undefined
+              ? data.preorderSubmissionEnabled
+              : true,
+          preorderSubmissionDisabledMessage:
+            data.preorderSubmissionDisabledMessage ?? null,
           supportPhone: data.supportPhone ?? null,
           pickupAddress: data.pickupAddress ?? null,
           enableWave: data.enableWave !== undefined ? data.enableWave : true,
@@ -319,6 +341,8 @@ async function updateCountrySettings(req, res) {
         countryId: true,
         minCartFcfa: true,
         maxQtyPerProduct: true,
+        preorderSubmissionEnabled: true,
+        preorderSubmissionDisabledMessage: true,
         supportPhone: true,
         pickupAddress: true,
         enableWave: true,

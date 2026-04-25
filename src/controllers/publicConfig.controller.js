@@ -29,6 +29,8 @@ async function getStorefrontConfig(req, res) {
         select: {
           minCartFcfa: true,
           maxQtyPerProduct: true,
+          preorderSubmissionEnabled: true,
+          preorderSubmissionDisabledMessage: true,
           supportPhone: true,
           pickupAddress: true,
           enableWave: true,
@@ -61,6 +63,10 @@ async function getStorefrontConfig(req, res) {
       countryCode: req.country?.code || null,
       minCartFcfa: settings?.minCartFcfa ?? 100,
       maxQtyPerProduct: settings?.maxQtyPerProduct ?? 10,
+      preorderSubmissionEnabled: settings?.preorderSubmissionEnabled ?? true,
+      preorderSubmissionDisabledMessage:
+        settings?.preorderSubmissionDisabledMessage ||
+        "Les soumissions de précommandes sont temporairement suspendues. Vous pouvez continuer à consulter le catalogue et votre panier.",
       supportPhone: settings?.supportPhone ?? null,
       pickupAddress: settings?.pickupAddress ?? null,
       payments: {

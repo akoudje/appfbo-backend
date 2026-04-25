@@ -120,6 +120,17 @@ function resolveMaxQtyForProduct(product, globalMaxQtyPerProduct) {
   return globalLimit;
 }
 
+function isEnvSubmissionDisabled() {
+  return String(process.env.PREORDER_SUBMISSION_DISABLED || "false").toLowerCase() === "true";
+}
+
+function resolveSubmissionDisabledMessage(settings) {
+  return (
+    settings?.preorderSubmissionDisabledMessage ||
+    PREORDER_SUBMISSION_DISABLED_MESSAGE
+  );
+}
+
 function findItemsExceedingProductLimits(items, productsById, globalMaxQtyPerProduct) {
   const violations = [];
 
@@ -554,7 +565,7 @@ async function submit(req, res) {
   const { phoneRaw, phoneNormalized } = req.body || {};
   const countryId = req.country.id;
 
-  if (String(process.env.PREORDER_SUBMISSION_DISABLED || "false").toLowerCase() === "true") {
+  if (isEnvSubmissionDisabled()) {
     return res.status(503).json({
       error: PREORDER_SUBMISSION_DISABLED_MESSAGE,
       code: "PREORDER_SUBMISSION_DISABLED",
@@ -572,6 +583,13 @@ async function submit(req, res) {
 
     if (!preorder) {
       return res.status(404).json({ error: "Preorder not found" });
+    }
+
+    if (preorder.country?.settings?.preorderSubmissionEnabled === false) {
+      return res.status(503).json({
+        error: resolveSubmissionDisabledMessage(preorder.country.settings),
+        code: "PREORDER_SUBMISSION_DISABLED",
+      });
     }
 
     if (preorder.status !== "DRAFT") {

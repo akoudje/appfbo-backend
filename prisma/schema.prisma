@@ -377,6 +377,8 @@ model CountrySettings {
 
   minCartFcfa Int @default(0)
   maxQtyPerProduct Int @default(10)
+  preorderSubmissionEnabled Boolean @default(true)
+  preorderSubmissionDisabledMessage String? @db.Text
   supportPhone String?
   pickupAddress String? @db.Text
   enableWave Boolean @default(true)
