@@ -9,6 +9,30 @@ function compactText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function resolveNotificationOrderRef(preorder = {}) {
+  return compactText(
+    preorder?.preorderNumber || preorder?.paymentCollectionCode || preorder?.id || "-",
+  );
+}
+
+function buildNotificationPrefix(preorder = {}) {
+  return `FOREVER: ${resolveNotificationOrderRef(preorder)}.`;
+}
+
+function prependNotificationPrefix(preorder = {}, message = "") {
+  const normalized = compactText(message || "");
+  const prefix = buildNotificationPrefix(preorder);
+  if (!normalized) return prefix;
+
+  let stripped = normalized.replace(/^FOREVER:\s*/i, "");
+  const orderRef = resolveNotificationOrderRef(preorder);
+  const escapedRef = orderRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  stripped = stripped.replace(new RegExp(`^${escapedRef}\\.?\\s*`, "i"), "");
+  stripped = compactText(stripped);
+
+  return compactText(`${prefix} ${stripped}`);
+}
+
 function firstSmsCandidate(candidates = [], maxLength = MAX_SMS_LENGTH) {
   for (const raw of candidates) {
     const candidate = compactText(raw);
@@ -49,11 +73,14 @@ function buildPreparationStartedSmsMessage({ preorder }) {
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
-  return firstSmsCandidate([
-    `Bonjour ${customer}, votre colis ${parcelNumber} est en préparation. Vous serez notifié dès qu'il sera prêt.`,
-    `Colis ${parcelNumber} en préparation. Notification dès disponibilité.`,
-    `Colis ${parcelNumber} en préparation.`,
-  ]);
+  return prependNotificationPrefix(
+    preorder,
+    firstSmsCandidate([
+      `Bonjour ${customer}, votre colis ${parcelNumber} est en préparation. Vous serez notifié dès qu'il sera prêt.`,
+      `Bonjour ${customer}, colis ${parcelNumber} en préparation.`,
+      `Colis ${parcelNumber} en préparation.`,
+    ]),
+  );
 }
 
 function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
@@ -61,11 +88,14 @@ function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
-  return firstSmsCandidate([
-    `Bonjour ${customer}, votre colis ${parcelNumber} est prêt. Code retrait: ${pickupSecretCode}. Présentez-le au comptoir.`,
-    `Colis ${parcelNumber} prêt. Code retrait: ${pickupSecretCode}.`,
-    `Colis ${parcelNumber} prêt. Code: ${pickupSecretCode}.`,
-  ]);
+  return prependNotificationPrefix(
+    preorder,
+    firstSmsCandidate([
+      `Bonjour ${customer}, votre colis ${parcelNumber} est prêt. Code retrait: ${pickupSecretCode}.`,
+      `Bonjour ${customer}, colis ${parcelNumber} prêt. Code retrait: ${pickupSecretCode}.`,
+      `Colis ${parcelNumber} prêt. Code: ${pickupSecretCode}.`,
+    ]),
+  );
 }
 
 function buildOrderFulfilledSmsMessage({ preorder }) {
@@ -73,10 +103,14 @@ function buildOrderFulfilledSmsMessage({ preorder }) {
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
 
-  return firstSmsCandidate([
-    `Bonjour ${customer}, le retrait du colis ${parcelNumber} a été confirmé. Merci pour votre confiance.`,
-    `Retrait du colis ${parcelNumber} confirmé. Merci.`,
-  ]);
+  return prependNotificationPrefix(
+    preorder,
+    firstSmsCandidate([
+      `Bonjour ${customer}, votre commande est clôturée. Colis ${parcelNumber} livré avec succès. Merci pour votre confiance.`,
+      `Bonjour ${customer}, commande clôturée. Colis ${parcelNumber} livré avec succès.`,
+      `Commande clôturée. Colis ${parcelNumber} livré.`,
+    ]),
+  );
 }
 
 function buildPaymentConfirmedSmsMessage({ preorder }) {
@@ -85,11 +119,14 @@ function buildPaymentConfirmedSmsMessage({ preorder }) {
     preorder?.preorderNumber || preorder?.paymentCollectionCode || preorder?.id || "-";
   const total = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
 
-  return firstSmsCandidate([
-    `Bonjour ${customer}, le paiement de votre precommande ${preorderNumber} est confirme pour ${total}.`,
-    `Paiement confirme pour la precommande ${preorderNumber}. Montant ${total}.`,
-    `Paiement confirme pour ${preorderNumber}.`,
-  ]);
+  return prependNotificationPrefix(
+    preorder,
+    firstSmsCandidate([
+      `Bonjour ${customer}, le paiement de votre précommande est confirmé pour ${total}.`,
+      `Bonjour ${customer}, paiement confirmé pour ${total}.`,
+      `Paiement confirmé pour ${total}.`,
+    ]),
+  );
 }
 
 function formatFcfa(value) {
@@ -378,6 +415,13 @@ function normalizePurposeKey(purpose = "") {
   return key;
 }
 
+function shouldSendSmsForPurpose(purpose = "") {
+  const key = String(purpose || "").trim().toUpperCase();
+  if (key === "PREPARATION_STARTED") return false;
+  if (key === "ORDER_FULFILLED") return false;
+  return true;
+}
+
 const ORDER_MESSAGE_PURPOSE_VALUES = new Set([
   "INVOICE",
   "PAYMENT_LINK",
@@ -566,6 +610,7 @@ function sanitizeInvoiceSmsMessage(value = "") {
 
   msg = msg.replace(/^FOREVER:\s*FOREVER:\s*/i, "");
   msg = msg.replace(/^FOREVER:\s*/i, "");
+  msg = msg.replace(/^[A-Z]{3}-\d{8}-\d+\.\s*/i, "");
   msg = msg.replace(/\s*(Paiement|Lien)\s*:\s*$/i, "");
   msg = msg.replace(/\s{2,}/g, " ").trim();
   return msg;
@@ -642,11 +687,14 @@ function resolveConfiguredTemplates({
   });
 
   return {
-    smsMessage: ensureInvoiceSmsIncludesCollectionCode({
-      purpose,
-      smsMessage: resolvedSms || fallbackSms,
-      paymentCollectionCode: context?.paymentCollectionCode,
-    }),
+    smsMessage: prependNotificationPrefix(
+      context?.preorder || null,
+      ensureInvoiceSmsIncludesCollectionCode({
+        purpose,
+        smsMessage: resolvedSms || fallbackSms,
+        paymentCollectionCode: context?.paymentCollectionCode,
+      }),
+    ),
     emailSubject: resolvedSubject || fallbackEmailSubject,
     emailBody: resolvedEmailBody || fallbackEmailBody,
     emailHtml: resolvedEmailHtml,
@@ -883,19 +931,35 @@ async function sendPreorderNotification({
   const resolvedEmailMessage = configuredTemplates.emailBody;
   const resolvedEmailHtml = configuredTemplates.emailHtml;
 
-  const hasSmsIntent = Boolean(resolvedPhone);
-  const channels = hasSmsIntent
-    ? [
-        { channel: "SMS", to: resolvedPhone },
-        { channel: "EMAIL", to: resolvedEmail },
-      ]
-    : [
-        { channel: "WHATSAPP", to: resolvedWhatsapp },
-        { channel: "EMAIL", to: resolvedEmail },
-      ];
+  const smsAllowed = shouldSendSmsForPurpose(persistedPurpose);
+  const channels = [];
+
+  if (smsAllowed) {
+    if (resolvedPhone) {
+      channels.push({ channel: "SMS", to: resolvedPhone });
+    } else if (resolvedWhatsapp) {
+      channels.push({ channel: "WHATSAPP", to: resolvedWhatsapp });
+    }
+  }
+
+  if (resolvedEmail) {
+    channels.push({ channel: "EMAIL", to: resolvedEmail });
+  }
 
   if (!resolvedPhone && !resolvedWhatsapp && !resolvedEmail) {
     return { sent: false, skipped: true, reason: "NO_DESTINATION" };
+  }
+
+  if (channels.length === 0) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: "CHANNEL_DISABLED_FOR_PURPOSE",
+      attempts: [],
+      smsSent: false,
+      whatsappSent: false,
+      emailSent: false,
+    };
   }
 
   const attempts = [];
@@ -1037,6 +1101,8 @@ async function sendPreorderNotification({
 module.exports = {
   resolveNotificationPhone,
   resolveNotificationEmail,
+  buildNotificationPrefix,
+  prependNotificationPrefix,
   buildPreparationStartedSmsMessage,
   buildPaymentConfirmedSmsMessage,
   buildOrderReadySmsMessage,

@@ -13,15 +13,15 @@ function buildDefaultNotificationTemplates() {
   return {
     sms: {
       INVOICE:
-        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Paiement a effectuer sous ${expiryHours}H pour la precommande {{preorderNumber}}.`,
+        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Paiement a effectuer sous ${expiryHours}H.`,
       INVOICE_WAVE:
-        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Reglez sous ${expiryHours}H via le lien Wave: {{paymentLink}}`,
+        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Reglez sous ${expiryHours}H via le lien Wave: {{paymentLink}}`,
       INVOICE_BANK_TRANSFER:
-        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Effectuez le virement puis deposez votre preuve ici sous ${expiryHours}H: {{bankProofUploadLink}}`,
+        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Effectuez le virement puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
       INVOICE_CASH:
-        `Code {{paymentCollectionCode}}. Montant {{totalFcfaLabel}}. Rendez-vous a la caisse FLP pour regler sous ${expiryHours}H.`,
+        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Passez a la caisse FLP sous ${expiryHours}H. Passe ce delai, la commande sera annulee.`,
       PAYMENT_CONFIRMED:
-        "Bonjour {{customerName}}, le paiement de votre precommande {{preorderNumber}} est confirme pour {{totalFcfaLabel}}.",
+        "Bonjour {{customerName}}, le paiement de votre précommande est confirmé pour {{totalFcfaLabel}}.",
     },
     email: {
       INVOICE: {

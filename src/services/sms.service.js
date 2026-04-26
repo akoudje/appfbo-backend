@@ -11,26 +11,42 @@ const {
   sendText,
 } = require("./sms.orange.service");
 
+function compactText(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function resolveNotificationOrderRef(preorder = {}) {
+  return compactText(
+    preorder?.preorderNumber || preorder?.paymentCollectionCode || preorder?.id || "-",
+  );
+}
+
+function prependNotificationPrefix(preorder = {}, message = "") {
+  const normalized = compactText(message || "");
+  const prefix = `FOREVER: ${resolveNotificationOrderRef(preorder)}.`;
+  if (!normalized) return prefix;
+  return compactText(`${prefix} ${normalized}`);
+}
+
 function normalizePhone(raw = "") {
   return normalizeCI(raw);
 }
 
 function buildPreorderSmsMessage({ preorder, totals }) {
-  const number = preorder?.preorderNumber || "-";
   const total = Number(totals?.totalFcfa ?? preorder?.totalFcfa ?? 0);
   const totalFmt = new Intl.NumberFormat("fr-FR").format(total);
   const candidates = [
-    `Votre precommande ${number} est enregistree. Montant indicatif: ${totalFmt}F. Vous recevrez votre prefacture et les modalites de paiement.`,
-    `Precommande ${number} enregistree. Montant indicatif: ${totalFmt}F. Prefacture en cours de preparation.`,
-    `Precommande ${number} enregistree. Montant: ${totalFmt}F.`,
+    `Précommande bien reçue. Nous préparons votre facture et revenons vers vous rapidement.`,
+    `Précommande reçue. Facture en préparation.`,
+    `Précommande reçue.`,
   ];
 
   for (const raw of candidates) {
-    const text = String(raw || "").replace(/\s+/g, " ").trim();
+    const text = prependNotificationPrefix(preorder, raw);
     if (text.length <= MAX_SMS_LENGTH) return text;
   }
 
-  return String(candidates[0]).slice(0, MAX_SMS_LENGTH);
+  return prependNotificationPrefix(preorder, candidates[0]).slice(0, MAX_SMS_LENGTH);
 }
 
 function orangeConfigured() {

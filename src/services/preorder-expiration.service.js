@@ -1,5 +1,8 @@
 const prisma = require("../prisma");
-const { sendPreorderNotification } = require("./preorder-notifications.service");
+const {
+  sendPreorderNotification,
+  prependNotificationPrefix,
+} = require("./preorder-notifications.service");
 const { publishRealtimeEvent } = require("./realtime-events.service");
 
 const FINAL_PAYMENT_STATUSES = new Set([
@@ -52,11 +55,11 @@ function buildAutoCancelMessage(preorder) {
     preorder?.preorderNumber || preorder?.paymentCollectionCode || preorder?.id || "-",
   );
 
-  return compactText(`
+  return prependNotificationPrefix(preorder, compactText(`
     Bonjour ${customer}, votre precommande ${preorderNumber} a ete annulee
     faute de paiement confirme dans le delai maximal de ${getExpiryHours()}H apres
     prefacturation. Vous pouvez lancer une nouvelle precommande si besoin.
-  `);
+  `));
 }
 
 async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
