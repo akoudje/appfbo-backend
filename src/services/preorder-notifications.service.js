@@ -417,6 +417,7 @@ function normalizePurposeKey(purpose = "") {
 
 function shouldSendSmsForPurpose(purpose = "") {
   const key = String(purpose || "").trim().toUpperCase();
+  if (key === "PREORDER_SUBMITTED") return false;
   if (key === "PREPARATION_STARTED") return false;
   if (key === "ORDER_FULFILLED") return false;
   return true;
@@ -931,7 +932,7 @@ async function sendPreorderNotification({
   const resolvedEmailMessage = configuredTemplates.emailBody;
   const resolvedEmailHtml = configuredTemplates.emailHtml;
 
-  const smsAllowed = shouldSendSmsForPurpose(persistedPurpose);
+  const smsAllowed = shouldSendSmsForPurpose(purpose);
   const channels = [];
 
   if (smsAllowed) {
