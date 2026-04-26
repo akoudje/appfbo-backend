@@ -562,7 +562,7 @@ async function getSummary(req, res) {
 
 async function submit(req, res) {
   const preorderId = req.params.id;
-  const { phoneRaw, phoneNormalized } = req.body || {};
+  const { phoneRaw, phoneNormalized, email, paymentMode } = req.body || {};
   const countryId = req.country.id;
 
   if (isEnvSubmissionDisabled()) {
@@ -627,6 +627,49 @@ async function submit(req, res) {
       return res
         .status(400)
         .json({ error: "Les informations FBO sont incomplètes." });
+    }
+
+    const hasEmailField = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
+    const normalizedEmail = normalizeEmail(email);
+
+    if (normalizedEmail === "__INVALID_EMAIL__") {
+      return res.status(400).json({ error: "Format email invalide" });
+    }
+
+    const normalizedPaymentMode = paymentMode
+      ? String(paymentMode).trim().toUpperCase()
+      : null;
+
+    const normalizedDeliveryMode = [
+      "ESPECES",
+      "WAVE",
+      "ORANGE_MONEY",
+      "BANK_TRANSFER",
+    ].includes(String(normalizedPaymentMode || "").toUpperCase())
+      ? "RETRAIT_SITE_FLP"
+      : preorder.deliveryMode;
+
+    if (
+      (hasEmailField && normalizedEmail !== preorder.fboEmail) ||
+      (normalizedPaymentMode &&
+        normalizedPaymentMode !==
+          String(preorder.preorderPaymentMode || "").trim().toUpperCase()) ||
+      normalizedDeliveryMode !== preorder.deliveryMode
+    ) {
+      const updatedPreorder = await prisma.preorder.update({
+        where: { id: preorder.id },
+        data: {
+          ...(hasEmailField ? { fboEmail: normalizedEmail } : {}),
+          ...(normalizedPaymentMode
+            ? { preorderPaymentMode: normalizedPaymentMode }
+            : {}),
+          deliveryMode: normalizedDeliveryMode,
+        },
+      });
+
+      preorder.fboEmail = updatedPreorder.fboEmail;
+      preorder.preorderPaymentMode = updatedPreorder.preorderPaymentMode;
+      preorder.deliveryMode = updatedPreorder.deliveryMode;
     }
 
     const smsTo = normalizePhone(phoneNormalized || phoneRaw);
