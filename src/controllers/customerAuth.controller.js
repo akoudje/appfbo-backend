@@ -7,6 +7,8 @@ const { normalizePhone, sendSms } = require("../services/sms.service");
 const GENERIC_OTP_REQUEST_MESSAGE =
   "Si ce compte existe, un code de vérification sera envoyé sur le canal disponible.";
 const GENERIC_OTP_VERIFY_MESSAGE = "Code OTP invalide ou expiré.";
+const OTP_RESEND_UNAVAILABLE_MESSAGE =
+  "Aucun canal de réception n'est disponible pour ce compte. Ajoutez un téléphone ou un email valide sur une commande récente.";
 
 function canonicalFboNumber(raw = "") {
   const digits = String(raw || "").replace(/\D/g, "");
@@ -34,6 +36,12 @@ function maskEmail(value = "") {
 function otpExpiresInMinutes() {
   const value = Number.parseInt(process.env.CUSTOMER_OTP_EXPIRES_MIN || "10", 10);
   if (!Number.isFinite(value) || value < 1 || value > 60) return 10;
+  return value;
+}
+
+function otpResendCooldownSeconds() {
+  const value = Number.parseInt(process.env.CUSTOMER_OTP_RESEND_COOLDOWN_SEC || "60", 10);
+  if (!Number.isFinite(value) || value < 0 || value > 600) return 60;
   return value;
 }
 
@@ -82,6 +90,20 @@ function buildGenericOtpRequestResponse({ channel = "", destinationMasked = "" }
     expiresInMinutes: otpExpiresInMinutes(),
     message: GENERIC_OTP_REQUEST_MESSAGE,
   };
+}
+
+function buildOtpChannelMeta({ smsPhone = "", email = "" } = {}) {
+  const destinations = {};
+  const availableChannels = [];
+  if (smsPhone) {
+    availableChannels.push("SMS");
+    destinations.SMS = maskPhone(smsPhone);
+  }
+  if (email) {
+    availableChannels.push("EMAIL");
+    destinations.EMAIL = maskEmail(email);
+  }
+  return { availableChannels, destinations };
 }
 
 function signCustomerToken({ fboId, countryId, numeroFbo, email }) {
@@ -141,7 +163,15 @@ async function resolveFboAndDestinations({ countryId, numeroFbo, requestedChanne
   if (!channel) channel = smsPhone ? "SMS" : "EMAIL";
   if (channel === "SMS" && !smsPhone && email) channel = "EMAIL";
   if (channel === "EMAIL" && !email && smsPhone) channel = "SMS";
-  if (!smsPhone && !email) return null;
+  if (!smsPhone && !email) {
+    return {
+      fbo,
+      channel,
+      smsPhone: "",
+      email: "",
+      hasNoReachableChannel: true,
+    };
+  }
 
   return {
     fbo,
@@ -175,15 +205,66 @@ async function requestOtp(req, res) {
       }));
     }
 
+    const channelMeta = buildOtpChannelMeta({
+      smsPhone: resolved.smsPhone,
+      email: resolved.email,
+    });
+
+    if (resolved.hasNoReachableChannel) {
+      return res.status(409).json({
+        ok: false,
+        message: OTP_RESEND_UNAVAILABLE_MESSAGE,
+        channel: "",
+        availableChannels: [],
+        destinations: {},
+        expiresInMinutes: otpExpiresInMinutes(),
+      });
+    }
+
+    const now = new Date();
+    const activeChallenge = await prisma.customerOtpChallenge.findFirst({
+      where: {
+        countryId,
+        fboId: resolved.fbo.id,
+        purpose: "CUSTOMER_PORTAL_LOGIN",
+        consumedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const cooldownSeconds = otpResendCooldownSeconds();
+    if (activeChallenge && cooldownSeconds > 0) {
+      const elapsedMs = now.getTime() - new Date(activeChallenge.createdAt).getTime();
+      const retryAfterSeconds = Math.max(
+        0,
+        cooldownSeconds - Math.ceil(elapsedMs / 1000),
+      );
+      if (retryAfterSeconds > 0) {
+        return res.status(429).json({
+          ok: false,
+          message: `Un code a déjà été envoyé récemment. Attendez ${retryAfterSeconds}s avant de redemander un nouveau code.`,
+          channel: activeChallenge.channel || resolved.channel || "",
+          destinationMasked: activeChallenge.destinationMasked || "",
+          availableChannels: channelMeta.availableChannels,
+          destinations: channelMeta.destinations,
+          retryAfterSeconds,
+          expiresInMinutes: otpExpiresInMinutes(),
+        });
+      }
+    }
+
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     const expiresMin = otpExpiresInMinutes();
-    const now = new Date();
     const expiresAt = new Date(now.getTime() + expiresMin * 60 * 1000);
+    const explicitChannel = String(channel || "").trim().toUpperCase();
+    const hasExplicitChannel = ["SMS", "EMAIL"].includes(explicitChannel);
     const preferredFirst = resolved.channel === "SMS" ? ["SMS", "EMAIL"] : ["EMAIL", "SMS"];
-    const channelsToTry = preferredFirst.filter((ch, idx, arr) => arr.indexOf(ch) === idx);
+    const channelsToTry = hasExplicitChannel
+      ? [explicitChannel, ...preferredFirst.filter((ch) => ch !== explicitChannel)]
+      : preferredFirst.filter((ch, idx, arr) => arr.indexOf(ch) === idx);
     const failures = [];
-    let sent = null;
-    let usedChannel = null;
+    const successes = [];
 
     for (const ch of channelsToTry) {
       if (ch === "SMS" && resolved.smsPhone) {
@@ -192,15 +273,15 @@ async function requestOtp(req, res) {
           message: `Code connexion ${otp}. Expire dans ${expiresMin} min.`,
         });
         if (smsResult?.accepted) {
-          sent = smsResult;
-          usedChannel = "SMS";
-          break;
+          successes.push({ channel: "SMS", result: smsResult });
+          if (hasExplicitChannel) break;
+        } else {
+          failures.push({
+            channel: "SMS",
+            errorCode: smsResult?.errorCode || "SMS_SEND_FAILED",
+            errorMessage: smsResult?.errorMessage || "Échec envoi SMS",
+          });
         }
-        failures.push({
-          channel: "SMS",
-          errorCode: smsResult?.errorCode || "SMS_SEND_FAILED",
-          errorMessage: smsResult?.errorMessage || "Échec envoi SMS",
-        });
       }
 
       if (ch === "EMAIL" && resolved.email) {
@@ -214,27 +295,36 @@ async function requestOtp(req, res) {
           },
         });
         if (emailResult?.accepted) {
-          sent = emailResult;
-          usedChannel = "EMAIL";
-          break;
+          successes.push({ channel: "EMAIL", result: emailResult });
+          if (hasExplicitChannel) break;
+        } else {
+          failures.push({
+            channel: "EMAIL",
+            errorCode: emailResult?.errorCode || "EMAIL_SEND_FAILED",
+            errorMessage: emailResult?.errorMessage || "Échec envoi email",
+          });
         }
-        failures.push({
-          channel: "EMAIL",
-          errorCode: emailResult?.errorCode || "EMAIL_SEND_FAILED",
-          errorMessage: emailResult?.errorMessage || "Échec envoi email",
-        });
       }
     }
 
-    if (!sent?.accepted || !usedChannel) {
+    const usedChannel =
+      successes.length > 1 ? "SMS/EMAIL" : successes[0]?.channel || "";
+    const destinationMasked = successes
+      .map((entry) =>
+        entry.channel === "SMS"
+          ? channelMeta.destinations.SMS
+          : channelMeta.destinations.EMAIL,
+      )
+      .filter(Boolean)
+      .join(" • ");
+
+    if (!successes.length || !usedChannel) {
       return res.status(502).json({
         message: "Impossible d'envoyer le code OTP",
         errorCode: failures?.[0]?.errorCode || "OTP_SEND_FAILED",
         failures,
       });
     }
-
-    const destinationMasked = usedChannel === "SMS" ? maskPhone(resolved.smsPhone) : maskEmail(resolved.email);
 
     await prisma.$transaction(async (tx) => {
       await tx.customerOtpChallenge.updateMany({
@@ -261,6 +351,7 @@ async function requestOtp(req, res) {
             requestId: req.requestId || null,
             countryCode: req.country?.code || null,
             fallbackFrom: resolved.channel !== usedChannel ? resolved.channel : null,
+            sentChannels: successes.map((entry) => entry.channel),
           },
         },
       });
@@ -271,6 +362,9 @@ async function requestOtp(req, res) {
         channel: usedChannel,
         destinationMasked,
       }),
+      availableChannels: channelMeta.availableChannels,
+      destinations: channelMeta.destinations,
+      sentChannels: successes.map((entry) => entry.channel),
       expiresInMinutes: expiresMin,
       ...(shouldIncludeDebugOtp() ? { debugOtp: otp } : {}),
     });
