@@ -24,6 +24,9 @@ const customerRoutes = require("./routes/customer.routes");
 const {
   startExpiredInvoiceAutoCancelScheduler,
 } = require("./services/preorder-expiration.service");
+const {
+  startNotificationDispatchScheduler,
+} = require("./services/notification-dispatch.service");
 
 
 const app = express();
@@ -247,3 +250,4 @@ app.listen(PORT, "0.0.0.0", () => {
 });
 
 startExpiredInvoiceAutoCancelScheduler();
+startNotificationDispatchScheduler();

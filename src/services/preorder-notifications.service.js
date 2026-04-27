@@ -51,6 +51,30 @@ function firstSmsCandidate(candidates = [], maxLength = MAX_SMS_LENGTH) {
   return fallback.slice(0, maxLength);
 }
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getNotificationMaxSmsAttempts() {
+  return Math.max(1, parsePositiveInt(process.env.NOTIFICATION_SMS_MAX_ATTEMPTS, 4));
+}
+
+function getNotificationRetryBaseSeconds() {
+  return Math.max(15, parsePositiveInt(process.env.NOTIFICATION_SMS_RETRY_BASE_SECONDS, 30));
+}
+
+function buildRetryDelaySeconds(attemptNumber = 1) {
+  const base = getNotificationRetryBaseSeconds();
+  const multiplier = Math.max(0, Number(attemptNumber) - 1);
+  return base * Math.pow(2, multiplier);
+}
+
+function buildNextAttemptAt(attemptNumber = 1, fromDate = new Date()) {
+  const delaySeconds = buildRetryDelaySeconds(attemptNumber);
+  return new Date(fromDate.getTime() + delaySeconds * 1000);
+}
+
 function resolveNotificationPhone(preorder) {
   return (
     preorder?.factureWhatsappTo ||
@@ -771,6 +795,46 @@ async function persistNotificationResult({
   return savedMessage;
 }
 
+async function queueSmsNotification({
+  preorderId,
+  purpose,
+  toPhone = null,
+  message,
+  paymentLinkTarget = null,
+  paymentLinkTracked = null,
+  actorName,
+  maxAttempts = getNotificationMaxSmsAttempts(),
+}) {
+  const now = new Date();
+  const queuedMessage = await prisma.orderMessage.create({
+    data: {
+      preorderId,
+      channel: "SMS",
+      purpose,
+      status: "QUEUED",
+      toPhone,
+      provider: "ORANGE",
+      paymentLinkTarget: paymentLinkTarget || null,
+      paymentLinkTracked: paymentLinkTracked || null,
+      createdBy: actorName || "SYSTEM",
+      body: message,
+      attempts: 0,
+      maxAttempts: Math.max(1, Number(maxAttempts) || getNotificationMaxSmsAttempts()),
+      nextAttemptAt: now,
+    },
+  });
+
+  await prisma.orderMessageEvent.create({
+    data: {
+      orderMessageId: queuedMessage.id,
+      status: "QUEUED",
+      note: "Notification SMS ajoutée à la file d'envoi.",
+    },
+  });
+
+  return queuedMessage;
+}
+
 async function sendSmsWithRetry({
   to,
   message,
@@ -1009,6 +1073,43 @@ async function sendPreorderNotification({
       continue;
     }
 
+    if (item.channel === "SMS") {
+      const queuedMessage = await queueSmsNotification({
+        preorderId: preorder.id,
+        purpose: persistedPurpose,
+        toPhone: item.to,
+        message: messageToSend,
+        paymentLinkTarget,
+        paymentLinkTracked,
+        actorName,
+        maxAttempts: Math.max(1, Number(maxSmsRetries) + 1),
+      });
+
+      const attempt = {
+        channel: item.channel,
+        sent: false,
+        queued: true,
+        to: item.to,
+        messageId: queuedMessage.id,
+        provider: queuedMessage.provider || "ORANGE",
+        providerMessageId: null,
+        errorCode: null,
+        errorMessage: null,
+      };
+      attempts.push(attempt);
+      if (!firstSuccess) {
+        firstSuccess = {
+          channel: item.channel,
+          toPhone: item.to,
+          toEmail: null,
+          messageId: queuedMessage.id,
+          provider: queuedMessage.provider || "ORANGE",
+          providerMessageId: null,
+        };
+      }
+      continue;
+    }
+
     const sendResult = await sendByChannel({
       channel: item.channel,
       to: item.to,
@@ -1035,6 +1136,7 @@ async function sendPreorderNotification({
     const attempt = {
       channel: item.channel,
       sent: Boolean(sendResult.accepted),
+      queued: false,
       to: item.to,
       messageId: savedMessage.id,
       provider: sendResult.provider || null,
@@ -1056,14 +1158,16 @@ async function sendPreorderNotification({
   }
 
   const smsSent = attempts.some((a) => a.channel === "SMS" && a.sent);
+  const smsQueued = attempts.some((a) => a.channel === "SMS" && a.queued);
   const whatsappSent = attempts.some((a) => a.channel === "WHATSAPP" && a.sent);
   const emailSent = attempts.some((a) => a.channel === "EMAIL" && a.sent);
-  const anySent = attempts.some((a) => a.sent);
+  const anyAccepted = attempts.some((a) => a.sent || a.queued);
 
-  if (anySent) {
+  if (anyAccepted) {
     return {
       sent: true,
       skipped: false,
+      queued: smsQueued,
       channel: firstSuccess?.channel || null,
       toPhone: firstSuccess?.toPhone || resolvedPhone || null,
       toEmail: firstSuccess?.toEmail || resolvedEmail || null,
@@ -1074,6 +1178,7 @@ async function sendPreorderNotification({
       errorMessage: null,
       attempts,
       smsSent,
+      smsQueued,
       whatsappSent,
       emailSent,
     };

@@ -721,6 +721,7 @@ async function submit(req, res) {
       toPhone: smsTo,
     });
     const smsDispatched = Boolean(notificationResult?.smsSent);
+    const smsQueued = Boolean(notificationResult?.smsQueued);
     console.log("[preorders][submit] notification dispatch result", {
       preorderId,
       smsTo,
@@ -732,8 +733,12 @@ async function submit(req, res) {
       error: notificationResult.errorMessage || null,
     });
 
-    const persistedMessageStatus = smsDispatched ? "SENT" : "FAILED";
-    const uiSmsStatus = smsDispatched ? "sent" : "failed";
+    const persistedMessageStatus = smsDispatched
+      ? "SENT"
+      : smsQueued
+        ? "QUEUED"
+        : "FAILED";
+    const uiSmsStatus = smsDispatched ? "sent" : smsQueued ? "pending" : "failed";
 
     await prisma.$transaction(async (tx) => {
       for (const it of summary.items) {
@@ -915,6 +920,7 @@ async function notifySms(req, res) {
       toPhone: smsTo,
     });
     const smsDispatched = Boolean(notificationResult?.smsSent);
+    const smsQueued = Boolean(notificationResult?.smsQueued);
     console.log("[preorders][notifySms] notification dispatch result", {
       preorderId,
       smsTo,
@@ -926,8 +932,12 @@ async function notifySms(req, res) {
       error: notificationResult.errorMessage || null,
     });
 
-    const persistedMessageStatus = smsDispatched ? "SENT" : "FAILED";
-    const uiSmsStatus = smsDispatched ? "sent" : "failed";
+    const persistedMessageStatus = smsDispatched
+      ? "SENT"
+      : smsQueued
+        ? "QUEUED"
+        : "FAILED";
+    const uiSmsStatus = smsDispatched ? "sent" : smsQueued ? "pending" : "failed";
 
     await prisma.$transaction(async (tx) => {
       await tx.preorder.update({
@@ -947,7 +957,9 @@ async function notifySms(req, res) {
           action: "PAYMENT_PENDING",
           note: smsDispatched
             ? "SMS renvoyé"
-            : "Échec du renvoi SMS",
+            : smsQueued
+              ? "SMS ajouté à la file d'envoi"
+              : "Échec du renvoi SMS",
           meta: {
             smsTo,
             smsStatus: uiSmsStatus,

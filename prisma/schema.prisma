@@ -302,6 +302,12 @@ model OrderMessage {
   errorCode    String?
   errorMessage String? @db.Text
 
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(4)
+  nextAttemptAt     DateTime?
+  lastAttemptAt     DateTime?
+  processingStartedAt DateTime?
+
   createdBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -310,6 +316,7 @@ model OrderMessage {
 
   @@index([preorderId, createdAt])
   @@index([status])
+  @@index([channel, status, nextAttemptAt])
   @@index([provider, providerMessageId])
 }
 
