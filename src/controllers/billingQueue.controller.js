@@ -65,31 +65,24 @@ async function releaseWork(req, res) {
       countryId,
       reason,
     });
-    const autoAssignment = await billingQueueService.autoAssignQueuedPreorder({
-      preorderId: id,
-      countryId,
-      actorAdminId: userId,
-      excludeUserIds: [userId],
-    });
-    const effectivePreorder = autoAssignment?.ok ? autoAssignment.preorder : result;
 
     publishRealtimeEvent({
       countryId,
       eventKey: "billing_queue_new",
       orderId: id,
       meta: {
-        billingWorkStatus: effectivePreorder?.billingWorkStatus || "RELEASED",
-        assignedInvoicerId: effectivePreorder?.assignedInvoicerId || null,
-        autoAssigned: Boolean(autoAssignment?.ok),
+        billingWorkStatus: result?.billingWorkStatus || "RELEASED",
+        assignedInvoicerId: result?.assignedInvoicerId || null,
+        autoAssigned: false,
       },
     });
 
     return res.json({
       ...result,
-      reassigned: Boolean(autoAssignment?.ok),
-      reassignedTo: effectivePreorder?.assignedInvoicer || null,
-      billingWorkStatus: effectivePreorder?.billingWorkStatus || result?.billingWorkStatus,
-      assignedInvoicerId: effectivePreorder?.assignedInvoicerId || null,
+      reassigned: false,
+      reassignedTo: null,
+      billingWorkStatus: result?.billingWorkStatus || "RELEASED",
+      assignedInvoicerId: result?.assignedInvoicerId || null,
     });
   } catch (e) {
     console.error("releaseWork error:", e);
