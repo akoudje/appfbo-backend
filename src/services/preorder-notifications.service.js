@@ -731,6 +731,7 @@ async function persistNotificationResult({
   channel,
   purpose,
   toPhone = null,
+  toEmail = null,
   message,
   paymentLinkTarget = null,
   paymentLinkTracked = null,
@@ -776,8 +777,8 @@ async function persistNotificationResult({
       status: finalMessageStatus,
       rawPayload: sendResult.rawPayload || null,
       note: sendResult.accepted
-        ? `Notification ${channel} envoyée.`
-        : `Échec de la notification ${channel}.`,
+        ? `Notification ${channel} envoyée${channel === "EMAIL" && toEmail ? ` à ${toEmail}` : channel !== "EMAIL" && toPhone ? ` à ${toPhone}` : ""}.`
+        : `Échec de la notification ${channel}${channel === "EMAIL" && toEmail ? ` à ${toEmail}` : channel !== "EMAIL" && toPhone ? ` à ${toPhone}` : ""}.`,
     },
   });
 
@@ -828,7 +829,7 @@ async function queueSmsNotification({
     data: {
       orderMessageId: queuedMessage.id,
       status: "QUEUED",
-      note: "Notification SMS ajoutée à la file d'envoi.",
+      note: `Notification SMS ajoutée à la file d'envoi pour ${toPhone || "destinataire inconnu"}.`,
     },
   });
 
@@ -946,6 +947,7 @@ async function sendPreorderNotification({
   paymentLinkTarget = null,
   paymentLinkTracked = null,
   maxSmsRetries = 2,
+  forceChannel = null,
 }) {
   if (!preorder?.id || !message) {
     return { sent: false, skipped: true, reason: "INVALID_NOTIFICATION" };
@@ -997,12 +999,13 @@ async function sendPreorderNotification({
   const resolvedEmailHtml = configuredTemplates.emailHtml;
 
   const smsAllowed = shouldSendSmsForPurpose(purpose);
+  const forcedChannel = String(forceChannel || "").trim().toUpperCase();
   const channels = [];
 
   if (smsAllowed) {
     if (resolvedPhone) {
       channels.push({ channel: "SMS", to: resolvedPhone });
-    } else if (resolvedWhatsapp) {
+    } else if (!forcedChannel && resolvedWhatsapp) {
       channels.push({ channel: "WHATSAPP", to: resolvedWhatsapp });
     }
   }
@@ -1015,13 +1018,20 @@ async function sendPreorderNotification({
     return { sent: false, skipped: true, reason: "NO_DESTINATION" };
   }
 
-  if (channels.length === 0) {
+  const effectiveChannels = forcedChannel
+    ? channels.filter((item) => item.channel === forcedChannel)
+    : channels;
+
+  if (effectiveChannels.length === 0) {
     return {
       sent: false,
       skipped: true,
-      reason: "CHANNEL_DISABLED_FOR_PURPOSE",
+      reason: forcedChannel
+        ? "FORCED_CHANNEL_UNAVAILABLE"
+        : "CHANNEL_DISABLED_FOR_PURPOSE",
       attempts: [],
       smsSent: false,
+      smsQueued: false,
       whatsappSent: false,
       emailSent: false,
     };
@@ -1033,7 +1043,7 @@ async function sendPreorderNotification({
     process.env.NOTIFICATION_DEDUP_WINDOW_SECONDS || "60",
     10,
   );
-  for (const item of channels) {
+  for (const item of effectiveChannels) {
     if (!item.to) continue;
 
     const messageToSend =
@@ -1125,6 +1135,7 @@ async function sendPreorderNotification({
       channel: item.channel,
       purpose: persistedPurpose,
       toPhone: item.channel === "EMAIL" ? null : item.to,
+      toEmail: item.channel === "EMAIL" ? item.to : null,
       message: messageToSend,
       paymentLinkTarget,
       paymentLinkTracked,

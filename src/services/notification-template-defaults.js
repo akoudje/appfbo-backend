@@ -4,7 +4,7 @@ function readPositiveInt(value, fallback) {
 }
 
 function getPaymentExpiryHours() {
-  return readPositiveInt(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS, 3);
+  return readPositiveInt(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS, 2);
 }
 
 function buildDefaultNotificationTemplates() {
@@ -92,7 +92,7 @@ function buildDefaultNotificationTemplates() {
       },
     },
     meta: {
-      version: "2026-04-payment-window-3h",
+      version: "2026-04-payment-window-2h",
       paymentExpiryHours: expiryHours,
     },
   };

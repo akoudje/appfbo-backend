@@ -1139,6 +1139,7 @@ async function replaceBillingOrderItem(req, res) {
 async function resendInvoiceSms(req, res) {
   try {
     const { id } = req.params;
+    const requestedChannel = String(req.body?.channel || "").trim().toUpperCase();
 
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
@@ -1208,10 +1209,16 @@ async function resendInvoiceSms(req, res) {
       });
     }
 
-    if (!destination) {
+    if (!destination && requestedChannel !== "EMAIL") {
       return res.status(400).json({
         message:
           "Aucun numéro destinataire disponible pour renvoyer le SMS.",
+      });
+    }
+
+    if (requestedChannel === "EMAIL" && !String(order.fboEmail || "").trim()) {
+      return res.status(400).json({
+        message: "Aucune adresse email client disponible pour renvoyer le lien.",
       });
     }
 
@@ -1238,6 +1245,7 @@ async function resendInvoiceSms(req, res) {
       actorName,
       paymentLinkTarget: latestMessage?.paymentLinkTarget || paymentLink || null,
       paymentLinkTracked: latestMessage?.paymentLinkTracked || paymentLink || null,
+      forceChannel: ["SMS", "EMAIL"].includes(requestedChannel) ? requestedChannel : null,
     });
     const smsDispatched = Boolean(sendResult?.smsSent);
     const smsQueued = Boolean(sendResult?.smsQueued);
@@ -1258,9 +1266,14 @@ async function resendInvoiceSms(req, res) {
         tx,
         order.id,
         "WAIT_CUSTOMER_DATA",
-        "Notification de facture renvoyée au client",
+        requestedChannel === "EMAIL"
+          ? "Notification de facture renvoyée par email"
+          : requestedChannel === "SMS"
+            ? "Notification de facture renvoyée par SMS"
+            : "Notification de facture renvoyée au client",
         {
           toPhone: destination,
+          toEmail: sendResult?.toEmail || order.fboEmail || null,
           sent: Boolean(sendResult?.sent),
           channel: sendResult?.channel || null,
           attempts: sendResult?.attempts || [],
@@ -1276,6 +1289,7 @@ async function resendInvoiceSms(req, res) {
     return res.json({
       ok: true,
       sent: Boolean(sendResult?.sent),
+      queued: Boolean(sendResult?.smsQueued),
       toPhone: destination,
       toEmail: sendResult?.toEmail || null,
       channel: sendResult?.channel || null,

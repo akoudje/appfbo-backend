@@ -135,10 +135,10 @@ function compactText(value = "") {
 
 function getPaymentExpiryHours() {
   const parsed = Number.parseInt(
-    String(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS || "3"),
+    String(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS || "2"),
     10,
   );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2;
 }
 
 function buildPaymentCollectionCode(preorder = {}) {
