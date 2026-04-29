@@ -828,23 +828,15 @@ async function submit(req, res) {
       });
     });
 
-    const autoAssignment = await billingQueueService.autoAssignQueuedPreorder({
-      preorderId,
-      countryId: preorder.countryId || req.countryId,
-    });
-    const effectivePreorder = autoAssignment?.ok ? autoAssignment.preorder : null;
-    const effectiveBillingWorkStatus =
-      effectivePreorder?.billingWorkStatus || "QUEUED";
-
     publishRealtimeEvent({
       countryId: preorder.countryId || req.countryId,
       eventKey: "billing_queue_new",
       orderId: preorderId,
       meta: {
         status: "SUBMITTED",
-        billingWorkStatus: effectiveBillingWorkStatus,
-        assignedInvoicerId: effectivePreorder?.assignedInvoicerId || null,
-        autoAssigned: Boolean(autoAssignment?.ok),
+        billingWorkStatus: "QUEUED",
+        assignedInvoicerId: null,
+        autoAssigned: false,
       },
     });
 
@@ -853,8 +845,8 @@ async function submit(req, res) {
       preorderNumber:
         summary?.preorder?.preorderNumber || preorder.preorderNumber,
       status: "SUBMITTED",
-      billingWorkStatus: effectiveBillingWorkStatus,
-      assignedInvoicerId: effectivePreorder?.assignedInvoicerId || null,
+      billingWorkStatus: "QUEUED",
+      assignedInvoicerId: null,
       totals: summary.totals,
       smsTo,
       smsStatus: uiSmsStatus,
