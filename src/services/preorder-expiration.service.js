@@ -23,17 +23,39 @@ function parsePositiveInt(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function getExpiryHours() {
+function getDefaultExpiryHours() {
   return Math.max(
     1,
     parsePositiveInt(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS, 2),
   );
 }
 
-function getReminderDelayHours() {
-  const expiryHours = getExpiryHours();
+function getEffectiveExpiryHours(settings = null) {
+  const fallback = getDefaultExpiryHours();
+  const parsed = Number.parseInt(
+    String(settings?.preinvoicedAutoCancelAfterHours ?? ""),
+    10,
+  );
+  return Math.max(1, Number.isFinite(parsed) ? parsed : fallback);
+}
+
+function getDefaultReminderDelayHours() {
+  const expiryHours = getDefaultExpiryHours();
   return Math.min(
     Math.max(1, parsePositiveInt(process.env.PREINVOICED_AUTO_REMINDER_AFTER_HOURS, 1)),
+    Math.max(1, expiryHours - 1),
+  );
+}
+
+function getEffectiveReminderDelayHours(settings = null) {
+  const expiryHours = getEffectiveExpiryHours(settings);
+  const fallback = getDefaultReminderDelayHours();
+  const parsed = Number.parseInt(
+    String(settings?.preinvoicedAutoReminderAfterHours ?? ""),
+    10,
+  );
+  return Math.min(
+    Math.max(1, Number.isFinite(parsed) ? parsed : fallback),
     Math.max(1, expiryHours - 1),
   );
 }
@@ -51,10 +73,12 @@ function getAutoCancelRunnerMode() {
     .toLowerCase();
 }
 
-function buildInvoiceExpiryAt(invoicedAt) {
+function buildInvoiceExpiryAt(invoicedAt, settings = null) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
-  return new Date(baseTime.getTime() + getExpiryHours() * 60 * 60 * 1000);
+  return new Date(
+    baseTime.getTime() + getEffectiveExpiryHours(settings) * 60 * 60 * 1000,
+  );
 }
 
 function formatFcfa(value) {
@@ -63,19 +87,24 @@ function formatFcfa(value) {
   return `${new Intl.NumberFormat("fr-FR").format(Math.max(0, Math.round(num)))} FCFA`;
 }
 
-function buildReminderCutoffAt(invoicedAt) {
+function buildReminderCutoffAt(invoicedAt, settings = null) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
-  return new Date(baseTime.getTime() + getReminderDelayHours() * 60 * 60 * 1000);
+  return new Date(
+    baseTime.getTime() + getEffectiveReminderDelayHours(settings) * 60 * 60 * 1000,
+  );
 }
 
-function buildPaymentReminderMessage(preorder, paymentLink = null) {
+function buildPaymentReminderMessage(preorder, paymentLink = null, settings = null) {
   const normalizedLink = String(paymentLink || "").trim();
   const collectionCode = compactText(
     preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-",
   );
   const amountFmt = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
-  const remainingHours = Math.max(1, getExpiryHours() - getReminderDelayHours());
+  const remainingHours = Math.max(
+    1,
+    getEffectiveExpiryHours(settings) - getEffectiveReminderDelayHours(settings),
+  );
   const paymentMode = String(
     preorder?.preorderPaymentMode || preorder?.paymentMode || preorder?.paymentProvider || "",
   )
@@ -116,7 +145,7 @@ function buildPaymentReminderMessage(preorder, paymentLink = null) {
   );
 }
 
-function buildAutoCancelMessage(preorder) {
+function buildAutoCancelMessage(preorder, settings = null) {
   const customer = compactText(preorder?.fboNomComplet || "Client");
   const preorderNumber = compactText(
     preorder?.preorderNumber || preorder?.paymentCollectionCode || preorder?.id || "-",
@@ -124,7 +153,7 @@ function buildAutoCancelMessage(preorder) {
 
   return prependNotificationPrefix(preorder, compactText(`
     Bonjour ${customer}, votre precommande ${preorderNumber} a ete annulee
-    faute de paiement confirme dans le delai maximal de ${getExpiryHours()}H apres
+    faute de paiement confirme dans le delai maximal de ${getEffectiveExpiryHours(settings)}H apres
     prefacturation. Vous pouvez lancer une nouvelle precommande si besoin.
   `));
 }
@@ -139,6 +168,12 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
         select: {
           id: true,
           code: true,
+          settings: {
+            select: {
+              preinvoicedAutoCancelAfterHours: true,
+              preinvoicedAutoReminderAfterHours: true,
+            },
+          },
         },
       },
     },
@@ -164,13 +199,14 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
   ) {
     return { ok: false, reason: "BANK_PROOF_ALREADY_SUBMITTED", preorder: order };
   }
-  const expiryAt = buildInvoiceExpiryAt(order.invoicedAt);
+  const countrySettings = order.country?.settings || null;
+  const expiryAt = buildInvoiceExpiryAt(order.invoicedAt, countrySettings);
   if (!expiryAt || now.getTime() < expiryAt.getTime()) {
     return { ok: false, reason: "PAYMENT_WINDOW_NOT_EXPIRED", preorder: order };
   }
 
   const cancelReason =
-    `Précommande préfacturée annulée automatiquement après ${getExpiryHours()}H sans paiement confirmé.`;
+    `Précommande préfacturée annulée automatiquement après ${getEffectiveExpiryHours(countrySettings)}H sans paiement confirmé.`;
 
   const updated = await prisma.$transaction(async (tx) => {
     const current = await tx.preorder.findUnique({
@@ -204,7 +240,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     ) {
       return null;
     }
-    const currentExpiryAt = buildInvoiceExpiryAt(current.invoicedAt);
+    const currentExpiryAt = buildInvoiceExpiryAt(current.invoicedAt, countrySettings);
     if (!currentExpiryAt || now.getTime() < currentExpiryAt.getTime()) {
       return null;
     }
@@ -282,7 +318,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
           toStatus: "CANCELLED",
           stockRollback: mustRollbackStock,
           mode: "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW",
-          expiryHours: getExpiryHours(),
+          expiryHours: getEffectiveExpiryHours(countrySettings),
           invoicedAt: current.invoicedAt ? new Date(current.invoicedAt).toISOString() : null,
           expiredAt: currentExpiryAt.toISOString(),
         },
@@ -307,7 +343,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
       message: buildAutoCancelMessage({
         ...order,
         ...updated,
-      }),
+      }, countrySettings),
       actorName: "SYSTEM_AUTO_CANCEL_EXPIRY_WINDOW",
     });
   } catch (error) {
@@ -332,16 +368,12 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
 }
 
 async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } = {}) {
-  const reminderHours = getReminderDelayHours();
-  const reminderCutoff = new Date(now.getTime() - reminderHours * 60 * 60 * 1000);
-  const expiryCutoff = new Date(now.getTime() - getExpiryHours() * 60 * 60 * 1000);
-
   const candidates = await prisma.preorder.findMany({
     where: {
       status: { in: ["INVOICED", "PAYMENT_PENDING"] },
       paymentStatus: { not: "PAID" },
       cancelledAt: null,
-      invoicedAt: { not: null, lte: reminderCutoff, gt: expiryCutoff },
+      invoicedAt: { not: null },
       NOT: {
         AND: [
           { preorderPaymentMode: "BANK_TRANSFER" },
@@ -359,12 +391,29 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
       paymentCollectionCode: true,
       countryId: true,
       fboNomComplet: true,
+      country: {
+        select: {
+          settings: {
+            select: {
+              preinvoicedAutoCancelAfterHours: true,
+              preinvoicedAutoReminderAfterHours: true,
+            },
+          },
+        },
+      },
     },
     orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
   });
 
   const due = [];
   for (const candidate of candidates) {
+    const countrySettings = candidate.country?.settings || null;
+    const reminderAt = buildReminderCutoffAt(candidate.invoicedAt, countrySettings);
+    const expiryAt = buildInvoiceExpiryAt(candidate.invoicedAt, countrySettings);
+    if (!reminderAt || !expiryAt) continue;
+    if (now.getTime() < reminderAt.getTime()) continue;
+    if (now.getTime() >= expiryAt.getTime()) continue;
+
     const existingReminder = await prisma.preorderLog.findFirst({
       where: {
         preorderId: candidate.id,
@@ -391,11 +440,11 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
     return {
       ok: true,
       dryRun: true,
-      reminderHours,
       remindersDueCount: due.length,
       remindersDue: due.map((row) => ({
         id: row.id,
         preorderNumber: row.preorderNumber,
+        reminderHours: getEffectiveReminderDelayHours(row.country?.settings || null),
       })),
     };
   }
@@ -417,7 +466,12 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
     const paymentLink = String(
       latestMessage?.paymentLinkTracked || latestMessage?.paymentLinkTarget || "",
     ).trim();
-    const reminderMessage = buildPaymentReminderMessage(candidate, paymentLink);
+    const countrySettings = candidate.country?.settings || null;
+    const reminderMessage = buildPaymentReminderMessage(
+      candidate,
+      paymentLink,
+      countrySettings,
+    );
 
     try {
       const notificationResult = await sendPreorderNotification({
@@ -437,7 +491,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
           actorAdminId: null,
           meta: {
             mode: "AUTO_REMINDER_BEFORE_EXPIRY",
-            reminderHours,
+            reminderHours: getEffectiveReminderDelayHours(countrySettings),
             smsSent: Boolean(notificationResult?.smsSent),
             smsQueued: Boolean(notificationResult?.smsQueued),
             notificationChannel: notificationResult?.channel || null,
@@ -468,14 +522,12 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
 }
 
 async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false } = {}) {
-  const expiryHours = getExpiryHours();
-  const expiryCutoff = new Date(now.getTime() - expiryHours * 60 * 60 * 1000);
   const candidates = await prisma.preorder.findMany({
     where: {
       status: { in: ["INVOICED", "PAYMENT_PENDING"] },
       paymentStatus: { not: "PAID" },
       cancelledAt: null,
-      invoicedAt: { not: null, lte: expiryCutoff },
+      invoicedAt: { not: null },
       OR: [
         { lastWhatsappStatus: null },
         { lastWhatsappStatus: { not: "FAILED" } },
@@ -495,24 +547,43 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
       paymentStatus: true,
       preorderPaymentMode: true,
       bankPaymentStatus: true,
+      country: {
+        select: {
+          settings: {
+            select: {
+              preinvoicedAutoCancelAfterHours: true,
+              preinvoicedAutoReminderAfterHours: true,
+            },
+          },
+        },
+      },
     },
     orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
+  });
+
+  const dueCandidates = candidates.filter((candidate) => {
+    const expiryAt = buildInvoiceExpiryAt(
+      candidate.invoicedAt,
+      candidate.country?.settings || null,
+    );
+    return expiryAt && now.getTime() >= expiryAt.getTime();
   });
 
   if (dryRun) {
     return {
       ok: true,
       dryRun: true,
-      expiryHours,
-      expiresBefore: expiryCutoff.toISOString(),
       checkedAt: now.toISOString(),
-      cancelledCount: candidates.length,
-      cancelled: candidates,
+      cancelledCount: dueCandidates.length,
+      cancelled: dueCandidates.map((candidate) => ({
+        ...candidate,
+        expiryHours: getEffectiveExpiryHours(candidate.country?.settings || null),
+      })),
     };
   }
 
   const cancelled = [];
-  for (const candidate of candidates) {
+  for (const candidate of dueCandidates) {
     const result = await cancelPreorderAsExpiredUnpaid({
       preorderId: candidate.id,
       now,
@@ -528,8 +599,6 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
   return {
     ok: true,
     dryRun: false,
-    expiryHours,
-    expiresBefore: expiryCutoff.toISOString(),
     checkedAt: now.toISOString(),
     cancelledCount: cancelled.length,
     cancelled,
@@ -587,7 +656,7 @@ module.exports = {
   buildPaymentReminderMessage,
   cancelPreorderAsExpiredUnpaid,
   cancelExpiredInvoicedPreorders,
-  getReminderDelayHours,
+  getEffectiveReminderDelayHours,
   getAutoCancelRunnerMode,
   sendReminderForDuePreorders,
   startExpiredInvoiceAutoCancelScheduler,

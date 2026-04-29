@@ -415,6 +415,8 @@ model CountrySettings {
   // Paramètres opérationnels facturation
   maxActiveBillingPerInvoicer Int @default(5)
   billingClaimTimeoutMin      Int @default(15)
+  preinvoicedAutoCancelAfterHours Int @default(2)
+  preinvoicedAutoReminderAfterHours Int @default(1)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -40,6 +40,8 @@ async function getCountrySettings(req, res) {
         notificationTemplates: true,
         maxActiveBillingPerInvoicer: true,
         billingClaimTimeoutMin: true,
+        preinvoicedAutoCancelAfterHours: true,
+        preinvoicedAutoReminderAfterHours: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -81,6 +83,8 @@ async function getCountrySettings(req, res) {
         notificationTemplates: null,
         maxActiveBillingPerInvoicer: 5,
         billingClaimTimeoutMin: 15,
+        preinvoicedAutoCancelAfterHours: 2,
+        preinvoicedAutoReminderAfterHours: 1,
         createdAt: null,
         updatedAt: null,
       });
@@ -100,6 +104,13 @@ async function getCountrySettings(req, res) {
 async function updateCountrySettings(req, res) {
   try {
     const countryId = pickCountryId(req);
+    const existingSettings = await prisma.countrySettings.findUnique({
+      where: { countryId },
+      select: {
+        preinvoicedAutoCancelAfterHours: true,
+        preinvoicedAutoReminderAfterHours: true,
+      },
+    });
     const {
       minCartFcfa,
       maxQtyPerProduct,
@@ -132,6 +143,8 @@ async function updateCountrySettings(req, res) {
       notificationTemplates,
       maxActiveBillingPerInvoicer,
       billingClaimTimeoutMin,
+      preinvoicedAutoCancelAfterHours,
+      preinvoicedAutoReminderAfterHours,
     } = req.body || {};
 
     const data = {};
@@ -180,6 +193,44 @@ async function updateCountrySettings(req, res) {
         });
       }
       data.billingClaimTimeoutMin = parsed;
+    }
+
+    if (preinvoicedAutoCancelAfterHours !== undefined) {
+      const parsed = Number.parseInt(preinvoicedAutoCancelAfterHours, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 720) {
+        return res.status(400).json({
+          message: "preinvoicedAutoCancelAfterHours invalide",
+        });
+      }
+      data.preinvoicedAutoCancelAfterHours = parsed;
+    }
+
+    if (preinvoicedAutoReminderAfterHours !== undefined) {
+      const parsed = Number.parseInt(preinvoicedAutoReminderAfterHours, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 719) {
+        return res.status(400).json({
+          message: "preinvoicedAutoReminderAfterHours invalide",
+        });
+      }
+      data.preinvoicedAutoReminderAfterHours = parsed;
+    }
+
+    const effectiveCancelHours =
+      data.preinvoicedAutoCancelAfterHours !== undefined
+        ? data.preinvoicedAutoCancelAfterHours
+        : existingSettings?.preinvoicedAutoCancelAfterHours ?? 2;
+    const effectiveReminderHours =
+      data.preinvoicedAutoReminderAfterHours !== undefined
+        ? data.preinvoicedAutoReminderAfterHours
+        : existingSettings?.preinvoicedAutoReminderAfterHours ?? 1;
+
+    if (
+      effectiveReminderHours >= effectiveCancelHours
+    ) {
+      return res.status(400).json({
+        message:
+          "Le délai de rappel doit être strictement inférieur au délai d'annulation.",
+      });
     }
 
     if (bankPaymentDueHours !== undefined) {
@@ -331,10 +382,18 @@ async function updateCountrySettings(req, res) {
             data.maxActiveBillingPerInvoicer !== undefined
             ? data.maxActiveBillingPerInvoicer
             : 5,
-        billingClaimTimeoutMin:
-          data.billingClaimTimeoutMin !== undefined
-            ? data.billingClaimTimeoutMin
-            : 15,
+          billingClaimTimeoutMin:
+            data.billingClaimTimeoutMin !== undefined
+              ? data.billingClaimTimeoutMin
+              : 15,
+          preinvoicedAutoCancelAfterHours:
+            data.preinvoicedAutoCancelAfterHours !== undefined
+              ? data.preinvoicedAutoCancelAfterHours
+              : 2,
+          preinvoicedAutoReminderAfterHours:
+            data.preinvoicedAutoReminderAfterHours !== undefined
+              ? data.preinvoicedAutoReminderAfterHours
+              : 1,
       },
       select: {
         id: true,
@@ -370,6 +429,8 @@ async function updateCountrySettings(req, res) {
         notificationTemplates: true,
         maxActiveBillingPerInvoicer: true,
         billingClaimTimeoutMin: true,
+        preinvoicedAutoCancelAfterHours: true,
+        preinvoicedAutoReminderAfterHours: true,
         createdAt: true,
         updatedAt: true,
       },
