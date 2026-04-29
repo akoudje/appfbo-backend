@@ -204,6 +204,8 @@ async function listOrders(req, res) {
       preorderPaymentMode,
       billingWorkStatus,
       billingPriority,
+      as400Reference,
+      as400Amount,
       assignedOnly,
       assignedToMe,
       invoicerId,
@@ -237,6 +239,18 @@ async function listOrders(req, res) {
     if (preorderPaymentMode) where.preorderPaymentMode = String(preorderPaymentMode).trim().toUpperCase();
     if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
     if (billingPriority) where.billingPriority = String(billingPriority).trim().toUpperCase();
+    if (as400Reference && String(as400Reference).trim()) {
+      where.factureReference = {
+        contains: String(as400Reference).trim(),
+        mode: "insensitive",
+      };
+    }
+    if (as400Amount !== undefined && as400Amount !== null && String(as400Amount).trim() !== "") {
+      const parsedAs400Amount = Number(String(as400Amount).replace(/[^\d.-]/g, ""));
+      if (!Number.isNaN(parsedAs400Amount)) {
+        where.as400InvoiceTotalFcfa = Math.round(parsedAs400Amount);
+      }
+    }
 
     if (String(assignedToMe) === "true") {
       where.assignedInvoicerId = req.user?.id || "__no_user__";
