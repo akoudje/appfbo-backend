@@ -515,7 +515,6 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
   return {
     ok: true,
     dryRun: false,
-    reminderHours,
     remindersSentCount: reminded.length,
     reminded,
   };
