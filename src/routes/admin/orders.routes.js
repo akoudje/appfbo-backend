@@ -6,6 +6,11 @@ const ordersController = require("../../controllers/admin/orders.controller");
 const router = express.Router();
 
 router.get("/", requirePermission(Permission.PREORDER_READ), ordersController.listOrders);
+router.get(
+  "/submitted-export",
+  requirePermission(Permission.EXPORT_READ),
+  ordersController.getSubmittedOrdersExport,
+);
 router.get("/:id/messages", requirePermission(Permission.PREORDER_READ), ordersController.listOrderMessages);
 router.get(
   "/:id/bank-proofs/:proofId/file",

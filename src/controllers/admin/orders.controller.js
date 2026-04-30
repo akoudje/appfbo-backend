@@ -191,6 +191,115 @@ function createSimplePdf(lines = []) {
   return Buffer.from(pdf, "utf8");
 }
 
+function buildOrdersListWhere(req, overrides = {}) {
+  const {
+    status,
+    q,
+    dateFrom,
+    dateTo,
+    paymentStatus,
+    preorderPaymentMode,
+    billingWorkStatus,
+    billingPriority,
+    as400Reference,
+    as400Amount,
+    assignedOnly,
+    assignedToMe,
+    invoicerId,
+  } = req.query;
+
+  const where = scopeWhere(req);
+  const includeDrafts = String(req.query.includeDrafts) === "true";
+  const includeCancelled = String(req.query.includeCancelled) === "true";
+
+  if (!status && !overrides.status) {
+    const excludedStatuses = [];
+    if (!includeDrafts) excludedStatuses.push("DRAFT");
+    if (!includeCancelled) excludedStatuses.push("CANCELLED");
+
+    if (excludedStatuses.length === 1) {
+      where.status = { not: excludedStatuses[0] };
+    } else if (excludedStatuses.length > 1) {
+      where.status = { notIn: excludedStatuses };
+    }
+  }
+
+  if (status) where.status = status;
+  if (paymentStatus) where.paymentStatus = paymentStatus;
+  if (preorderPaymentMode) {
+    where.preorderPaymentMode = String(preorderPaymentMode).trim().toUpperCase();
+  }
+  if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
+  if (billingPriority) {
+    where.billingPriority = String(billingPriority).trim().toUpperCase();
+  }
+  if (as400Reference && String(as400Reference).trim()) {
+    where.factureReference = {
+      contains: String(as400Reference).trim(),
+      mode: "insensitive",
+    };
+  }
+  if (
+    as400Amount !== undefined &&
+    as400Amount !== null &&
+    String(as400Amount).trim() !== ""
+  ) {
+    const parsedAs400Amount = Number(String(as400Amount).replace(/[^\d.-]/g, ""));
+    if (!Number.isNaN(parsedAs400Amount)) {
+      where.as400InvoiceTotalFcfa = Math.round(parsedAs400Amount);
+    }
+  }
+
+  if (String(assignedToMe) === "true") {
+    where.assignedInvoicerId = req.user?.id || "__no_user__";
+  } else if (String(assignedOnly) === "true") {
+    where.assignedInvoicerId = { not: null };
+  }
+
+  if (invoicerId && String(invoicerId).trim()) {
+    where.assignedInvoicerId = String(invoicerId).trim();
+  }
+
+  if (q && String(q).trim()) {
+    const qs = String(q).trim();
+    where.OR = [
+      { fboNumero: { contains: qs, mode: "insensitive" } },
+      { fboNomComplet: { contains: qs, mode: "insensitive" } },
+      { factureReference: { contains: qs, mode: "insensitive" } },
+      { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
+      { preorderNumber: { contains: qs, mode: "insensitive" } },
+      { parcelNumber: { contains: qs, mode: "insensitive" } },
+      {
+        activePayment: {
+          attempts: {
+            some: {
+              providerPayerPhone: { contains: qs, mode: "insensitive" },
+            },
+          },
+        },
+      },
+      {
+        cashierTransactions: {
+          some: {
+            receiptNumber: { contains: qs, mode: "insensitive" },
+          },
+        },
+      },
+    ];
+  }
+
+  const from = dateFrom ? normalizeDateStart(String(dateFrom)) : null;
+  const to = dateTo ? normalizeDateEnd(String(dateTo)) : null;
+
+  if (from || to) {
+    where.createdAt = {};
+    if (from) where.createdAt.gte = from;
+    if (to) where.createdAt.lte = to;
+  }
+
+  return { ...where, ...overrides };
+}
+
 async function listOrders(req, res) {
   try {
     const {
@@ -218,86 +327,7 @@ async function listOrders(req, res) {
     );
     const skip = (page - 1) * pageSize;
 
-    const where = scopeWhere(req);
-    const includeDrafts = String(req.query.includeDrafts) === "true";
-    const includeCancelled = String(req.query.includeCancelled) === "true";
-
-    if (!status) {
-      const excludedStatuses = [];
-      if (!includeDrafts) excludedStatuses.push("DRAFT");
-      if (!includeCancelled) excludedStatuses.push("CANCELLED");
-
-      if (excludedStatuses.length === 1) {
-        where.status = { not: excludedStatuses[0] };
-      } else if (excludedStatuses.length > 1) {
-        where.status = { notIn: excludedStatuses };
-      }
-    }
-
-    if (status) where.status = status;
-    if (paymentStatus) where.paymentStatus = paymentStatus;
-    if (preorderPaymentMode) where.preorderPaymentMode = String(preorderPaymentMode).trim().toUpperCase();
-    if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
-    if (billingPriority) where.billingPriority = String(billingPriority).trim().toUpperCase();
-    if (as400Reference && String(as400Reference).trim()) {
-      where.factureReference = {
-        contains: String(as400Reference).trim(),
-        mode: "insensitive",
-      };
-    }
-    if (as400Amount !== undefined && as400Amount !== null && String(as400Amount).trim() !== "") {
-      const parsedAs400Amount = Number(String(as400Amount).replace(/[^\d.-]/g, ""));
-      if (!Number.isNaN(parsedAs400Amount)) {
-        where.as400InvoiceTotalFcfa = Math.round(parsedAs400Amount);
-      }
-    }
-
-    if (String(assignedToMe) === "true") {
-      where.assignedInvoicerId = req.user?.id || "__no_user__";
-    } else if (String(assignedOnly) === "true") {
-      where.assignedInvoicerId = { not: null };
-    }
-
-    if (invoicerId && String(invoicerId).trim()) {
-      where.assignedInvoicerId = String(invoicerId).trim();
-    }
-
-    if (q && String(q).trim()) {
-      const qs = String(q).trim();
-      where.OR = [
-        { fboNumero: { contains: qs, mode: "insensitive" } },
-        { fboNomComplet: { contains: qs, mode: "insensitive" } },
-        { factureReference: { contains: qs, mode: "insensitive" } },
-        { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
-        { preorderNumber: { contains: qs, mode: "insensitive" } },
-        { parcelNumber: { contains: qs, mode: "insensitive" } },
-        {
-          activePayment: {
-            attempts: {
-              some: {
-                providerPayerPhone: { contains: qs, mode: "insensitive" },
-              },
-            },
-          },
-        },
-        {
-          cashierTransactions: {
-            some: {
-              receiptNumber: { contains: qs, mode: "insensitive" },
-            },
-          },
-        },
-      ];
-    }
-
-    const from = dateFrom ? normalizeDateStart(String(dateFrom)) : null;
-    const to = dateTo ? normalizeDateEnd(String(dateTo)) : null;
-
-    if (from || to) {
-      where.createdAt = {};
-      if (from) where.createdAt.gte = from;
-      if (to) where.createdAt.lte = to;
-    }
+    const where = buildOrdersListWhere(req);
 
     const sortMap = {
       createdAt: "createdAt",
@@ -376,6 +406,67 @@ async function listOrders(req, res) {
   } catch (e) {
     console.error("listOrders error:", e);
     return res.status(500).json({ message: "Erreur serveur (listOrders)" });
+  }
+}
+
+async function getSubmittedOrdersExport(req, res) {
+  try {
+    const where = buildOrdersListWhere(req, { status: "SUBMITTED" });
+
+    const orders = await prisma.preorder.findMany({
+      where,
+      orderBy: [{ createdAt: "asc" }, { preorderNumber: "asc" }],
+      select: {
+        id: true,
+        preorderNumber: true,
+        fboNomComplet: true,
+        fboNumero: true,
+        createdAt: true,
+        items: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            qty: true,
+            productSkuSnapshot: true,
+            productNameSnapshot: true,
+            product: {
+              select: {
+                sku: true,
+                nom: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return res.json({
+      totalCount: orders.length,
+      data: orders.map((order) => ({
+        id: order.id,
+        preorderNumber: order.preorderNumber || "",
+        fboNomComplet: order.fboNomComplet || "",
+        fboNumero: order.fboNumero || "",
+        createdAt: order.createdAt,
+        items: Array.isArray(order.items)
+          ? order.items.map((item) => ({
+              id: item.id,
+              qty: Number(item.qty || 0),
+              sku:
+                item.productSkuSnapshot ||
+                item.product?.sku ||
+                item.productNameSnapshot ||
+                item.product?.nom ||
+                "",
+            }))
+          : [],
+      })),
+    });
+  } catch (e) {
+    console.error("getSubmittedOrdersExport error:", e);
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (getSubmittedOrdersExport)" });
   }
 }
 
@@ -2280,6 +2371,7 @@ async function cancelOrder(req, res) {
 
 module.exports = {
   listOrders,
+  getSubmittedOrdersExport,
   getOrderById,
   listOrderMessages,
   downloadBankProofFile,
