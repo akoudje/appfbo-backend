@@ -1034,6 +1034,45 @@ async function applyWaveMappedStateTx({
   actorAdminId = null,
 }) {
   const now = new Date();
+  const currentPreorder = await tx.preorder.findUnique({
+    where: { id: preorder.id },
+    select: {
+      id: true,
+      status: true,
+      paymentStatus: true,
+      paidAt: true,
+      cancelledAt: true,
+      cancelReason: true,
+      activePaymentId: true,
+      billingWorkStatus: true,
+      billingCompletedAt: true,
+      billingLastActivityAt: true,
+      paymentProvider: true,
+    },
+  });
+  const currentPayment = await tx.payment.findUnique({
+    where: { id: payment.id },
+    select: {
+      id: true,
+      status: true,
+      amountExpectedFcfa: true,
+      amountPaidFcfa: true,
+      paidAt: true,
+      expiredAt: true,
+      cancelledAt: true,
+      failedAt: true,
+      providerReference: true,
+      providerTxnId: true,
+      currencyCode: true,
+    },
+  });
+
+  if (!currentPreorder || !currentPayment) {
+    const err = new Error("Paiement ou commande introuvable pendant la sync Wave");
+    err.statusCode = 404;
+    throw err;
+  }
+
   const metadata = extractWaveProviderMetadata(providerStatusRaw);
   const completedAtDate = metadata.completedAt
     ? new Date(metadata.completedAt)
@@ -1131,25 +1170,25 @@ async function applyWaveMappedStateTx({
 
   const paymentData = {
     status: mapped.paymentStatus,
-    providerReference: metadata.providerSessionId || payment.providerReference,
-    providerTxnId: metadata.providerTransactionId || payment.providerTxnId,
+    providerReference: metadata.providerSessionId || currentPayment.providerReference,
+    providerTxnId: metadata.providerTransactionId || currentPayment.providerTxnId,
   };
 
   if (mapped.markOrderPaid) {
-    paymentData.amountPaidFcfa = payment.amountExpectedFcfa;
-    paymentData.paidAt = payment.paidAt || paidAtValue;
+    paymentData.amountPaidFcfa = currentPayment.amountExpectedFcfa;
+    paymentData.paidAt = currentPayment.paidAt || paidAtValue;
   }
 
   if (mapped.markExpired) {
-    paymentData.expiredAt = payment.expiredAt || now;
+    paymentData.expiredAt = currentPayment.expiredAt || now;
   }
 
   if (mapped.markCancelled) {
-    paymentData.cancelledAt = payment.cancelledAt || now;
+    paymentData.cancelledAt = currentPayment.cancelledAt || now;
   }
 
   if (mapped.markFailed) {
-    paymentData.failedAt = payment.failedAt || now;
+    paymentData.failedAt = currentPayment.failedAt || now;
   }
 
   const updatedPayment = await tx.payment.update({
@@ -1162,12 +1201,27 @@ async function applyWaveMappedStateTx({
     billingLastActivityAt: now,
   };
 
-  if (mapped.markOrderPaid) {
+  const isLatePaidAfterCancel =
+    mapped.markOrderPaid &&
+    String(currentPreorder.status || "").toUpperCase() === "CANCELLED";
+
+  if (mapped.markOrderPaid && !isLatePaidAfterCancel) {
     preorderData.status = "PAID";
-    preorderData.paidAt = preorder.paidAt || paidAtValue;
+    preorderData.paidAt = currentPreorder.paidAt || paidAtValue;
     preorderData.billingWorkStatus = "COMPLETED";
-    preorderData.billingCompletedAt = preorder.billingCompletedAt || now;
+    preorderData.billingCompletedAt = currentPreorder.billingCompletedAt || now;
     preorderData.paymentProvider = "WAVE";
+  }
+
+  if (isLatePaidAfterCancel) {
+    preorderData.status = currentPreorder.status;
+    preorderData.paymentStatus = "PAID";
+    preorderData.paidAt = currentPreorder.paidAt || paidAtValue;
+    preorderData.paymentProvider = "WAVE";
+    preorderData.activePaymentId =
+      currentPreorder.activePaymentId || currentPayment.id;
+    preorderData.billingWorkStatus = "ESCALATED";
+    preorderData.billingCompletedAt = null;
   }
 
   const updatedPreorder = await tx.preorder.update({
@@ -1414,11 +1468,14 @@ async function applyWaveMappedStateTx({
       tx,
       preorder.id,
       "PAYMENT_CONFIRMED",
-      "Paiement confirmé via Wave",
+      isLatePaidAfterCancel
+        ? "Paiement Wave confirme apres annulation automatique - revue manuelle requise"
+        : "Paiement confirmé via Wave",
       {
         paymentProvider: "WAVE",
         paymentStatus: "PAID",
         paymentId: updatedPayment.id,
+        latePaidAfterCancel: isLatePaidAfterCancel,
         simulated: providerStatusRaw?.simulated === true,
       },
       actorAdminId,

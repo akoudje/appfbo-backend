@@ -67,6 +67,13 @@ function getSchedulerEveryMinutes() {
   );
 }
 
+function getWaveFinalizationGraceMinutes() {
+  return Math.max(
+    0,
+    parsePositiveInt(process.env.PREINVOICED_WAVE_FINALIZATION_GRACE_MINUTES, 15),
+  );
+}
+
 function getAutoCancelRunnerMode() {
   return String(process.env.PREINVOICED_AUTO_CANCEL_RUNNER || "embedded")
     .trim()
@@ -205,6 +212,58 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     return { ok: false, reason: "PAYMENT_WINDOW_NOT_EXPIRED", preorder: order };
   }
 
+  const isWavePayment =
+    String(order.preorderPaymentMode || order.paymentProvider || "")
+      .trim()
+      .toUpperCase() === "WAVE" ||
+    String(order.activePayment?.provider || "")
+      .trim()
+      .toUpperCase() === "WAVE";
+  const waveGraceMinutes = getWaveFinalizationGraceMinutes();
+  const waveGraceMs = waveGraceMinutes * 60 * 1000;
+
+  if (
+    isWavePayment &&
+    waveGraceMs > 0 &&
+    now.getTime() < expiryAt.getTime() + waveGraceMs
+  ) {
+    return {
+      ok: false,
+      reason: "WAVE_FINALIZATION_GRACE_WINDOW",
+      preorder: order,
+    };
+  }
+
+  if (isWavePayment && order.country?.id) {
+    try {
+      const { syncWavePaymentStatus } = require("../payments/payments.service");
+      const syncResult = await syncWavePaymentStatus({
+        req: {
+          user: null,
+          countryId: order.country.id,
+          country: { id: order.country.id },
+        },
+        preorderId: order.id,
+      });
+
+      if (
+        String(syncResult?.preorder?.paymentStatus || "").toUpperCase() === "PAID" ||
+        String(syncResult?.payment?.status || "").toUpperCase() === "SUCCEEDED"
+      ) {
+        return {
+          ok: false,
+          reason: "WAVE_PAYMENT_CONFIRMED_DURING_SYNC",
+          preorder: syncResult.preorder || order,
+        };
+      }
+    } catch (error) {
+      console.warn("[preorder-expiration] wave sync before cancel failed", {
+        preorderId: order.id,
+        message: error?.message || String(error),
+      });
+    }
+  }
+
   const cancelReason =
     `Précommande préfacturée annulée automatiquement après ${getEffectiveExpiryHours(countrySettings)}H sans paiement confirmé.`;
 
@@ -242,6 +301,21 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     }
     const currentExpiryAt = buildInvoiceExpiryAt(current.invoicedAt, countrySettings);
     if (!currentExpiryAt || now.getTime() < currentExpiryAt.getTime()) {
+      return null;
+    }
+
+    const currentIsWavePayment =
+      String(current.preorderPaymentMode || current.paymentProvider || "")
+        .trim()
+        .toUpperCase() === "WAVE" ||
+      String(current.activePayment?.provider || "")
+        .trim()
+        .toUpperCase() === "WAVE";
+    if (
+      currentIsWavePayment &&
+      waveGraceMs > 0 &&
+      now.getTime() < currentExpiryAt.getTime() + waveGraceMs
+    ) {
       return null;
     }
 
