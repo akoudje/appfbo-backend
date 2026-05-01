@@ -203,6 +203,7 @@ function buildOrdersListWhere(req, overrides = {}) {
     billingPriority,
     as400Reference,
     as400Amount,
+    lateWaveReview,
     assignedOnly,
     assignedToMe,
     invoicerId,
@@ -248,6 +249,15 @@ function buildOrdersListWhere(req, overrides = {}) {
     if (!Number.isNaN(parsedAs400Amount)) {
       where.as400InvoiceTotalFcfa = Math.round(parsedAs400Amount);
     }
+  }
+  if (String(lateWaveReview) === "true") {
+    where.status = "CANCELLED";
+    where.paymentStatus = "PAID";
+    where.billingWorkStatus = "ESCALATED";
+    where.OR = [
+      { paymentProvider: "WAVE" },
+      { preorderPaymentMode: "WAVE" },
+    ];
   }
 
   if (String(assignedToMe) === "true") {
