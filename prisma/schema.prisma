@@ -386,6 +386,7 @@ model CountrySettings {
   maxQtyPerProduct Int @default(10)
   preorderSubmissionEnabled Boolean @default(true)
   preorderSubmissionDisabledMessage String? @db.Text
+  closedOnSaturday Boolean @default(false)
   supportPhone String?
   pickupAddress String? @db.Text
   enableWave Boolean @default(true)

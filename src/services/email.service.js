@@ -1,6 +1,6 @@
 // src/services/email.service.js
 //
-// Provider SMTP réel (Brevo/SendGrid/SMTP classique) + mode simulation optionnel.
+// Provider SMTP réel (MailerLite/SendGrid/SMTP classique) + mode simulation optionnel.
 
 let nodemailer = null;
 try {

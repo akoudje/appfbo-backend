@@ -18,6 +18,8 @@ const {
   buildOrderFulfilledSmsMessage,
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
+const { normalizePhone } = require("../../services/sms.service");
+const { normalizeEmail } = require("../../services/email.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 
 const {
@@ -129,6 +131,20 @@ function isGlobalAdminRole(role) {
     normalized === AdminRole.SUPER_ADMIN ||
     normalized === AdminRole.TECH_ADMIN
   );
+}
+
+function normalizeOptionalNotificationPhone(value) {
+  if (value === undefined) return undefined;
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return normalizePhone(raw) || "__INVALID_PHONE__";
+}
+
+function normalizeOptionalNotificationEmail(value) {
+  if (value === undefined) return undefined;
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return normalizeEmail(raw) || "__INVALID_EMAIL__";
 }
 
 function toAscii(value) {
@@ -954,6 +970,12 @@ async function getInvoicePreview(req, res) {
       });
     }
 
+    if (e.message === "INVALID_NOTIFICATION_EMAIL") {
+      return res.status(400).json({
+        message: "Adresse email de notification invalide.",
+      });
+    }
+
     console.error("getInvoicePreview error:", e);
     return res.status(500).json({
       message: e.message || "Erreur serveur (getInvoicePreview)",
@@ -974,6 +996,7 @@ async function invoiceOrder(req, res) {
     const {
       factureReference,
       whatsappTo,
+      notificationEmail,
       note,
       fboGrade,
       invoiceAmountFcfa,
@@ -990,6 +1013,7 @@ async function invoiceOrder(req, res) {
       actorAdminId,
       invoiceRefInput: factureReference,
       whatsappToInput: whatsappTo,
+      notificationEmailInput: notificationEmail,
       invoiceNote: note,
       billingGradeInput: fboGrade,
       invoiceAmountOverrideInput: invoiceAmountFcfa,
@@ -1034,6 +1058,12 @@ async function invoiceOrder(req, res) {
     if (e.message === "INVALID_INVOICE_AMOUNT") {
       return res.status(400).json({
         message: "Le montant final de facturation est invalide.",
+      });
+    }
+
+    if (e.message === "INVALID_NOTIFICATION_EMAIL") {
+      return res.status(400).json({
+        message: "Adresse email de notification invalide.",
       });
     }
 
@@ -1251,10 +1281,115 @@ async function replaceBillingOrderItem(req, res) {
   }
 }
 
+async function updateNotificationContacts(req, res) {
+  try {
+    const { id } = req.params;
+    const hasPhone = Object.prototype.hasOwnProperty.call(req.body || {}, "phone");
+    const hasEmail = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
+
+    if (!hasPhone && !hasEmail) {
+      return res.status(400).json({
+        message: "Renseignez au moins un numéro ou un email de notification.",
+      });
+    }
+
+    const phone = normalizeOptionalNotificationPhone(req.body?.phone);
+    const email = normalizeOptionalNotificationEmail(req.body?.email);
+
+    if (phone === "__INVALID_PHONE__") {
+      return res.status(400).json({
+        message: "Numéro de notification invalide.",
+      });
+    }
+
+    if (email === "__INVALID_EMAIL__") {
+      return res.status(400).json({
+        message: "Adresse email de notification invalide.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        status: true,
+        factureWhatsappTo: true,
+        fboEmail: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (["FULFILLED", "CANCELLED"].includes(String(order.status || "").toUpperCase())) {
+      return res.status(400).json({
+        message: "Impossible de modifier les coordonnées sur une commande clôturée.",
+      });
+    }
+
+    const data = {};
+    if (hasPhone) data.factureWhatsappTo = phone;
+    if (hasEmail) data.fboEmail = email;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          ...data,
+          billingLastActivityAt: new Date(),
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "WAIT_CUSTOMER_DATA",
+        "Coordonnées de notification client mises à jour",
+        {
+          previousPhone: order.factureWhatsappTo || null,
+          nextPhone: hasPhone ? phone : order.factureWhatsappTo || null,
+          previousEmail: order.fboEmail || null,
+          nextEmail: hasEmail ? email : order.fboEmail || null,
+        },
+        req.user?.id || null,
+      );
+
+      return saved;
+    });
+
+    return res.json({
+      ok: true,
+      order: updated,
+      factureWhatsappTo: updated.factureWhatsappTo || null,
+      fboEmail: updated.fboEmail || null,
+    });
+  } catch (e) {
+    console.error("updateNotificationContacts error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (updateNotificationContacts)" });
+  }
+}
+
 async function resendInvoiceSms(req, res) {
   try {
     const { id } = req.params;
     const requestedChannel = String(req.body?.channel || "").trim().toUpperCase();
+    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone);
+    const emailOverride = normalizeOptionalNotificationEmail(req.body?.email);
+
+    if (phoneOverride === "__INVALID_PHONE__") {
+      return res.status(400).json({
+        message: "Numéro de notification invalide.",
+      });
+    }
+
+    if (emailOverride === "__INVALID_EMAIL__") {
+      return res.status(400).json({
+        message: "Adresse email de notification invalide.",
+      });
+    }
 
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
@@ -1314,8 +1449,13 @@ async function resendInvoiceSms(req, res) {
       amountToPayFcfa,
     });
     const destination =
+      (phoneOverride !== undefined ? String(phoneOverride || "").trim() : "") ||
       String(order.factureWhatsappTo || "").trim() ||
       String(latestMessage?.toPhone || "").trim();
+    const emailDestination =
+      (emailOverride !== undefined ? emailOverride : null) ||
+      normalizeEmail(order.fboEmail || "") ||
+      null;
 
     if (!smsBody) {
       return res.status(400).json({
@@ -1331,7 +1471,7 @@ async function resendInvoiceSms(req, res) {
       });
     }
 
-    if (requestedChannel === "EMAIL" && !String(order.fboEmail || "").trim()) {
+    if (requestedChannel === "EMAIL" && !emailDestination) {
       return res.status(400).json({
         message: "Aucune adresse email client disponible pour renvoyer le lien.",
       });
@@ -1350,6 +1490,7 @@ async function resendInvoiceSms(req, res) {
       preorder: {
         ...order,
         factureWhatsappTo: destination,
+        fboEmail: emailDestination,
       },
       purpose:
         latestMessage?.purpose === "PAYMENT_LINK" ||
@@ -1361,6 +1502,7 @@ async function resendInvoiceSms(req, res) {
       paymentLinkTarget: latestMessage?.paymentLinkTarget || paymentLink || null,
       paymentLinkTracked: latestMessage?.paymentLinkTracked || paymentLink || null,
       forceChannel: ["SMS", "EMAIL"].includes(requestedChannel) ? requestedChannel : null,
+      toEmail: emailDestination,
     });
     const smsDispatched = Boolean(sendResult?.smsSent);
     const smsQueued = Boolean(sendResult?.smsQueued);
@@ -1370,6 +1512,7 @@ async function resendInvoiceSms(req, res) {
         where: { id: order.id },
         data: {
           factureWhatsappTo: destination,
+          fboEmail: emailDestination,
           whatsappMessage: smsBody,
           lastWhatsappStatus: smsDispatched ? "SENT" : smsQueued ? "QUEUED" : "FAILED",
           lastWhatsappStatusAt: now,
@@ -1388,7 +1531,7 @@ async function resendInvoiceSms(req, res) {
             : "Notification de facture renvoyée au client",
         {
           toPhone: destination,
-          toEmail: sendResult?.toEmail || order.fboEmail || null,
+          toEmail: sendResult?.toEmail || emailDestination || null,
           sent: Boolean(sendResult?.sent),
           channel: sendResult?.channel || null,
           attempts: sendResult?.attempts || [],
@@ -1406,7 +1549,7 @@ async function resendInvoiceSms(req, res) {
       sent: Boolean(sendResult?.sent),
       queued: Boolean(sendResult?.smsQueued),
       toPhone: destination,
-      toEmail: sendResult?.toEmail || null,
+      toEmail: sendResult?.toEmail || emailDestination || null,
       channel: sendResult?.channel || null,
       attempts: sendResult?.attempts || [],
       messageId: sendResult?.messageId || null,
@@ -2391,6 +2534,7 @@ module.exports = {
   getInvoicePreview,
   invoiceOrder,
   replaceBillingOrderItem,
+  updateNotificationContacts,
   resendInvoiceSms,
   resendConfirmationSms,
   switchWaveToManualPayment,

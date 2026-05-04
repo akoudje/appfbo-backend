@@ -13,6 +13,7 @@ async function getCountrySettings(req, res) {
         maxQtyPerProduct: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
+        closedOnSaturday: true,
         supportPhone: true,
         pickupAddress: true,
         enableWave: true,
@@ -56,6 +57,7 @@ async function getCountrySettings(req, res) {
         maxQtyPerProduct: 10,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: null,
+        closedOnSaturday: false,
         supportPhone: null,
         pickupAddress: null,
         enableWave: true,
@@ -116,6 +118,7 @@ async function updateCountrySettings(req, res) {
       maxQtyPerProduct,
       preorderSubmissionEnabled,
       preorderSubmissionDisabledMessage,
+      closedOnSaturday,
       supportPhone,
       pickupAddress,
       enableWave,
@@ -173,6 +176,10 @@ async function updateCountrySettings(req, res) {
       data.preorderSubmissionDisabledMessage = preorderSubmissionDisabledMessage
         ? String(preorderSubmissionDisabledMessage).trim()
         : null;
+    }
+
+    if (closedOnSaturday !== undefined) {
+      data.closedOnSaturday = Boolean(closedOnSaturday);
     }
 
     if (maxActiveBillingPerInvoicer !== undefined) {
@@ -343,6 +350,8 @@ async function updateCountrySettings(req, res) {
               : true,
           preorderSubmissionDisabledMessage:
             data.preorderSubmissionDisabledMessage ?? null,
+          closedOnSaturday:
+            data.closedOnSaturday !== undefined ? data.closedOnSaturday : false,
           supportPhone: data.supportPhone ?? null,
           pickupAddress: data.pickupAddress ?? null,
           enableWave: data.enableWave !== undefined ? data.enableWave : true,
@@ -402,6 +411,7 @@ async function updateCountrySettings(req, res) {
         maxQtyPerProduct: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
+        closedOnSaturday: true,
         supportPhone: true,
         pickupAddress: true,
         enableWave: true,

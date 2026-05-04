@@ -16,6 +16,7 @@ const { MAX_SMS_LENGTH } = require("./sms.orange.service");
 const { computePreorderTotalsForGrade } = require("./pricing.service");
 const { computePaymentPricing } = require("../payments/payment-pricing");
 const { sendPreorderNotification } = require("./preorder-notifications.service");
+const { normalizeEmail } = require("./email.service");
 
 const BILLING_GRADES = [
   "CLIENT_PRIVILEGIE",
@@ -52,6 +53,19 @@ function resolveWhatsappTo(preorder, whatsappToInput) {
   }
 
   return null;
+}
+
+function resolveNotificationEmail(preorder, notificationEmailInput) {
+  if (notificationEmailInput !== undefined) {
+    const normalized = normalizeEmail(notificationEmailInput);
+    if (normalized) return normalized;
+    if (!String(notificationEmailInput || "").trim()) return null;
+    const err = new Error("INVALID_NOTIFICATION_EMAIL");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return normalizeEmail(preorder?.fboEmail || preorder?.fbo?.email || "") || null;
 }
 
 /**
@@ -309,6 +323,7 @@ async function invoiceAndSendPreorder({
   actorAdminId = null,
   invoiceRefInput = "",
   whatsappToInput = "",
+  notificationEmailInput = undefined,
   invoiceNote = "",
   billingGradeInput = "",
   invoiceAmountOverrideInput = "",
@@ -351,6 +366,10 @@ async function invoiceAndSendPreorder({
   }
 
   const whatsappTo = resolveWhatsappTo(existingPreorder, whatsappToInput);
+  const notificationEmail = resolveNotificationEmail(
+    existingPreorder,
+    notificationEmailInput,
+  );
   const effectiveGrade = normalizeBillingGrade(
     billingGradeInput,
     existingPreorder.billingGrade || existingPreorder.fboGrade,
@@ -417,6 +436,7 @@ async function invoiceAndSendPreorder({
         factureReference: invoiceRef,
         paymentCollectionCode,
         factureWhatsappTo: whatsappTo,
+        fboEmail: notificationEmail,
         indicativeTotalFcfa,
         computedGradeTotalFcfa: pricingSummary.totals.totalFcfa || 0,
         as400InvoiceTotalFcfa: effectiveInvoiceTotalFcfa || 0,
@@ -455,6 +475,7 @@ async function invoiceAndSendPreorder({
         invoiceRef,
         paymentCollectionCode,
         whatsappTo,
+        notificationEmail,
         previousGrade: existingPreorder.fboGrade,
         effectiveGrade,
         indicativeTotalFcfa,
@@ -535,12 +556,14 @@ async function invoiceAndSendPreorder({
     preorder: {
       ...invoicedPreorder,
       factureWhatsappTo: whatsappTo,
+      fboEmail: notificationEmail,
       paymentCollectionCode,
     },
     purpose: messagePurpose,
     message: whatsappMessage,
     actorName,
     toPhone: whatsappTo,
+    toEmail: notificationEmail,
     paymentLinkTarget: paymentLink,
     paymentLinkTracked: paymentLink,
   });

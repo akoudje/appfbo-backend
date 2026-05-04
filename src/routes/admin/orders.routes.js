@@ -52,6 +52,12 @@ router.post(
   ordersController.replaceBillingOrderItem,
 );
 
+router.patch(
+  "/:id/notification-contacts",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.updateNotificationContacts,
+);
+
 router.post(
   "/:id/resend-invoice-sms",
   requirePermission(Permission.INVOICE_CREATE),
