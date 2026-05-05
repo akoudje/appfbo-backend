@@ -13,6 +13,8 @@ async function getCountrySettings(req, res) {
         maxQtyPerProduct: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
+        publicAnnouncementEnabled: true,
+        publicAnnouncementMessage: true,
         closedOnSaturday: true,
         supportPhone: true,
         pickupAddress: true,
@@ -57,6 +59,8 @@ async function getCountrySettings(req, res) {
         maxQtyPerProduct: 10,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: null,
+        publicAnnouncementEnabled: false,
+        publicAnnouncementMessage: null,
         closedOnSaturday: false,
         supportPhone: null,
         pickupAddress: null,
@@ -118,6 +122,8 @@ async function updateCountrySettings(req, res) {
       maxQtyPerProduct,
       preorderSubmissionEnabled,
       preorderSubmissionDisabledMessage,
+      publicAnnouncementEnabled,
+      publicAnnouncementMessage,
       closedOnSaturday,
       supportPhone,
       pickupAddress,
@@ -175,6 +181,16 @@ async function updateCountrySettings(req, res) {
     if (preorderSubmissionDisabledMessage !== undefined) {
       data.preorderSubmissionDisabledMessage = preorderSubmissionDisabledMessage
         ? String(preorderSubmissionDisabledMessage).trim()
+        : null;
+    }
+
+    if (publicAnnouncementEnabled !== undefined) {
+      data.publicAnnouncementEnabled = Boolean(publicAnnouncementEnabled);
+    }
+
+    if (publicAnnouncementMessage !== undefined) {
+      data.publicAnnouncementMessage = publicAnnouncementMessage
+        ? String(publicAnnouncementMessage).trim()
         : null;
     }
 
@@ -350,6 +366,12 @@ async function updateCountrySettings(req, res) {
               : true,
           preorderSubmissionDisabledMessage:
             data.preorderSubmissionDisabledMessage ?? null,
+          publicAnnouncementEnabled:
+            data.publicAnnouncementEnabled !== undefined
+              ? data.publicAnnouncementEnabled
+              : false,
+          publicAnnouncementMessage:
+            data.publicAnnouncementMessage ?? null,
           closedOnSaturday:
             data.closedOnSaturday !== undefined ? data.closedOnSaturday : false,
           supportPhone: data.supportPhone ?? null,
@@ -411,6 +433,8 @@ async function updateCountrySettings(req, res) {
         maxQtyPerProduct: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
+        publicAnnouncementEnabled: true,
+        publicAnnouncementMessage: true,
         closedOnSaturday: true,
         supportPhone: true,
         pickupAddress: true,

@@ -31,6 +31,8 @@ async function getStorefrontConfig(req, res) {
           maxQtyPerProduct: true,
           preorderSubmissionEnabled: true,
           preorderSubmissionDisabledMessage: true,
+          publicAnnouncementEnabled: true,
+          publicAnnouncementMessage: true,
           closedOnSaturday: true,
           supportPhone: true,
           pickupAddress: true,
@@ -68,6 +70,16 @@ async function getStorefrontConfig(req, res) {
       preorderSubmissionDisabledMessage:
         settings?.preorderSubmissionDisabledMessage ||
         "Les soumissions de précommandes sont temporairement suspendues. Vous pouvez continuer à consulter le catalogue et votre panier.",
+      publicAnnouncement:
+        settings?.publicAnnouncementEnabled && settings?.publicAnnouncementMessage
+          ? {
+              enabled: true,
+              message: settings.publicAnnouncementMessage,
+            }
+          : {
+              enabled: false,
+              message: "",
+            },
       closedOnSaturday: settings?.closedOnSaturday ?? false,
       supportPhone: settings?.supportPhone ?? null,
       pickupAddress: settings?.pickupAddress ?? null,
