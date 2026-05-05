@@ -420,6 +420,8 @@ model CountrySettings {
   billingClaimTimeoutMin      Int @default(15)
   preinvoicedAutoCancelAfterHours Int @default(2)
   preinvoicedAutoReminderAfterHours Int @default(1)
+  preinvoicedAutoCancelAfterMinutes Int @default(120)
+  preinvoicedAutoReminderAfterMinutes Int @default(60)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

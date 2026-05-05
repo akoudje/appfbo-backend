@@ -24,40 +24,78 @@ function parsePositiveInt(value, fallback) {
 }
 
 function getDefaultExpiryHours() {
+  return Math.ceil(getDefaultExpiryMinutes() / 60);
+}
+
+function getDefaultExpiryMinutes() {
   return Math.max(
     1,
-    parsePositiveInt(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS, 2),
+    parsePositiveInt(
+      process.env.PREINVOICED_AUTO_CANCEL_AFTER_MINUTES,
+      parsePositiveInt(process.env.PREINVOICED_AUTO_CANCEL_AFTER_HOURS, 2) * 60,
+    ),
   );
 }
 
-function getEffectiveExpiryHours(settings = null) {
-  const fallback = getDefaultExpiryHours();
+function getEffectiveExpiryMinutes(settings = null) {
+  const fallback = getDefaultExpiryMinutes();
   const parsed = Number.parseInt(
+    String(settings?.preinvoicedAutoCancelAfterMinutes ?? ""),
+    10,
+  );
+  if (Number.isFinite(parsed)) return Math.max(1, parsed);
+  const legacyHours = Number.parseInt(
     String(settings?.preinvoicedAutoCancelAfterHours ?? ""),
     10,
   );
-  return Math.max(1, Number.isFinite(parsed) ? parsed : fallback);
+  return Math.max(1, Number.isFinite(legacyHours) ? legacyHours * 60 : fallback);
+}
+
+function getEffectiveExpiryHours(settings = null) {
+  return Math.ceil(getEffectiveExpiryMinutes(settings) / 60);
 }
 
 function getDefaultReminderDelayHours() {
-  const expiryHours = getDefaultExpiryHours();
+  return Math.ceil(getDefaultReminderDelayMinutes() / 60);
+}
+
+function getDefaultReminderDelayMinutes() {
+  const expiryMinutes = getDefaultExpiryMinutes();
   return Math.min(
-    Math.max(1, parsePositiveInt(process.env.PREINVOICED_AUTO_REMINDER_AFTER_HOURS, 1)),
-    Math.max(1, expiryHours - 1),
+    Math.max(
+      1,
+      parsePositiveInt(
+        process.env.PREINVOICED_AUTO_REMINDER_AFTER_MINUTES,
+        parsePositiveInt(process.env.PREINVOICED_AUTO_REMINDER_AFTER_HOURS, 1) * 60,
+      ),
+    ),
+    Math.max(1, expiryMinutes - 1),
+  );
+}
+
+function getEffectiveReminderDelayMinutes(settings = null) {
+  const expiryMinutes = getEffectiveExpiryMinutes(settings);
+  const fallback = getDefaultReminderDelayMinutes();
+  const parsed = Number.parseInt(
+    String(settings?.preinvoicedAutoReminderAfterMinutes ?? ""),
+    10,
+  );
+  if (Number.isFinite(parsed)) {
+    return Math.min(Math.max(1, parsed), Math.max(1, expiryMinutes - 1));
+  }
+  const legacyHours = Number.parseInt(
+    String(settings?.preinvoicedAutoReminderAfterHours ?? ""),
+    10,
+  );
+  const legacyMinutes = Number.isFinite(legacyHours) ? legacyHours * 60 : fallback;
+  return Math.min(
+    Math.max(1, legacyMinutes),
+    Math.max(1, expiryMinutes - 1),
   );
 }
 
 function getEffectiveReminderDelayHours(settings = null) {
-  const expiryHours = getEffectiveExpiryHours(settings);
-  const fallback = getDefaultReminderDelayHours();
-  const parsed = Number.parseInt(
-    String(settings?.preinvoicedAutoReminderAfterHours ?? ""),
-    10,
-  );
-  return Math.min(
-    Math.max(1, Number.isFinite(parsed) ? parsed : fallback),
-    Math.max(1, expiryHours - 1),
-  );
+  return Math.ceil(getEffectiveReminderDelayMinutes(settings) / 60);
 }
 
 function getSchedulerEveryMinutes() {
@@ -84,7 +122,7 @@ function buildInvoiceExpiryAt(invoicedAt, settings = null) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
   return new Date(
-    baseTime.getTime() + getEffectiveExpiryHours(settings) * 60 * 60 * 1000,
+    baseTime.getTime() + getEffectiveExpiryMinutes(settings) * 60 * 1000,
   );
 }
 
@@ -98,8 +136,17 @@ function buildReminderCutoffAt(invoicedAt, settings = null) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
   return new Date(
-    baseTime.getTime() + getEffectiveReminderDelayHours(settings) * 60 * 60 * 1000,
+    baseTime.getTime() + getEffectiveReminderDelayMinutes(settings) * 60 * 1000,
   );
+}
+
+function formatDuration(minutes) {
+  const total = Math.max(1, Number.parseInt(String(minutes ?? ""), 10) || 1);
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  if (hours > 0 && mins > 0) return `${hours}h${String(mins).padStart(2, "0")}`;
+  if (hours > 0) return `${hours}h`;
+  return `${mins} min`;
 }
 
 function buildPaymentReminderMessage(preorder, paymentLink = null, settings = null) {
@@ -108,10 +155,11 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
     preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-",
   );
   const amountFmt = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
-  const remainingHours = Math.max(
+  const remainingMinutes = Math.max(
     1,
-    getEffectiveExpiryHours(settings) - getEffectiveReminderDelayHours(settings),
+    getEffectiveExpiryMinutes(settings) - getEffectiveReminderDelayMinutes(settings),
   );
+  const remainingLabel = formatDuration(remainingMinutes);
   const paymentMode = String(
     preorder?.preorderPaymentMode || preorder?.paymentMode || preorder?.paymentProvider || "",
   )
@@ -123,14 +171,14 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
       return prependNotificationPrefix(
         preorder,
         compactText(
-          `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Effectuez le virement puis deposez votre preuve sous ${remainingHours}H: ${normalizedLink}`,
+          `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Effectuez le virement puis deposez votre preuve sous ${remainingLabel}: ${normalizedLink}`,
         ),
       );
     }
     return prependNotificationPrefix(
       preorder,
       compactText(
-        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez votre virement sous ${remainingHours}H pour éviter l'annulation.`,
+        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez votre virement sous ${remainingLabel} pour éviter l'annulation.`,
       ),
     );
   }
@@ -139,7 +187,7 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
     return prependNotificationPrefix(
       preorder,
       compactText(
-        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez le paiement sous ${remainingHours}H: ${normalizedLink}`,
+        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez le paiement sous ${remainingLabel}: ${normalizedLink}`,
       ),
     );
   }
@@ -147,7 +195,7 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
   return prependNotificationPrefix(
     preorder,
     compactText(
-      `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Passez a la caisse FLP sous ${remainingHours}H pour éviter l'annulation.`,
+      `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Passez a la caisse FLP sous ${remainingLabel} pour éviter l'annulation.`,
     ),
   );
 }
@@ -160,7 +208,7 @@ function buildAutoCancelMessage(preorder, settings = null) {
 
   return prependNotificationPrefix(preorder, compactText(`
     Bonjour ${customer}, votre precommande ${preorderNumber} a ete annulee
-    faute de paiement confirme dans le delai maximal de ${getEffectiveExpiryHours(settings)}H apres
+    faute de paiement confirme dans le delai maximal de ${formatDuration(getEffectiveExpiryMinutes(settings))} apres
     prefacturation. Vous pouvez lancer une nouvelle precommande si besoin.
   `));
 }
@@ -179,6 +227,8 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
             select: {
               preinvoicedAutoCancelAfterHours: true,
               preinvoicedAutoReminderAfterHours: true,
+              preinvoicedAutoCancelAfterMinutes: true,
+              preinvoicedAutoReminderAfterMinutes: true,
             },
           },
         },
@@ -471,6 +521,8 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
             select: {
               preinvoicedAutoCancelAfterHours: true,
               preinvoicedAutoReminderAfterHours: true,
+              preinvoicedAutoCancelAfterMinutes: true,
+              preinvoicedAutoReminderAfterMinutes: true,
             },
           },
         },
@@ -626,6 +678,8 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
             select: {
               preinvoicedAutoCancelAfterHours: true,
               preinvoicedAutoReminderAfterHours: true,
+              preinvoicedAutoCancelAfterMinutes: true,
+              preinvoicedAutoReminderAfterMinutes: true,
             },
           },
         },

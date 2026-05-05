@@ -45,6 +45,8 @@ async function getCountrySettings(req, res) {
         billingClaimTimeoutMin: true,
         preinvoicedAutoCancelAfterHours: true,
         preinvoicedAutoReminderAfterHours: true,
+        preinvoicedAutoCancelAfterMinutes: true,
+        preinvoicedAutoReminderAfterMinutes: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -91,6 +93,8 @@ async function getCountrySettings(req, res) {
         billingClaimTimeoutMin: 15,
         preinvoicedAutoCancelAfterHours: 2,
         preinvoicedAutoReminderAfterHours: 1,
+        preinvoicedAutoCancelAfterMinutes: 120,
+        preinvoicedAutoReminderAfterMinutes: 60,
         createdAt: null,
         updatedAt: null,
       });
@@ -115,6 +119,8 @@ async function updateCountrySettings(req, res) {
       select: {
         preinvoicedAutoCancelAfterHours: true,
         preinvoicedAutoReminderAfterHours: true,
+        preinvoicedAutoCancelAfterMinutes: true,
+        preinvoicedAutoReminderAfterMinutes: true,
       },
     });
     const {
@@ -154,6 +160,8 @@ async function updateCountrySettings(req, res) {
       billingClaimTimeoutMin,
       preinvoicedAutoCancelAfterHours,
       preinvoicedAutoReminderAfterHours,
+      preinvoicedAutoCancelAfterMinutes,
+      preinvoicedAutoReminderAfterMinutes,
     } = req.body || {};
 
     const data = {};
@@ -226,6 +234,9 @@ async function updateCountrySettings(req, res) {
         });
       }
       data.preinvoicedAutoCancelAfterHours = parsed;
+      if (preinvoicedAutoCancelAfterMinutes === undefined) {
+        data.preinvoicedAutoCancelAfterMinutes = parsed * 60;
+      }
     }
 
     if (preinvoicedAutoReminderAfterHours !== undefined) {
@@ -236,19 +247,46 @@ async function updateCountrySettings(req, res) {
         });
       }
       data.preinvoicedAutoReminderAfterHours = parsed;
+      if (preinvoicedAutoReminderAfterMinutes === undefined) {
+        data.preinvoicedAutoReminderAfterMinutes = parsed * 60;
+      }
     }
 
-    const effectiveCancelHours =
-      data.preinvoicedAutoCancelAfterHours !== undefined
-        ? data.preinvoicedAutoCancelAfterHours
-        : existingSettings?.preinvoicedAutoCancelAfterHours ?? 2;
-    const effectiveReminderHours =
-      data.preinvoicedAutoReminderAfterHours !== undefined
-        ? data.preinvoicedAutoReminderAfterHours
-        : existingSettings?.preinvoicedAutoReminderAfterHours ?? 1;
+    if (preinvoicedAutoCancelAfterMinutes !== undefined) {
+      const parsed = Number.parseInt(preinvoicedAutoCancelAfterMinutes, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 43200) {
+        return res.status(400).json({
+          message: "preinvoicedAutoCancelAfterMinutes invalide",
+        });
+      }
+      data.preinvoicedAutoCancelAfterMinutes = parsed;
+      data.preinvoicedAutoCancelAfterHours = Math.max(1, Math.ceil(parsed / 60));
+    }
+
+    if (preinvoicedAutoReminderAfterMinutes !== undefined) {
+      const parsed = Number.parseInt(preinvoicedAutoReminderAfterMinutes, 10);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 43199) {
+        return res.status(400).json({
+          message: "preinvoicedAutoReminderAfterMinutes invalide",
+        });
+      }
+      data.preinvoicedAutoReminderAfterMinutes = parsed;
+      data.preinvoicedAutoReminderAfterHours = Math.max(1, Math.ceil(parsed / 60));
+    }
+
+    const effectiveCancelMinutes =
+      data.preinvoicedAutoCancelAfterMinutes !== undefined
+        ? data.preinvoicedAutoCancelAfterMinutes
+        : existingSettings?.preinvoicedAutoCancelAfterMinutes ??
+          (existingSettings?.preinvoicedAutoCancelAfterHours ?? 2) * 60;
+    const effectiveReminderMinutes =
+      data.preinvoicedAutoReminderAfterMinutes !== undefined
+        ? data.preinvoicedAutoReminderAfterMinutes
+        : existingSettings?.preinvoicedAutoReminderAfterMinutes ??
+          (existingSettings?.preinvoicedAutoReminderAfterHours ?? 1) * 60;
 
     if (
-      effectiveReminderHours >= effectiveCancelHours
+      effectiveReminderMinutes >= effectiveCancelMinutes
     ) {
       return res.status(400).json({
         message:
@@ -425,6 +463,14 @@ async function updateCountrySettings(req, res) {
             data.preinvoicedAutoReminderAfterHours !== undefined
               ? data.preinvoicedAutoReminderAfterHours
               : 1,
+          preinvoicedAutoCancelAfterMinutes:
+            data.preinvoicedAutoCancelAfterMinutes !== undefined
+              ? data.preinvoicedAutoCancelAfterMinutes
+              : 120,
+          preinvoicedAutoReminderAfterMinutes:
+            data.preinvoicedAutoReminderAfterMinutes !== undefined
+              ? data.preinvoicedAutoReminderAfterMinutes
+              : 60,
       },
       select: {
         id: true,
@@ -465,6 +511,8 @@ async function updateCountrySettings(req, res) {
         billingClaimTimeoutMin: true,
         preinvoicedAutoCancelAfterHours: true,
         preinvoicedAutoReminderAfterHours: true,
+        preinvoicedAutoCancelAfterMinutes: true,
+        preinvoicedAutoReminderAfterMinutes: true,
         createdAt: true,
         updatedAt: true,
       },
