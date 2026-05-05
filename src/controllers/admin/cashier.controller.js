@@ -319,7 +319,7 @@ async function getWorkspace(req, res) {
       journalWhere.preparationLaunchedById = req.user?.id || "__no_user__";
     }
 
-    const validationWhere = scopeWhere(req, {
+    const baseValidationWhere = scopeWhere(req, {
       paymentStatus: "PAID",
       manualPaymentValidatedAt: {
         not: null,
@@ -328,20 +328,23 @@ async function getWorkspace(req, res) {
 
     const validationFrom = from || todayStart;
     const validationTo = to || todayEnd;
-    validationWhere.manualPaymentValidatedAt = {
+    baseValidationWhere.manualPaymentValidatedAt = {
       not: null,
       gte: validationFrom,
       lte: validationTo,
     };
     if (searchConditions) {
-      validationWhere.AND = [...(validationWhere.AND || []), { OR: searchConditions }];
+      baseValidationWhere.AND = [...(baseValidationWhere.AND || []), { OR: searchConditions }];
     }
     if (paymentMode && String(paymentMode).trim()) {
-      validationWhere.preorderPaymentMode = String(paymentMode).trim().toUpperCase();
+      baseValidationWhere.preorderPaymentMode = String(paymentMode).trim().toUpperCase();
     }
-    if (scope === "my") {
-      validationWhere.manualPaymentValidatedById = req.user?.id || "__no_user__";
-    }
+
+    const personalValidationWhere = {
+      ...baseValidationWhere,
+      manualPaymentValidatedById: req.user?.id || "__no_user__",
+    };
+    const validationWhere = allowConsolidated ? baseValidationWhere : personalValidationWhere;
 
     const includeShape = {
       country: {
@@ -373,7 +376,13 @@ async function getWorkspace(req, res) {
       },
     };
 
-    const [toCollectOrders, toLaunchOrders, journalOrders, validationOrders] = await Promise.all([
+    const [
+      toCollectOrders,
+      toLaunchOrders,
+      journalOrders,
+      validationOrders,
+      personalValidationOrders,
+    ] = await Promise.all([
       prisma.preorder.findMany({
         where: toCollectWhere,
         include: includeShape,
@@ -409,12 +418,29 @@ async function getWorkspace(req, res) {
         ],
         take: 500,
       }),
+      allowConsolidated
+        ? prisma.preorder.findMany({
+            where: personalValidationWhere,
+            include: includeShape,
+            orderBy: [
+              { manualPaymentValidatedAt: "desc" },
+              { paidAt: "desc" },
+              { createdAt: "desc" },
+            ],
+            take: 500,
+          })
+        : Promise.resolve([]),
     ]);
 
     const toCollect = toCollectOrders.map(buildOrderSummary);
     const toLaunchPreparation = toLaunchOrders.map(buildOrderSummary);
     const journal = journalOrders.map(buildOrderSummary);
     const validations = validationOrders.map(buildOrderSummary);
+    const personalValidations = personalValidationOrders.map(buildOrderSummary);
+    const generalValidationSummary = aggregateCashierValidation(validations);
+    const personalValidationSummary = allowConsolidated
+      ? aggregateCashierValidation(personalValidations)
+      : generalValidationSummary;
     const pendingCashRows = toCollect.filter(
       (row) =>
         normalizePaymentMode(row.preorderPaymentMode) === "ESPECES" &&
@@ -452,10 +478,12 @@ async function getWorkspace(req, res) {
         byCashier: allowConsolidated ? aggregateByCashier(journal) : [],
       },
       validationSummary: {
-        scope,
+        scope: allowConsolidated ? "all" : "my",
         dateFrom: validationFrom ? validationFrom.toISOString() : null,
         dateTo: validationTo ? validationTo.toISOString() : null,
-        ...aggregateCashierValidation(validations),
+        ...generalValidationSummary,
+        personal: personalValidationSummary,
+        general: generalValidationSummary,
       },
       financialSummary: {
         dateFrom: from ? from.toISOString() : null,
