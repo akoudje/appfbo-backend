@@ -80,6 +80,7 @@ function buildOrderSummary(order) {
       ? {
           id: order.manualPaymentValidatedBy.id,
           fullName: order.manualPaymentValidatedBy.fullName,
+          email: order.manualPaymentValidatedBy.email,
           role: order.manualPaymentValidatedBy.role,
         }
       : null,
@@ -109,6 +110,14 @@ function buildOrderSummary(order) {
           cashDeskLabel: latestCashierTx.cashDeskLabel,
           preparationLaunchedAt: latestCashierTx.preparationLaunchedAt,
           createdAt: latestCashierTx.createdAt,
+          cashier: latestCashierTx.cashier
+            ? {
+                id: latestCashierTx.cashier.id,
+                fullName: latestCashierTx.cashier.fullName,
+                email: latestCashierTx.cashier.email,
+                role: latestCashierTx.cashier.role,
+              }
+            : null,
         }
       : null,
     latestAttempt: latestAttempt
@@ -171,8 +180,11 @@ function aggregateByCashier(rows) {
   const summary = new Map();
 
   for (const row of rows) {
-    const cashierId = row.preparationLaunchedBy?.id || "UNASSIGNED";
-    const cashierName = row.preparationLaunchedBy?.fullName || "Non attribué";
+    const cashierId = row.validatedBy?.id || row.cashierTransaction?.cashier?.id || "UNASSIGNED";
+    const cashierName =
+      row.validatedBy?.fullName ||
+      row.cashierTransaction?.cashier?.fullName ||
+      "Non attribué";
     const current = summary.get(cashierId) || {
       cashierId,
       cashierName,
@@ -191,6 +203,16 @@ function aggregateByCashier(rows) {
   }
 
   return Array.from(summary.values()).sort((a, b) => b.amountFcfa - a.amountFcfa);
+}
+
+function aggregateCashierValidation(rows, amountField = "amountReceivedFcfa") {
+  return {
+    total: rows.length,
+    totalExpectedFcfa: sumAmount(rows, "amountExpectedFcfa"),
+    totalReceivedFcfa: sumAmount(rows, amountField),
+    byPaymentMode: aggregateByPaymentMode(rows, amountField),
+    byCashier: aggregateByCashier(rows),
+  };
 }
 
 function sumAmount(rows, amountField = "amountExpectedFcfa") {
@@ -283,6 +305,8 @@ async function getWorkspace(req, res) {
 
     const from = normalizeDateStart(dateFrom);
     const to = normalizeDateEnd(dateTo);
+    const todayStart = normalizeDateStart(new Date());
+    const todayEnd = normalizeDateEnd(new Date());
     if (from || to) {
       journalWhere.preparationLaunchedAt = {};
       if (from) journalWhere.preparationLaunchedAt.gte = from;
@@ -293,6 +317,30 @@ async function getWorkspace(req, res) {
     const scope = allowConsolidated && journalScope === "all" ? "all" : "my";
     if (scope === "my") {
       journalWhere.preparationLaunchedById = req.user?.id || "__no_user__";
+    }
+
+    const validationWhere = scopeWhere(req, {
+      paymentStatus: "PAID",
+      manualPaymentValidatedAt: {
+        not: null,
+      },
+    });
+
+    const validationFrom = from || todayStart;
+    const validationTo = to || todayEnd;
+    validationWhere.manualPaymentValidatedAt = {
+      not: null,
+      gte: validationFrom,
+      lte: validationTo,
+    };
+    if (searchConditions) {
+      validationWhere.AND = [...(validationWhere.AND || []), { OR: searchConditions }];
+    }
+    if (paymentMode && String(paymentMode).trim()) {
+      validationWhere.preorderPaymentMode = String(paymentMode).trim().toUpperCase();
+    }
+    if (scope === "my") {
+      validationWhere.manualPaymentValidatedById = req.user?.id || "__no_user__";
     }
 
     const includeShape = {
@@ -308,11 +356,14 @@ async function getWorkspace(req, res) {
         },
       },
       manualPaymentValidatedBy: {
-        select: { id: true, fullName: true, role: true },
+        select: { id: true, fullName: true, email: true, role: true },
       },
       cashierTransactions: {
         orderBy: { createdAt: "desc" },
         take: 1,
+        include: {
+          cashier: { select: { id: true, fullName: true, email: true, role: true } },
+        },
       },
       preparedByAdmin: {
         select: { id: true, fullName: true, role: true },
@@ -322,7 +373,7 @@ async function getWorkspace(req, res) {
       },
     };
 
-    const [toCollectOrders, toLaunchOrders, journalOrders] = await Promise.all([
+    const [toCollectOrders, toLaunchOrders, journalOrders, validationOrders] = await Promise.all([
       prisma.preorder.findMany({
         where: toCollectWhere,
         include: includeShape,
@@ -348,11 +399,22 @@ async function getWorkspace(req, res) {
         ],
         take: 300,
       }),
+      prisma.preorder.findMany({
+        where: validationWhere,
+        include: includeShape,
+        orderBy: [
+          { manualPaymentValidatedAt: "desc" },
+          { paidAt: "desc" },
+          { createdAt: "desc" },
+        ],
+        take: 500,
+      }),
     ]);
 
     const toCollect = toCollectOrders.map(buildOrderSummary);
     const toLaunchPreparation = toLaunchOrders.map(buildOrderSummary);
     const journal = journalOrders.map(buildOrderSummary);
+    const validations = validationOrders.map(buildOrderSummary);
     const pendingCashRows = toCollect.filter(
       (row) =>
         normalizePaymentMode(row.preorderPaymentMode) === "ESPECES" &&
@@ -388,6 +450,12 @@ async function getWorkspace(req, res) {
         totalReceivedFcfa: sumAmount(journal, "amountReceivedFcfa"),
         byPaymentMode: aggregateByPaymentMode(journal, "amountReceivedFcfa"),
         byCashier: allowConsolidated ? aggregateByCashier(journal) : [],
+      },
+      validationSummary: {
+        scope,
+        dateFrom: validationFrom ? validationFrom.toISOString() : null,
+        dateTo: validationTo ? validationTo.toISOString() : null,
+        ...aggregateCashierValidation(validations),
       },
       financialSummary: {
         dateFrom: from ? from.toISOString() : null,
