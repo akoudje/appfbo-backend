@@ -1569,6 +1569,21 @@ async function resendConfirmationSms(req, res) {
   try {
     const { id } = req.params;
     const globalAdmin = isGlobalAdminRole(req.user?.role);
+    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone);
+    const emailOverride = normalizeOptionalNotificationEmail(req.body?.email);
+
+    if (phoneOverride === "__INVALID_PHONE__") {
+      return res.status(400).json({
+        message: "Numéro de notification invalide.",
+      });
+    }
+
+    if (emailOverride === "__INVALID_EMAIL__") {
+      return res.status(400).json({
+        message: "Adresse email de notification invalide.",
+      });
+    }
+
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
       select: {
@@ -1609,7 +1624,18 @@ async function resendConfirmationSms(req, res) {
 
     const amountToPayFcfa = resolveOrderAmountToPayFcfa(order);
     const actorName = actorLabel(req);
-    const payloadOrder = { ...order };
+    const destination =
+      (phoneOverride !== undefined ? String(phoneOverride || "").trim() : "") ||
+      String(order.factureWhatsappTo || "").trim();
+    const emailDestination =
+      (emailOverride !== undefined ? emailOverride : null) ||
+      normalizeEmail(order.fboEmail || "") ||
+      null;
+    const payloadOrder = {
+      ...order,
+      factureWhatsappTo: destination,
+      fboEmail: emailDestination,
+    };
 
     let purpose = normalizedStatus === "READY" ? "ORDER_READY" : "REMINDER";
     let smsMessage;
@@ -1660,6 +1686,8 @@ async function resendConfirmationSms(req, res) {
       purpose,
       message: smsMessage,
       actorName,
+      toPhone: destination,
+      toEmail: emailDestination,
     });
 
     if (sendResult?.skipped) {
@@ -1676,6 +1704,8 @@ async function resendConfirmationSms(req, res) {
       await tx.preorder.update({
         where: { id: order.id },
         data: {
+          factureWhatsappTo: destination,
+          fboEmail: emailDestination,
           lastWhatsappStatus: smsDispatched ? "SENT" : smsQueued ? "QUEUED" : "FAILED",
           lastWhatsappStatusAt: now,
           lastWhatsappMessageId: sendResult?.providerMessageId || null,
@@ -1692,7 +1722,8 @@ async function resendConfirmationSms(req, res) {
             sent: Boolean(sendResult?.sent),
             channel: sendResult?.channel || null,
             attempts: sendResult?.attempts || [],
-            toPhone: sendResult?.toPhone || null,
+            toPhone: sendResult?.toPhone || destination || null,
+            toEmail: sendResult?.toEmail || emailDestination || null,
             messageId: sendResult?.messageId || null,
             providerMessageId: sendResult?.providerMessageId || null,
             errorCode: sendResult?.errorCode || null,
@@ -1709,7 +1740,8 @@ async function resendConfirmationSms(req, res) {
       sent: Boolean(sendResult?.sent),
       channel: sendResult?.channel || null,
       attempts: sendResult?.attempts || [],
-      toPhone: sendResult?.toPhone || null,
+      toPhone: sendResult?.toPhone || destination || null,
+      toEmail: sendResult?.toEmail || emailDestination || null,
       messageId: sendResult?.messageId || null,
       providerMessageId: sendResult?.providerMessageId || null,
       errorCode: sendResult?.errorCode || null,
