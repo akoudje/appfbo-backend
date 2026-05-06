@@ -43,6 +43,26 @@ function buildDefaultNotificationTemplates() {
           "Equipe FOREVER",
         ].join("\n"),
       },
+      INVOICE_WAVE: {
+        subject: "FOREVER CI - Lien de paiement Wave ({{preorderNumber}})",
+        body: [
+          "Bonjour {{customerName}},",
+          "",
+          "Votre précommande {{preorderNumber}} est disponible pour paiement.",
+          "Code encaissement: {{paymentCollectionCode}}",
+          "Montant à payer: {{totalFcfaLabel}}",
+          "Lien de paiement sécurisé: {{paymentLink}}",
+          "Cette préfacture reste payable pendant {{paymentExpiryHours}}h maximum après émission.",
+          "",
+          "Étapes recommandées:",
+          "1. Vérifiez le montant et votre numéro de précommande.",
+          "2. Ouvrez le lien sécurisé et finalisez le paiement.",
+          "3. Conservez cette notification jusqu'à confirmation du paiement.",
+          "",
+          "Merci de votre confiance.",
+          "Equipe FOREVER",
+        ].join("\n"),
+      },
       INVOICE_BANK_TRANSFER: {
         subject: "FOREVER CI - Dépôt de preuve bancaire ({{preorderNumber}})",
         body: [
@@ -112,6 +132,10 @@ function mergeNotificationTemplates(baseTemplates = {}, overrideTemplates = {}) 
       INVOICE: {
         ...(baseTemplates?.email?.INVOICE || {}),
         ...(overrideTemplates?.email?.INVOICE || {}),
+      },
+      INVOICE_WAVE: {
+        ...(baseTemplates?.email?.INVOICE_WAVE || {}),
+        ...(overrideTemplates?.email?.INVOICE_WAVE || {}),
       },
       INVOICE_BANK_TRANSFER: {
         ...(baseTemplates?.email?.INVOICE_BANK_TRANSFER || {}),

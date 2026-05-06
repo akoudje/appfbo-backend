@@ -618,6 +618,10 @@ function buildEmailTemplateCandidates({ purpose, context }) {
   const purposeKey = normalizePurposeKey(purpose);
   const flow = String(context?.paymentFlow || "CASH").toUpperCase();
 
+  if (purposeKey === "PAYMENT_LINK") {
+    return ["PAYMENT_LINK", "INVOICE_WAVE", "INVOICE"];
+  }
+
   if (purposeKey === "INVOICE" && flow === "BANK_TRANSFER") {
     return ["INVOICE_BANK_TRANSFER", "INVOICE"];
   }
@@ -627,6 +631,25 @@ function buildEmailTemplateCandidates({ purpose, context }) {
   }
 
   return [purposeKey];
+}
+
+function ensureEmailBodyIncludesActionLink({ purpose, context, emailBody }) {
+  const body = String(emailBody || "").trim();
+  const paymentLink = String(context?.paymentLink || "").trim();
+  if (!body || !paymentLink) return body;
+
+  const purposeKey = normalizePurposeKey(purpose);
+  if (!["INVOICE", "PAYMENT_LINK", "REMINDER"].includes(purposeKey)) return body;
+
+  if (body.includes(paymentLink)) return body;
+
+  const flow = String(context?.paymentFlow || "").toUpperCase();
+  const label =
+    flow === "BANK_TRANSFER"
+      ? "Lien sécurisé de dépôt de preuve"
+      : "Lien de paiement sécurisé";
+
+  return `${body}\n\n${label}: ${paymentLink}`.trim();
 }
 
 function sanitizeInvoiceSmsMessage(value = "") {
@@ -698,13 +721,18 @@ function resolveConfiguredTemplates({
       ? interpolateTemplate(emailSubjectTemplate, context)
       : fallbackEmailSubject,
   );
-  const resolvedEmailBody = String(
+  const interpolatedEmailBody = String(
     emailBodyTemplate
       ? interpolateTemplate(emailBodyTemplate, context)
       : fallbackEmailBody,
   )
     .replace(/\r\n/g, "\n")
     .trim();
+  const resolvedEmailBody = ensureEmailBodyIncludesActionLink({
+    purpose,
+    context,
+    emailBody: interpolatedEmailBody,
+  });
   const resolvedEmailHtml = buildDefaultEmailHtml({
     subject: resolvedSubject || fallbackEmailSubject,
     body: resolvedEmailBody || fallbackEmailBody,
