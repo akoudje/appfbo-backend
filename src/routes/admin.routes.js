@@ -38,6 +38,7 @@ const settingsRoutes = require("./admin/settings.routes");
 const productsRoutes = require("./admin/products.routes");
 const cashierRoutes = require("./admin/cashier.routes");
 const stockRoutes = require("./admin/stock.routes");
+const reportsRoutes = require("./admin/reports.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 const eventsController = require("../controllers/admin/events.controller");
 
@@ -113,6 +114,7 @@ router.post(
 );
 
 router.use("/stats", statsRoutes);
+router.use("/reports", reportsRoutes);
 router.use("/products", productsRoutes);
 router.use("/cashier", cashierRoutes);
 router.use("/stock", stockRoutes);
