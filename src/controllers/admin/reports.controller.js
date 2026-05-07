@@ -13,6 +13,17 @@ function parseReportDate(value) {
   return { iso, start, end };
 }
 
+function shiftDayRange(start, days) {
+  const shiftedStart = new Date(start);
+  shiftedStart.setUTCDate(shiftedStart.getUTCDate() + days);
+  const iso = shiftedStart.toISOString().slice(0, 10);
+  return {
+    iso,
+    start: new Date(`${iso}T00:00:00.000Z`),
+    end: new Date(`${iso}T23:59:59.999Z`),
+  };
+}
+
 function toNumber(value) {
   const n = Number(value || 0);
   return Number.isFinite(n) ? n : 0;
@@ -97,6 +108,23 @@ function summarizeRows(rows = [], amountField = "totalFcfa") {
   };
 }
 
+function buildComparisonMetric(current, previous) {
+  const currentCount = toNumber(current?.count);
+  const previousCount = toNumber(previous?.count);
+  const currentAmount = toNumber(current?.amountFcfa);
+  const previousAmount = toNumber(previous?.amountFcfa);
+  return {
+    currentCount,
+    previousCount,
+    countDelta: currentCount - previousCount,
+    countDeltaPercent: previousCount ? Math.round(((currentCount - previousCount) / previousCount) * 100) : null,
+    currentAmountFcfa: currentAmount,
+    previousAmountFcfa: previousAmount,
+    amountDeltaFcfa: currentAmount - previousAmount,
+    amountDeltaPercent: previousAmount ? Math.round(((currentAmount - previousAmount) / previousAmount) * 100) : null,
+  };
+}
+
 function buildOrderRow(order) {
   const paidAt = effectivePaidAt(order);
   return {
@@ -138,6 +166,57 @@ const includeShape = {
   fulfilledByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
   cancelledByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
 };
+
+async function getDailySnapshot(req, start, end) {
+  const base = (where = {}) => scopeWhere(req, where);
+  const [submitted, invoiced, paid, cancelled] = await Promise.all([
+    prisma.preorder.aggregate({
+      where: base({ submittedAt: { gte: start, lte: end } }),
+      _count: { _all: true },
+      _sum: { totalFcfa: true },
+    }),
+    prisma.preorder.aggregate({
+      where: base({ invoicedAt: { gte: start, lte: end } }),
+      _count: { _all: true },
+      _sum: { as400InvoiceTotalFcfa: true },
+    }),
+    prisma.preorder.aggregate({
+      where: base({
+        paymentStatus: "PAID",
+        OR: [
+          { manualPaymentValidatedAt: { gte: start, lte: end } },
+          { paidAt: { gte: start, lte: end } },
+        ],
+      }),
+      _count: { _all: true },
+      _sum: { as400InvoiceTotalFcfa: true },
+    }),
+    prisma.preorder.aggregate({
+      where: base({ cancelledAt: { gte: start, lte: end } }),
+      _count: { _all: true },
+      _sum: { as400InvoiceTotalFcfa: true },
+    }),
+  ]);
+
+  return {
+    submitted: {
+      count: submitted?._count?._all || 0,
+      amountFcfa: toNumber(submitted?._sum?.totalFcfa),
+    },
+    invoiced: {
+      count: invoiced?._count?._all || 0,
+      amountFcfa: toNumber(invoiced?._sum?.as400InvoiceTotalFcfa),
+    },
+    paid: {
+      count: paid?._count?._all || 0,
+      amountFcfa: toNumber(paid?._sum?.as400InvoiceTotalFcfa),
+    },
+    cancelled: {
+      count: cancelled?._count?._all || 0,
+      amountFcfa: toNumber(cancelled?._sum?.as400InvoiceTotalFcfa),
+    },
+  };
+}
 
 async function getDailySalesReport(req, res) {
   try {
@@ -254,6 +333,14 @@ async function getDailySalesReport(req, res) {
       const submittedAt = new Date(row.submittedAt);
       return submittedAt < start;
     });
+    const previousDay = shiftDayRange(start, -1);
+    const previousSnapshot = await getDailySnapshot(req, previousDay.start, previousDay.end);
+    const currentSnapshot = {
+      submitted: summarizeRows(submittedRows, "totalFcfa"),
+      invoiced: summarizeRows(invoicedRows, "as400InvoiceTotalFcfa"),
+      paid: summarizeRows(paidRows, "as400InvoiceTotalFcfa"),
+      cancelled: summarizeRows(cancelledRows, "as400InvoiceTotalFcfa"),
+    };
 
     return res.json({
       ok: true,
@@ -313,6 +400,15 @@ async function getDailySalesReport(req, res) {
         averageSubmitToInvoiceMinutes: averageMinutes(invoicedRows, "submittedAt", "invoicedAt"),
         averageInvoiceToPaymentMinutes: averageMinutes(paidRows, "invoicedAt", "paidAt"),
         averagePaymentToPreparationMinutes: averageMinutes(launchedRows, "paidAt", "preparationLaunchedAt"),
+      },
+      comparison: {
+        previousDay: {
+          date: previousDay.iso,
+          submitted: buildComparisonMetric(currentSnapshot.submitted, previousSnapshot.submitted),
+          invoiced: buildComparisonMetric(currentSnapshot.invoiced, previousSnapshot.invoiced),
+          paid: buildComparisonMetric(currentSnapshot.paid, previousSnapshot.paid),
+          cancelled: buildComparisonMetric(currentSnapshot.cancelled, previousSnapshot.cancelled),
+        },
       },
     });
   } catch (error) {
