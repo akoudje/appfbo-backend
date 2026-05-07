@@ -49,6 +49,24 @@ function paymentModeLabel(value) {
   return mode || "NON_RENSEIGNE";
 }
 
+function normalizeFilterId(value) {
+  const id = String(value || "").trim();
+  return id || null;
+}
+
+function normalizePaymentModeFilter(value) {
+  const mode = String(value || "").trim().toUpperCase();
+  return mode || null;
+}
+
+function applyCommonFilters(where = {}, filters = {}) {
+  const next = { ...(where || {}) };
+  if (filters.paymentMode) {
+    next.preorderPaymentMode = filters.paymentMode;
+  }
+  return next;
+}
+
 function cancellationReasonLabel(value) {
   const reason = String(value || "").trim();
   return reason || "Motif non renseigné";
@@ -158,6 +176,25 @@ function buildOrderRow(order) {
   };
 }
 
+function addAgeAt(rows = [], dateField, end) {
+  const endMs = end ? new Date(end).getTime() : Date.now();
+  return rows.map((row) => {
+    const startedMs = row?.[dateField] ? new Date(row[dateField]).getTime() : NaN;
+    const ageMinutes =
+      Number.isFinite(startedMs) && Number.isFinite(endMs) && endMs >= startedMs
+        ? Math.round((endMs - startedMs) / 60000)
+        : null;
+    return { ...row, ageMinutes };
+  });
+}
+
+function takeCritical(rows = [], minAgeMinutes, limit = 25) {
+  return rows
+    .filter((row) => Number(row.ageMinutes || 0) >= minAgeMinutes)
+    .sort((a, b) => Number(b.ageMinutes || 0) - Number(a.ageMinutes || 0))
+    .slice(0, limit);
+}
+
 const includeShape = {
   invoicedByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
   manualPaymentValidatedBy: { select: { id: true, fullName: true, email: true, role: true } },
@@ -167,32 +204,36 @@ const includeShape = {
   cancelledByAdmin: { select: { id: true, fullName: true, email: true, role: true } },
 };
 
-async function getDailySnapshot(req, start, end) {
+async function getDailySnapshot(req, start, end, filters = {}) {
   const base = (where = {}) => scopeWhere(req, where);
   const [submitted, invoiced, paid, cancelled] = await Promise.all([
     prisma.preorder.aggregate({
-      where: base({ submittedAt: { gte: start, lte: end } }),
+      where: base(applyCommonFilters({ submittedAt: { gte: start, lte: end } }, filters)),
       _count: { _all: true },
       _sum: { totalFcfa: true },
     }),
     prisma.preorder.aggregate({
-      where: base({ invoicedAt: { gte: start, lte: end } }),
+      where: base(applyCommonFilters({
+        invoicedAt: { gte: start, lte: end },
+        ...(filters.invoicerId ? { invoicedById: filters.invoicerId } : {}),
+      }, filters)),
       _count: { _all: true },
       _sum: { as400InvoiceTotalFcfa: true },
     }),
     prisma.preorder.aggregate({
-      where: base({
+      where: base(applyCommonFilters({
         paymentStatus: "PAID",
+        ...(filters.cashierId ? { manualPaymentValidatedById: filters.cashierId } : {}),
         OR: [
           { manualPaymentValidatedAt: { gte: start, lte: end } },
           { paidAt: { gte: start, lte: end } },
         ],
-      }),
+      }, filters)),
       _count: { _all: true },
       _sum: { as400InvoiceTotalFcfa: true },
     }),
     prisma.preorder.aggregate({
-      where: base({ cancelledAt: { gte: start, lte: end } }),
+      where: base(applyCommonFilters({ cancelledAt: { gte: start, lte: end } }, filters)),
       _count: { _all: true },
       _sum: { as400InvoiceTotalFcfa: true },
     }),
@@ -223,6 +264,11 @@ async function getDailySalesReport(req, res) {
     const countryId = pickCountryId(req);
     const { iso, start, end } = parseReportDate(req.query?.date);
     const base = (where = {}) => scopeWhere(req, where);
+    const filters = {
+      paymentMode: normalizePaymentModeFilter(req.query?.paymentMode),
+      invoicerId: normalizeFilterId(req.query?.invoicerId),
+      cashierId: normalizeFilterId(req.query?.cashierId),
+    };
 
     const [
       submittedRaw,
@@ -237,80 +283,85 @@ async function getDailySalesReport(req, res) {
       pendingPaidRaw,
     ] = await Promise.all([
       prisma.preorder.findMany({
-        where: base({ submittedAt: { gte: start, lte: end } }),
+        where: base(applyCommonFilters({ submittedAt: { gte: start, lte: end } }, filters)),
         include: includeShape,
         orderBy: [{ submittedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({ invoicedAt: { gte: start, lte: end } }),
+        where: base(applyCommonFilters({
+          invoicedAt: { gte: start, lte: end },
+          ...(filters.invoicerId ? { invoicedById: filters.invoicerId } : {}),
+        }, filters)),
         include: includeShape,
         orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({
+        where: base(applyCommonFilters({
           paymentStatus: "PAID",
+          ...(filters.cashierId ? { manualPaymentValidatedById: filters.cashierId } : {}),
           OR: [
             { manualPaymentValidatedAt: { gte: start, lte: end } },
             { paidAt: { gte: start, lte: end } },
           ],
-        }),
+        }, filters)),
         include: includeShape,
         orderBy: [{ paidAt: "asc" }, { manualPaymentValidatedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({ cancelledAt: { gte: start, lte: end } }),
+        where: base(applyCommonFilters({ cancelledAt: { gte: start, lte: end } }, filters)),
         include: includeShape,
         orderBy: [{ cancelledAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({ preparationLaunchedAt: { gte: start, lte: end } }),
+        where: base(applyCommonFilters({ preparationLaunchedAt: { gte: start, lte: end } }, filters)),
         include: includeShape,
         orderBy: [{ preparationLaunchedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({ preparedAt: { gte: start, lte: end } }),
+        where: base(applyCommonFilters({ preparedAt: { gte: start, lte: end } }, filters)),
         include: includeShape,
         orderBy: [{ preparedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({ fulfilledAt: { gte: start, lte: end } }),
+        where: base(applyCommonFilters({ fulfilledAt: { gte: start, lte: end } }, filters)),
         include: includeShape,
         orderBy: [{ fulfilledAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({
+        where: base(applyCommonFilters({
           submittedAt: { lte: end },
           invoicedAt: null,
           status: { not: "CANCELLED" },
-        }),
+        }, filters)),
         include: includeShape,
         orderBy: [{ submittedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({
+        where: base(applyCommonFilters({
           invoicedAt: { lte: end },
           paymentStatus: { not: "PAID" },
           status: { not: "CANCELLED" },
-        }),
+        }, filters)),
         include: includeShape,
         orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base({
+        where: base(applyCommonFilters({
           paymentStatus: "PAID",
           preparationLaunchedAt: null,
           status: { not: "CANCELLED" },
+          ...(filters.cashierId ? { manualPaymentValidatedById: filters.cashierId } : {}),
           OR: [{ paidAt: { lte: end } }, { manualPaymentValidatedAt: { lte: end } }],
-        }),
+        }, filters)),
         include: includeShape,
         orderBy: [{ paidAt: "asc" }, { manualPaymentValidatedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
@@ -324,9 +375,9 @@ async function getDailySalesReport(req, res) {
     const launchedRows = launchedRaw.map(buildOrderRow);
     const preparedRows = preparedRaw.map(buildOrderRow);
     const fulfilledRows = fulfilledRaw.map(buildOrderRow);
-    const pendingSubmittedRows = pendingSubmittedRaw.map(buildOrderRow);
-    const pendingInvoicedRows = pendingInvoicedRaw.map(buildOrderRow);
-    const pendingPaidRows = pendingPaidRaw.map(buildOrderRow);
+    const pendingSubmittedRows = addAgeAt(pendingSubmittedRaw.map(buildOrderRow), "submittedAt", end);
+    const pendingInvoicedRows = addAgeAt(pendingInvoicedRaw.map(buildOrderRow), "invoicedAt", end);
+    const pendingPaidRows = addAgeAt(pendingPaidRaw.map(buildOrderRow), "paidAt", end);
 
     const previousDayInvoiced = invoicedRows.filter((row) => {
       if (!row.submittedAt) return false;
@@ -334,7 +385,7 @@ async function getDailySalesReport(req, res) {
       return submittedAt < start;
     });
     const previousDay = shiftDayRange(start, -1);
-    const previousSnapshot = await getDailySnapshot(req, previousDay.start, previousDay.end);
+    const previousSnapshot = await getDailySnapshot(req, previousDay.start, previousDay.end, filters);
     const currentSnapshot = {
       submitted: summarizeRows(submittedRows, "totalFcfa"),
       invoiced: summarizeRows(invoicedRows, "as400InvoiceTotalFcfa"),
@@ -346,6 +397,7 @@ async function getDailySalesReport(req, res) {
       ok: true,
       date: iso,
       countryId,
+      filters,
       period: {
         start: start.toISOString(),
         end: end.toISOString(),
@@ -393,6 +445,16 @@ async function getDailySalesReport(req, res) {
           ...summarizeRows(pendingPaidRows, "as400InvoiceTotalFcfa"),
           rows: pendingPaidRows,
         },
+      },
+      critical: {
+        thresholdsMinutes: {
+          submittedNotInvoiced: 120,
+          invoicedNotPaid: 60,
+          paidNotLaunched: 30,
+        },
+        submittedNotInvoiced: takeCritical(pendingSubmittedRows, 120),
+        invoicedNotPaid: takeCritical(pendingInvoicedRows, 60),
+        paidNotLaunched: takeCritical(pendingPaidRows, 30),
       },
       performance: {
         byInvoicer: groupByAdmin(invoicedRows, (row) => row.invoicedBy, "as400InvoiceTotalFcfa"),
