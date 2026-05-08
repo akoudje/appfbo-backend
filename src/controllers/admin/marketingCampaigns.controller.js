@@ -2,11 +2,15 @@ const multer = require("multer");
 const prisma = require("../../prisma");
 const { pickCountryId } = require("../../helpers/countryScope");
 const { uploadBuffer } = require("../../services/cloudinary");
+const { normalizePhone, sendSms } = require("../../services/sms.service");
 
 const MAX_SLIDES = 3;
+const MAX_SMS_CAMPAIGNS = 12;
+const MAX_SMS_RECIPIENTS = 1000;
 const MAX_TITLE_LENGTH = 80;
 const MAX_NOTE_LENGTH = 240;
 const MAX_LINK_LENGTH = 500;
+const MAX_SMS_MESSAGE_LENGTH = 459;
 const MAX_IMAGE_LENGTH = 350_000;
 const MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_PUBLISHING_ENVIRONMENTS = new Set(["preview", "production"]);
@@ -66,6 +70,7 @@ const DEFAULT_PAYLOAD = {
     lastUpdatedBy: "",
     releaseNote: "",
   },
+  smsCampaigns: [],
 };
 
 const DEFAULT_PUBLISHING_METADATA = {
@@ -249,6 +254,142 @@ function normalizePublishing(rawPublishing = {}) {
   };
 }
 
+function normalizeCampaignStatus(value = "") {
+  const status = String(value || "").trim().toUpperCase();
+  if (["DRAFT", "READY", "SENDING", "SENT", "PARTIAL", "FAILED", "CANCELLED"].includes(status)) {
+    return status;
+  }
+  return "DRAFT";
+}
+
+function normalizeRecipientStatus(value = "") {
+  const status = String(value || "").trim().toUpperCase();
+  if (
+    ["PENDING", "READY", "SENT", "FAILED", "SKIPPED", "INVALID", "CONFIRMED", "DECLINED"].includes(
+      status,
+    )
+  ) {
+    return status;
+  }
+  return "PENDING";
+}
+
+function normalizeMarketingPhone(value = "") {
+  const normalized = normalizePhone(value);
+  return /^\+225\d{10}$/.test(normalized) ? normalized : "";
+}
+
+function normalizeSmsRecipient(rawRecipient = {}, index = 0) {
+  const phoneRaw = normalizeTextField(rawRecipient.phoneRaw || rawRecipient.phone, {
+    fallback: "",
+    maxLength: 40,
+  });
+  const phoneNormalized =
+    normalizeMarketingPhone(rawRecipient.phoneNormalized || phoneRaw || rawRecipient.phone || "") || "";
+
+  return {
+    id: normalizeTextField(rawRecipient.id, {
+      fallback: `recipient-${index + 1}`,
+      maxLength: 80,
+    }),
+    nom: normalizeTextField(rawRecipient.nom || rawRecipient.name, {
+      fallback: "",
+      maxLength: 120,
+    }),
+    numeroFbo: normalizeTextField(rawRecipient.numeroFbo, {
+      fallback: "",
+      maxLength: 40,
+    }),
+    phoneRaw,
+    phoneNormalized,
+    ville: normalizeTextField(rawRecipient.ville || rawRecipient.city, {
+      fallback: "",
+      maxLength: 80,
+    }),
+    grade: normalizeTextField(rawRecipient.grade, {
+      fallback: "",
+      maxLength: 80,
+    }),
+    status: phoneNormalized ? normalizeRecipientStatus(rawRecipient.status || "READY") : "INVALID",
+    providerMessageId: normalizeTextField(rawRecipient.providerMessageId, {
+      fallback: "",
+      maxLength: 700,
+    }),
+    rsvpToken: normalizeTextField(rawRecipient.rsvpToken, {
+      fallback: cryptoRandomToken(),
+      maxLength: 80,
+    }),
+    lastError: normalizeTextField(rawRecipient.lastError, {
+      fallback: "",
+      maxLength: 300,
+    }),
+    sentAt: typeof rawRecipient.sentAt === "string" ? rawRecipient.sentAt : null,
+    respondedAt: typeof rawRecipient.respondedAt === "string" ? rawRecipient.respondedAt : null,
+  };
+}
+
+function cryptoRandomToken() {
+  return require("crypto").randomBytes(16).toString("hex");
+}
+
+function normalizeSmsCampaign(rawCampaign = {}, index = 0) {
+  const nowIso = new Date().toISOString();
+  const recipients = Array.isArray(rawCampaign.recipients)
+    ? rawCampaign.recipients.slice(0, MAX_SMS_RECIPIENTS)
+    : [];
+
+  return {
+    id: normalizeTextField(rawCampaign.id, {
+      fallback: `sms-${Date.now()}-${index + 1}`,
+      maxLength: 80,
+    }),
+    name: normalizeTextField(rawCampaign.name, {
+      fallback: `Campagne SMS ${index + 1}`,
+      maxLength: 120,
+    }),
+    type: normalizeTextField(rawCampaign.type, {
+      fallback: "EVENT_INVITATION",
+      maxLength: 60,
+    }),
+    eventName: normalizeTextField(rawCampaign.eventName, {
+      fallback: "",
+      maxLength: 160,
+    }),
+    eventDate: normalizeTextField(rawCampaign.eventDate, {
+      fallback: "",
+      maxLength: 40,
+    }),
+    location: normalizeTextField(rawCampaign.location, {
+      fallback: "",
+      maxLength: 160,
+    }),
+    confirmationLink: normalizeTextField(rawCampaign.confirmationLink, {
+      fallback: "",
+      maxLength: MAX_LINK_LENGTH,
+    }),
+    message: normalizeTextField(rawCampaign.message, {
+      fallback:
+        "Bonjour {{nom}}, vous etes invite(e) a {{eventName}} le {{eventDate}} a {{location}}. Infos: {{link}}",
+      maxLength: MAX_SMS_MESSAGE_LENGTH,
+    }),
+    status: normalizeCampaignStatus(rawCampaign.status),
+    testPhone: normalizeTextField(rawCampaign.testPhone, {
+      fallback: "",
+      maxLength: 40,
+    }),
+    recipients: recipients.map(normalizeSmsRecipient),
+    createdAt: typeof rawCampaign.createdAt === "string" ? rawCampaign.createdAt : nowIso,
+    updatedAt: typeof rawCampaign.updatedAt === "string" ? rawCampaign.updatedAt : nowIso,
+    lastSentAt: typeof rawCampaign.lastSentAt === "string" ? rawCampaign.lastSentAt : null,
+    lastTestAt: typeof rawCampaign.lastTestAt === "string" ? rawCampaign.lastTestAt : null,
+  };
+}
+
+function normalizeSmsCampaigns(rawCampaigns = []) {
+  if (!Array.isArray(rawCampaigns)) return [];
+  return rawCampaigns.slice(0, MAX_SMS_CAMPAIGNS).map(normalizeSmsCampaign);
+}
+
 function sanitizePayload(raw) {
   const payload = raw && typeof raw === "object" ? raw : {};
   const rawSlides = Array.isArray(payload.slides) ? payload.slides.slice(0, MAX_SLIDES) : [];
@@ -272,6 +413,7 @@ function sanitizePayload(raw) {
       ),
     },
     publishing: normalizePublishing(payload.publishing || {}),
+    smsCampaigns: normalizeSmsCampaigns(payload.smsCampaigns || []),
   };
 }
 
@@ -285,12 +427,14 @@ function readStoredMarketingContent(content) {
   const editorPayload = sanitizePayload({
     slides: draftContent?.slides || content?.slidesJson,
     sidePanels: draftContent?.sidePanels || content?.sidePanelsJson,
+    smsCampaigns: draftContent?.smsCampaigns || content?.publishingJson?.smsCampaigns || [],
     publishing,
   });
 
   const publishedPayload = sanitizePayload({
     slides: content?.slidesJson,
     sidePanels: content?.sidePanelsJson,
+    smsCampaigns: content?.publishingJson?.smsCampaigns || [],
     publishing,
   });
 
@@ -324,7 +468,9 @@ function buildPublishingRecord({
     draftContent: {
       slides: editorPayload.slides,
       sidePanels: editorPayload.sidePanels,
+      smsCampaigns: editorPayload.smsCampaigns,
     },
+    smsCampaigns: editorPayload.smsCampaigns,
   };
 }
 
@@ -351,6 +497,7 @@ async function getMarketingCampaigns(req, res) {
         publishedSlides: DEFAULT_PAYLOAD.slides,
         publishedSidePanels: DEFAULT_PAYLOAD.sidePanels,
         publishing: DEFAULT_PUBLISHING_METADATA,
+        smsCampaigns: DEFAULT_PAYLOAD.smsCampaigns,
         createdAt: null,
         updatedAt: null,
       });
@@ -365,6 +512,7 @@ async function getMarketingCampaigns(req, res) {
       publishedSlides: publishedPayload.slides,
       publishedSidePanels: publishedPayload.sidePanels,
       publishing,
+      smsCampaigns: editorPayload.smsCampaigns,
       createdAt: content.createdAt,
       updatedAt: content.updatedAt,
     });
@@ -422,6 +570,7 @@ async function updateMarketingCampaigns(req, res) {
       countryId: updated.countryId,
       slides: payload.slides,
       sidePanels: payload.sidePanels,
+      smsCampaigns: payload.smsCampaigns,
       publishedSlides: updated.slidesJson,
       publishedSidePanels: updated.sidePanelsJson,
       publishing: nextPublishing,
@@ -493,6 +642,7 @@ async function publishMarketingCampaigns(req, res) {
       countryId: published.countryId,
       slides: sourcePayload.slides,
       sidePanels: sourcePayload.sidePanels,
+      smsCampaigns: sourcePayload.smsCampaigns,
       publishedSlides: published.slidesJson,
       publishedSidePanels: published.sidePanelsJson,
       publishing: nextPublishing,
@@ -504,6 +654,367 @@ async function publishMarketingCampaigns(req, res) {
     return res
       .status(e.statusCode || 500)
       .json({ message: e.message || "Erreur serveur (publishMarketingCampaigns)" });
+  }
+}
+
+function renderSmsTemplate(template = "", campaign = {}, recipient = {}) {
+  const frontendBaseUrl = String(
+    process.env.FRONTEND_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      "https://forevercivstore.com",
+  ).replace(/\/+$/, "");
+  const rsvpLink =
+    campaign.confirmationLink ||
+    `${frontendBaseUrl}/event/rsvp/${encodeURIComponent(campaign.id)}/${encodeURIComponent(
+      recipient.id || "",
+    )}/${encodeURIComponent(recipient.rsvpToken || "")}`;
+  const replacements = {
+    nom: recipient.nom || "FBO",
+    numeroFbo: recipient.numeroFbo || "",
+    eventName: campaign.eventName || campaign.name || "",
+    eventDate: campaign.eventDate || "",
+    location: campaign.location || "",
+    link: rsvpLink,
+  };
+
+  return Object.entries(replacements).reduce(
+    (message, [key, value]) =>
+      message.replace(new RegExp(`{{\\s*${key}\\s*}}`, "gi"), String(value || "")),
+    String(template || ""),
+  );
+}
+
+async function loadEditorPayload(countryId) {
+  const existing = await prisma.countryMarketingContent.findUnique({
+    where: { countryId },
+    select: {
+      slidesJson: true,
+      sidePanelsJson: true,
+      publishingJson: true,
+    },
+  });
+
+  return {
+    existing,
+    payload: existing
+      ? readStoredMarketingContent(existing).editorPayload
+      : sanitizePayload(DEFAULT_PAYLOAD),
+  };
+}
+
+async function saveEditorPayload({ countryId, payload, existing, actorEmail }) {
+  const currentPublishing = normalizePublishing(existing?.publishingJson || {});
+  const nextPublishing = buildPublishingRecord({
+    currentPublishing,
+    editorPayload: payload,
+    actorEmail,
+    published: false,
+  });
+
+  await prisma.countryMarketingContent.upsert({
+    where: { countryId },
+    update: {
+      publishingJson: nextPublishing,
+    },
+    create: {
+      countryId,
+      slidesJson: DEFAULT_PAYLOAD.slides,
+      sidePanelsJson: DEFAULT_PAYLOAD.sidePanels,
+      publishingJson: nextPublishing,
+    },
+  });
+
+  return nextPublishing;
+}
+
+async function sendSmsCampaignTest(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const campaignId = String(req.params.campaignId || "").trim();
+    const actorEmail = String(req.user?.email || "").trim();
+    const { existing, payload } = await loadEditorPayload(countryId);
+    const campaignIndex = payload.smsCampaigns.findIndex((campaign) => campaign.id === campaignId);
+
+    if (campaignIndex < 0) {
+      return res.status(404).json({ message: "Campagne SMS introuvable." });
+    }
+
+    const campaign = payload.smsCampaigns[campaignIndex];
+    const testPhone = normalizeMarketingPhone(req.body?.phone || campaign.testPhone || "");
+    if (!testPhone) {
+      return res.status(400).json({ message: "Numero de test invalide." });
+    }
+
+    const sampleRecipient = campaign.recipients.find((recipient) => recipient.phoneNormalized) || {};
+    const message = renderSmsTemplate(campaign.message, campaign, sampleRecipient);
+    const result = await sendSms({
+      to: testPhone,
+      message,
+      callbackData: `marketing_test_${campaign.id}`,
+    });
+
+    const updatedCampaign = {
+      ...campaign,
+      testPhone,
+      lastTestAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    payload.smsCampaigns[campaignIndex] = normalizeSmsCampaign(updatedCampaign, campaignIndex);
+    await saveEditorPayload({ countryId, payload, existing, actorEmail });
+
+    return res.json({
+      ok: Boolean(result.accepted),
+      result,
+      campaign: payload.smsCampaigns[campaignIndex],
+    });
+  } catch (e) {
+    console.error("sendSmsCampaignTest error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (sendSmsCampaignTest)" });
+  }
+}
+
+async function sendSmsCampaign(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const campaignId = String(req.params.campaignId || "").trim();
+    const actorEmail = String(req.user?.email || "").trim();
+    const { existing, payload } = await loadEditorPayload(countryId);
+    const campaignIndex = payload.smsCampaigns.findIndex((campaign) => campaign.id === campaignId);
+
+    if (campaignIndex < 0) {
+      return res.status(404).json({ message: "Campagne SMS introuvable." });
+    }
+
+    const campaign = payload.smsCampaigns[campaignIndex];
+    const failedOnly = Boolean(req.body?.failedOnly);
+    const recipients = campaign.recipients.filter(
+      (recipient) =>
+        recipient.phoneNormalized &&
+        (failedOnly
+          ? String(recipient.status || "").toUpperCase() === "FAILED"
+          : !["SENT", "SKIPPED"].includes(String(recipient.status || "").toUpperCase())),
+    );
+
+    if (!recipients.length) {
+      return res.status(400).json({
+        message: failedOnly
+          ? "Aucun destinataire en echec a renvoyer."
+          : "Aucun destinataire valide a envoyer.",
+      });
+    }
+
+    const sentAt = new Date().toISOString();
+    const nextRecipients = [];
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const recipient of campaign.recipients) {
+      if (!recipient.phoneNormalized) {
+        nextRecipients.push({ ...recipient, status: "INVALID", lastError: "Numero invalide" });
+        continue;
+      }
+
+      const recipientStatus = String(recipient.status || "").toUpperCase();
+
+      if (failedOnly && recipientStatus !== "FAILED") {
+        nextRecipients.push(recipient);
+        continue;
+      }
+
+      if (["SENT", "SKIPPED"].includes(recipientStatus)) {
+        nextRecipients.push(recipient);
+        continue;
+      }
+
+      const message = renderSmsTemplate(campaign.message, campaign, recipient);
+      const result = await sendSms({
+        to: recipient.phoneNormalized,
+        message,
+        callbackData: `marketing_${campaign.id}_${recipient.id}`,
+      });
+
+      if (result.accepted) {
+        sentCount += 1;
+        nextRecipients.push({
+          ...recipient,
+          status: "SENT",
+          providerMessageId: result.providerMessageId || "",
+          lastError: "",
+          sentAt,
+        });
+      } else {
+        failedCount += 1;
+        nextRecipients.push({
+          ...recipient,
+          status: "FAILED",
+          providerMessageId: "",
+          lastError: result.errorMessage || result.errorCode || "Echec envoi SMS",
+          sentAt: null,
+        });
+      }
+    }
+
+    const updatedCampaign = normalizeSmsCampaign(
+      {
+        ...campaign,
+        recipients: nextRecipients,
+        status: failedCount && sentCount ? "PARTIAL" : failedCount ? "FAILED" : "SENT",
+        lastSentAt: sentAt,
+        updatedAt: sentAt,
+      },
+      campaignIndex,
+    );
+    payload.smsCampaigns[campaignIndex] = updatedCampaign;
+    await saveEditorPayload({ countryId, payload, existing, actorEmail });
+
+    return res.json({
+      ok: failedCount === 0,
+      sentCount,
+      failedCount,
+      campaign: updatedCampaign,
+    });
+  } catch (e) {
+    console.error("sendSmsCampaign error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (sendSmsCampaign)" });
+  }
+}
+
+async function findSmsCampaignRecipient({ campaignId, recipientId, token }) {
+  const rows = await prisma.countryMarketingContent.findMany({
+    select: {
+      id: true,
+      countryId: true,
+      slidesJson: true,
+      sidePanelsJson: true,
+      publishingJson: true,
+    },
+  });
+
+  for (const row of rows) {
+    const payload = readStoredMarketingContent(row).editorPayload;
+    const campaignIndex = payload.smsCampaigns.findIndex((campaign) => campaign.id === campaignId);
+    if (campaignIndex < 0) continue;
+
+    const campaign = payload.smsCampaigns[campaignIndex];
+    const recipientIndex = campaign.recipients.findIndex(
+      (recipient) => recipient.id === recipientId && recipient.rsvpToken === token,
+    );
+    if (recipientIndex < 0) continue;
+
+    return {
+      content: row,
+      payload,
+      campaign,
+      campaignIndex,
+      recipient: campaign.recipients[recipientIndex],
+      recipientIndex,
+    };
+  }
+
+  return null;
+}
+
+async function getSmsCampaignRsvp(req, res) {
+  try {
+    const campaignId = String(req.params.campaignId || "").trim();
+    const recipientId = String(req.params.recipientId || "").trim();
+    const token = String(req.params.token || "").trim();
+    const found = await findSmsCampaignRecipient({ campaignId, recipientId, token });
+
+    if (!found) {
+      return res.status(404).json({ message: "Invitation introuvable ou expiree." });
+    }
+
+    return res.json({
+      campaign: {
+        id: found.campaign.id,
+        name: found.campaign.name,
+        eventName: found.campaign.eventName,
+        eventDate: found.campaign.eventDate,
+        location: found.campaign.location,
+      },
+      recipient: {
+        id: found.recipient.id,
+        nom: found.recipient.nom,
+        numeroFbo: found.recipient.numeroFbo,
+        status: found.recipient.status,
+        respondedAt: found.recipient.respondedAt,
+      },
+    });
+  } catch (e) {
+    console.error("getSmsCampaignRsvp error:", e);
+    return res.status(500).json({ message: "Erreur serveur (getSmsCampaignRsvp)" });
+  }
+}
+
+async function respondSmsCampaignRsvp(req, res) {
+  try {
+    const campaignId = String(req.params.campaignId || "").trim();
+    const recipientId = String(req.params.recipientId || "").trim();
+    const token = String(req.params.token || "").trim();
+    const response = String(req.body?.response || "").trim().toUpperCase();
+    const nextStatus = response === "DECLINED" ? "DECLINED" : "CONFIRMED";
+    const found = await findSmsCampaignRecipient({ campaignId, recipientId, token });
+
+    if (!found) {
+      return res.status(404).json({ message: "Invitation introuvable ou expiree." });
+    }
+
+    const updatedRecipient = {
+      ...found.recipient,
+      status: nextStatus,
+      respondedAt: new Date().toISOString(),
+      lastError: "",
+    };
+    const nextRecipients = [...found.campaign.recipients];
+    nextRecipients[found.recipientIndex] = updatedRecipient;
+    const nextCampaign = normalizeSmsCampaign(
+      {
+        ...found.campaign,
+        recipients: nextRecipients,
+        updatedAt: new Date().toISOString(),
+      },
+      found.campaignIndex,
+    );
+    found.payload.smsCampaigns[found.campaignIndex] = nextCampaign;
+
+    const nextPublishing = buildPublishingRecord({
+      currentPublishing: normalizePublishing(found.content.publishingJson || {}),
+      editorPayload: found.payload,
+      actorEmail: "public-rsvp",
+      published: false,
+    });
+
+    await prisma.countryMarketingContent.update({
+      where: { id: found.content.id },
+      data: { publishingJson: nextPublishing },
+    });
+
+    return res.json({
+      ok: true,
+      status: nextStatus,
+      campaign: {
+        id: nextCampaign.id,
+        name: nextCampaign.name,
+        eventName: nextCampaign.eventName,
+        eventDate: nextCampaign.eventDate,
+        location: nextCampaign.location,
+      },
+      recipient: {
+        id: updatedRecipient.id,
+        nom: updatedRecipient.nom,
+        numeroFbo: updatedRecipient.numeroFbo,
+        status: updatedRecipient.status,
+        respondedAt: updatedRecipient.respondedAt,
+      },
+    });
+  } catch (e) {
+    console.error("respondSmsCampaignRsvp error:", e);
+    return res.status(500).json({ message: "Erreur serveur (respondSmsCampaignRsvp)" });
   }
 }
 
@@ -550,6 +1061,10 @@ module.exports = {
   getMarketingCampaigns,
   updateMarketingCampaigns,
   publishMarketingCampaigns,
+  sendSmsCampaignTest,
+  sendSmsCampaign,
+  getSmsCampaignRsvp,
+  respondSmsCampaignRsvp,
   uploadMarketingAssetMiddleware,
   uploadMarketingAsset,
 };

@@ -21,6 +21,7 @@ const paymentsRoutes = require("./routes/payments.routes");
 const webhooksRoutes = require("./routes/webhooks.routes");
 const smsRoutes = require("./routes/sms.routes");
 const customerRoutes = require("./routes/customer.routes");
+const marketingEventsRoutes = require("./routes/marketing-events.routes");
 const {
   startExpiredInvoiceAutoCancelScheduler,
 } = require("./services/preorder-expiration.service");
@@ -188,6 +189,7 @@ app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
 app.use("/api/public-config", publicConfigRoutes);
 app.use("/api/customer", customerRoutes);
+app.use("/api/marketing-events", marketingEventsRoutes);
 
 /* =========================================================
    Routes de paiement (webhooks, etc.)

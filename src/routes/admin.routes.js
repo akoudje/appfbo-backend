@@ -171,19 +171,31 @@ router.get(
 
 router.put(
   "/marketing-campaigns",
-  requirePermission(Permission.COUNTRY_WRITE),
+  requirePermission(Permission.MARKETING_WRITE),
   marketingCampaignsController.updateMarketingCampaigns,
 );
 
 router.post(
   "/marketing-campaigns/publish",
-  requirePermission(Permission.COUNTRY_WRITE),
+  requirePermission(Permission.MARKETING_WRITE),
   marketingCampaignsController.publishMarketingCampaigns,
 );
 
 router.post(
+  "/marketing-campaigns/sms/:campaignId/send-test",
+  requirePermission(Permission.MARKETING_WRITE),
+  marketingCampaignsController.sendSmsCampaignTest,
+);
+
+router.post(
+  "/marketing-campaigns/sms/:campaignId/send",
+  requirePermission(Permission.MARKETING_WRITE),
+  marketingCampaignsController.sendSmsCampaign,
+);
+
+router.post(
   "/marketing-campaigns/assets",
-  requirePermission(Permission.COUNTRY_WRITE),
+  requirePermission(Permission.MARKETING_WRITE),
   marketingCampaignsController.uploadMarketingAssetMiddleware,
   marketingCampaignsController.uploadMarketingAsset,
 );
