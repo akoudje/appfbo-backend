@@ -727,21 +727,9 @@ function compactSmsText(value = "") {
     .trim();
 }
 
-function smsBodyContainsLink(message = "") {
-  const text = String(message || "").toLowerCase();
-  return (
-    text.includes("http://") ||
-    text.includes("https://") ||
-    text.includes("www.") ||
-    text.includes("forevercivstore.com")
-  );
-}
-
 function compactMarketingSms(rendered = "", _options = {}) {
   const normalized = compactSmsText(rendered);
-  // Ne pas tronquer si le message contient un lien — évite de casser l'URL.
-  // Orange accepte les messages multi-parties pour les SMS avec liens.
-  return smsBodyContainsLink(normalized) ? normalized : normalized.slice(0, MAX_MARKETING_SMS_LENGTH);
+  return normalized.slice(0, MAX_MARKETING_SMS_LENGTH);
 }
 
 function buildMarketingSmsFallback({ recipient = {}, campaign = {}, includeLink = false } = {}) {
@@ -776,6 +764,7 @@ function buildMarketingSmsFallback({ recipient = {}, campaign = {}, includeLink 
 
 async function sendMarketingSmsWithFallback({ to, campaign, recipient, callbackData }) {
   const primaryMessage = renderSmsTemplate(campaign.message, campaign, recipient);
+  const messageDiagnostics = buildSmsMessageDiagnostics(primaryMessage);
   const primaryResult = await sendSms({
     to,
     message: primaryMessage,
@@ -786,6 +775,16 @@ async function sendMarketingSmsWithFallback({ to, campaign, recipient, callbackD
     ...primaryResult,
     fallbackUsed: false,
     sentMessageLength: primaryMessage.length,
+    messageDiagnostics,
+  };
+}
+
+function buildSmsMessageDiagnostics(message = "") {
+  const text = String(message || "");
+  return {
+    length: text.length,
+    preview: text.slice(0, 120),
+    nonAsciiChars: Array.from(new Set(text.match(/[^\x20-\x7E]/g) || [])).slice(0, 12),
   };
 }
 
@@ -931,6 +930,7 @@ async function processCampaignSends({ countryId, campaignId, actorEmail, failedO
         recipientId: recipient.id,
         phone: recipient.phoneNormalized,
         accepted: result.accepted,
+        message: result.messageDiagnostics,
         ...(result.accepted ? {} : { errorCode: result.errorCode, errorMessage: result.errorMessage }),
       });
 
