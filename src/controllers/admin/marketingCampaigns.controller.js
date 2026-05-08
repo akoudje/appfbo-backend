@@ -5,6 +5,15 @@ const { pickCountryId } = require("../../helpers/countryScope");
 const { uploadBuffer } = require("../../services/cloudinary");
 const { normalizePhone, sendSms } = require("../../services/sms.service");
 
+const MARKETING_SMS_DELAY_MS = Math.max(
+  0,
+  parseInt(process.env.MARKETING_SMS_DELAY_MS || "300", 10),
+);
+
+function sleep(ms) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
 const MAX_SLIDES = 3;
 const MAX_SMS_CAMPAIGNS = 12;
 const MAX_SMS_RECIPIENTS = 1000;
@@ -718,9 +727,21 @@ function compactSmsText(value = "") {
     .trim();
 }
 
-function compactMarketingSms(rendered = "", { recipient = {}, campaign = {}, link = "" } = {}) {
+function smsBodyContainsLink(message = "") {
+  const text = String(message || "").toLowerCase();
+  return (
+    text.includes("http://") ||
+    text.includes("https://") ||
+    text.includes("www.") ||
+    text.includes("forevercivstore.com")
+  );
+}
+
+function compactMarketingSms(rendered = "", _options = {}) {
   const normalized = compactSmsText(rendered);
-  return normalized.slice(0, MAX_MARKETING_SMS_LENGTH);
+  // Ne pas tronquer si le message contient un lien — évite de casser l'URL.
+  // Orange accepte les messages multi-parties pour les SMS avec liens.
+  return smsBodyContainsLink(normalized) ? normalized : normalized.slice(0, MAX_MARKETING_SMS_LENGTH);
 }
 
 function buildMarketingSmsFallback({ recipient = {}, campaign = {}, includeLink = false } = {}) {
@@ -859,40 +880,21 @@ async function sendSmsCampaignTest(req, res) {
   }
 }
 
-async function sendSmsCampaign(req, res) {
+async function processCampaignSends({ countryId, campaignId, actorEmail, failedOnly }) {
   try {
-    const countryId = pickCountryId(req);
-    const campaignId = String(req.params.campaignId || "").trim();
-    const actorEmail = String(req.user?.email || "").trim();
     const { existing, payload } = await loadEditorPayload(countryId);
-    const campaignIndex = payload.smsCampaigns.findIndex((campaign) => campaign.id === campaignId);
-
+    const campaignIndex = payload.smsCampaigns.findIndex((c) => c.id === campaignId);
     if (campaignIndex < 0) {
-      return res.status(404).json({ message: "Campagne SMS introuvable." });
+      console.error("[campaign][sms] campaign not found during background processing", { campaignId });
+      return;
     }
 
     const campaign = payload.smsCampaigns[campaignIndex];
-    const failedOnly = Boolean(req.body?.failedOnly);
-    const recipients = campaign.recipients.filter(
-      (recipient) =>
-        recipient.phoneNormalized &&
-        (failedOnly
-          ? String(recipient.status || "").toUpperCase() === "FAILED"
-          : !["SENT", "SKIPPED"].includes(String(recipient.status || "").toUpperCase())),
-    );
-
-    if (!recipients.length) {
-      return res.status(400).json({
-        message: failedOnly
-          ? "Aucun destinataire en echec a renvoyer."
-          : "Aucun destinataire valide a envoyer.",
-      });
-    }
-
     const sentAt = new Date().toISOString();
     const nextRecipients = [];
     let sentCount = 0;
     let failedCount = 0;
+    let sendIndex = 0;
 
     for (const recipient of campaign.recipients) {
       if (!recipient.phoneNormalized) {
@@ -912,11 +914,24 @@ async function sendSmsCampaign(req, res) {
         continue;
       }
 
+      if (MARKETING_SMS_DELAY_MS > 0 && sendIndex > 0) {
+        await sleep(MARKETING_SMS_DELAY_MS);
+      }
+      sendIndex += 1;
+
       const result = await sendMarketingSmsWithFallback({
         to: recipient.phoneNormalized,
         campaign,
         recipient,
         callbackData: `marketing_${campaign.id}_${recipient.id}`,
+      });
+
+      console.log("[campaign][sms] recipient result", {
+        campaignId,
+        recipientId: recipient.id,
+        phone: recipient.phoneNormalized,
+        accepted: result.accepted,
+        ...(result.accepted ? {} : { errorCode: result.errorCode, errorMessage: result.errorMessage }),
       });
 
       if (result.accepted) {
@@ -925,9 +940,7 @@ async function sendSmsCampaign(req, res) {
           ...recipient,
           status: "SENT",
           providerMessageId: result.providerMessageId || "",
-          lastError: result.fallbackUsed
-            ? `Envoye sans lien apres rejet Orange: ${result.firstErrorMessage || "message invalide"}`
-            : "",
+          lastError: "",
           sentAt,
         });
       } else {
@@ -942,30 +955,106 @@ async function sendSmsCampaign(req, res) {
       }
     }
 
+    const finalStatus = failedCount && sentCount ? "PARTIAL" : failedCount ? "FAILED" : "SENT";
     const updatedCampaign = normalizeSmsCampaign(
       {
         ...campaign,
         recipients: nextRecipients,
-        status: failedCount && sentCount ? "PARTIAL" : failedCount ? "FAILED" : "SENT",
+        status: finalStatus,
         lastSentAt: sentAt,
-        updatedAt: sentAt,
+        updatedAt: new Date().toISOString(),
       },
       campaignIndex,
     );
-    payload.smsCampaigns[campaignIndex] = updatedCampaign;
+
+    const { existing: freshExisting, payload: freshPayload } = await loadEditorPayload(countryId);
+    const freshIndex = freshPayload.smsCampaigns.findIndex((c) => c.id === campaignId);
+    if (freshIndex < 0) {
+      console.error("[campaign][sms] campaign lost before final save", { campaignId });
+      return;
+    }
+    freshPayload.smsCampaigns[freshIndex] = updatedCampaign;
+    await saveEditorPayload({ countryId, payload: freshPayload, existing: freshExisting, actorEmail });
+
+    console.log("[campaign][sms] send complete", { campaignId, sentCount, failedCount, status: finalStatus });
+  } catch (err) {
+    console.error("[campaign][sms] processCampaignSends error", { campaignId, error: err.message });
+    try {
+      const { existing, payload } = await loadEditorPayload(countryId);
+      const idx = payload.smsCampaigns.findIndex((c) => c.id === campaignId);
+      if (idx >= 0 && String(payload.smsCampaigns[idx].status || "").toUpperCase() === "SENDING") {
+        payload.smsCampaigns[idx] = normalizeSmsCampaign(
+          { ...payload.smsCampaigns[idx], status: "FAILED", updatedAt: new Date().toISOString() },
+          idx,
+        );
+        await saveEditorPayload({ countryId, payload, existing, actorEmail });
+      }
+    } catch (saveErr) {
+      console.error("[campaign][sms] failed to mark campaign as FAILED:", saveErr.message);
+    }
+  }
+}
+
+async function sendSmsCampaign(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const campaignId = String(req.params.campaignId || "").trim();
+    const actorEmail = String(req.user?.email || "").trim();
+    const { existing, payload } = await loadEditorPayload(countryId);
+    const campaignIndex = payload.smsCampaigns.findIndex((campaign) => campaign.id === campaignId);
+
+    if (campaignIndex < 0) {
+      return res.status(404).json({ message: "Campagne SMS introuvable." });
+    }
+
+    const campaign = payload.smsCampaigns[campaignIndex];
+
+    if (String(campaign.status || "").toUpperCase() === "SENDING") {
+      return res.status(409).json({ message: "Un envoi est deja en cours pour cette campagne." });
+    }
+
+    const failedOnly = Boolean(req.body?.failedOnly);
+    const eligibleCount = campaign.recipients.filter(
+      (recipient) =>
+        recipient.phoneNormalized &&
+        (failedOnly
+          ? String(recipient.status || "").toUpperCase() === "FAILED"
+          : !["SENT", "SKIPPED"].includes(String(recipient.status || "").toUpperCase())),
+    ).length;
+
+    if (!eligibleCount) {
+      return res.status(400).json({
+        message: failedOnly
+          ? "Aucun destinataire en echec a renvoyer."
+          : "Aucun destinataire valide a envoyer.",
+      });
+    }
+
+    const sendingCampaign = normalizeSmsCampaign(
+      { ...campaign, status: "SENDING", updatedAt: new Date().toISOString() },
+      campaignIndex,
+    );
+    payload.smsCampaigns[campaignIndex] = sendingCampaign;
     await saveEditorPayload({ countryId, payload, existing, actorEmail });
 
-    return res.json({
-      ok: failedCount === 0,
-      sentCount,
-      failedCount,
-      campaign: updatedCampaign,
+    res.status(202).json({
+      sending: true,
+      total: eligibleCount,
+      campaign: sendingCampaign,
+    });
+
+    setImmediate(() => {
+      processCampaignSends({ countryId, campaignId, actorEmail, failedOnly }).catch((err) => {
+        console.error("[campaign][sms] unhandled background error:", err);
+      });
     });
   } catch (e) {
     console.error("sendSmsCampaign error:", e);
-    return res
-      .status(e.statusCode || 500)
-      .json({ message: e.message || "Erreur serveur (sendSmsCampaign)" });
+    if (!res.headersSent) {
+      return res
+        .status(e.statusCode || 500)
+        .json({ message: e.message || "Erreur serveur (sendSmsCampaign)" });
+    }
   }
 }
 
