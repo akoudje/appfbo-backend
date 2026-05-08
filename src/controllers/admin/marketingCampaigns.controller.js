@@ -768,7 +768,7 @@ async function sendMarketingSmsWithFallback({ to, campaign, recipient, callbackD
   const primaryResult = await sendSms({
     to,
     message: primaryMessage,
-    callbackData,
+    callbackData: null,
   });
 
   return {

@@ -58,9 +58,18 @@ function orangeConfigured() {
   );
 }
 
+function buildSafeClientCorrelator(callbackData = null) {
+  if (!callbackData) return undefined;
+  const safeData = String(callbackData || "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 32);
+  return `app${Date.now()}${safeData || "sms"}`.slice(0, 48);
+}
+
 async function sendSms({ to, message, callbackData = null }) {
   const toAddress = normalizePhone(to);
   const normalizedMessage = clampSmsContent(message);
+  const clientCorrelator = buildSafeClientCorrelator(callbackData);
 
   if (!toAddress) {
     return {
@@ -90,14 +99,13 @@ async function sendSms({ to, message, callbackData = null }) {
       senderAddress: process.env.ORANGE_SENDER_ADDRESS,
       messageLength: normalizedMessage.length,
       maxLength: MAX_SMS_LENGTH,
+      clientCorrelator: clientCorrelator || "(auto)",
     });
 
     const smsResult = await sendText({
       phone: toAddress,
       message: normalizedMessage,
-      clientCorrelator: callbackData
-        ? `app_${Date.now()}_${String(callbackData).slice(0, 40)}`
-        : undefined,
+      clientCorrelator,
     });
 
     console.log("[sms][orange] send accepted", {
