@@ -8,6 +8,7 @@ const { normalizePhone, sendSms } = require("../../services/sms.service");
 const MAX_SLIDES = 3;
 const MAX_SMS_CAMPAIGNS = 12;
 const MAX_SMS_RECIPIENTS = 1000;
+const MAX_MARKETING_SMS_LENGTH = 160;
 const MAX_TITLE_LENGTH = 80;
 const MAX_NOTE_LENGTH = 240;
 const MAX_LINK_LENGTH = 500;
@@ -666,11 +667,7 @@ function renderSmsTemplate(template = "", campaign = {}, recipient = {}) {
       process.env.FRONTEND_URL ||
       "https://forevercivstore.com",
   );
-  const rsvpLink =
-    campaign.confirmationLink ||
-    `${frontendBaseUrl}/event/rsvp/${encodeURIComponent(campaign.id)}/${encodeURIComponent(
-      recipient.id || "",
-    )}/${encodeURIComponent(recipient.rsvpToken || "")}`;
+  const rsvpLink = campaign.confirmationLink || buildShortRsvpLink(frontendBaseUrl, recipient);
   const replacements = {
     nom: recipient.nom || "FBO",
     numeroFbo: recipient.numeroFbo || "",
@@ -680,11 +677,17 @@ function renderSmsTemplate(template = "", campaign = {}, recipient = {}) {
     link: rsvpLink,
   };
 
-  return Object.entries(replacements).reduce(
+  const rendered = Object.entries(replacements).reduce(
     (message, [key, value]) =>
       message.replace(new RegExp(`{{\\s*${key}\\s*}}`, "gi"), String(value || "")),
     String(template || ""),
   );
+
+  return compactMarketingSms(rendered, {
+    recipient,
+    campaign,
+    link: rsvpLink,
+  });
 }
 
 function normalizePublicBaseUrl(value = "") {
@@ -698,6 +701,41 @@ function normalizePublicBaseUrl(value = "") {
   } catch (_) {
     return "https://forevercivstore.com";
   }
+}
+
+function buildShortRsvpLink(frontendBaseUrl, recipient = {}) {
+  return `${frontendBaseUrl}/e/${encodeURIComponent(recipient.rsvpToken || "")}`;
+}
+
+function compactSmsText(value = "") {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactMarketingSms(rendered = "", { recipient = {}, campaign = {}, link = "" } = {}) {
+  const normalized = compactSmsText(rendered);
+  if (normalized.length <= MAX_MARKETING_SMS_LENGTH) return normalized;
+
+  const name = compactSmsText(recipient.nom || "FBO").slice(0, 24);
+  const eventDate = compactSmsText(campaign.eventDate || "").slice(0, 28);
+  const location = compactSmsText(campaign.location || "").slice(0, 28);
+  const candidates = [
+    `FOREVER: ${name}, invitation ${eventDate} ${location}. Confirmez: ${link}`,
+    `FOREVER: Invitation ${eventDate} ${location}. Confirmez: ${link}`,
+    `FOREVER: Invitation evenement. Confirmez: ${link}`,
+    `FOREVER: Confirmez votre invitation: ${link}`,
+  ].map(compactSmsText);
+
+  const fitting = candidates.find((candidate) => candidate.length <= MAX_MARKETING_SMS_LENGTH);
+  if (fitting) return fitting;
+
+  return candidates[candidates.length - 1].slice(0, MAX_MARKETING_SMS_LENGTH);
 }
 
 async function loadEditorPayload(countryId) {
@@ -934,6 +972,40 @@ async function findSmsCampaignRecipient({ campaignId, recipientId, token }) {
   return null;
 }
 
+async function findSmsCampaignRecipientByToken(token) {
+  const rows = await prisma.countryMarketingContent.findMany({
+    select: {
+      id: true,
+      countryId: true,
+      slidesJson: true,
+      sidePanelsJson: true,
+      publishingJson: true,
+    },
+  });
+
+  for (const row of rows) {
+    const payload = readStoredMarketingContent(row).editorPayload;
+    for (let campaignIndex = 0; campaignIndex < payload.smsCampaigns.length; campaignIndex += 1) {
+      const campaign = payload.smsCampaigns[campaignIndex];
+      const recipientIndex = campaign.recipients.findIndex(
+        (recipient) => recipient.rsvpToken === token,
+      );
+      if (recipientIndex < 0) continue;
+
+      return {
+        content: row,
+        payload,
+        campaign,
+        campaignIndex,
+        recipient: campaign.recipients[recipientIndex],
+        recipientIndex,
+      };
+    }
+  }
+
+  return null;
+}
+
 async function getSmsCampaignRsvp(req, res) {
   try {
     const campaignId = String(req.params.campaignId || "").trim();
@@ -964,6 +1036,37 @@ async function getSmsCampaignRsvp(req, res) {
   } catch (e) {
     console.error("getSmsCampaignRsvp error:", e);
     return res.status(500).json({ message: "Erreur serveur (getSmsCampaignRsvp)" });
+  }
+}
+
+async function getSmsCampaignRsvpByToken(req, res) {
+  try {
+    const token = String(req.params.token || "").trim();
+    const found = await findSmsCampaignRecipientByToken(token);
+
+    if (!found) {
+      return res.status(404).json({ message: "Invitation introuvable ou expiree." });
+    }
+
+    return res.json({
+      campaign: {
+        id: found.campaign.id,
+        name: found.campaign.name,
+        eventName: found.campaign.eventName,
+        eventDate: found.campaign.eventDate,
+        location: found.campaign.location,
+      },
+      recipient: {
+        id: found.recipient.id,
+        nom: found.recipient.nom,
+        numeroFbo: found.recipient.numeroFbo,
+        status: found.recipient.status,
+        respondedAt: found.recipient.respondedAt,
+      },
+    });
+  } catch (e) {
+    console.error("getSmsCampaignRsvpByToken error:", e);
+    return res.status(500).json({ message: "Erreur serveur (getSmsCampaignRsvpByToken)" });
   }
 }
 
@@ -1034,6 +1137,75 @@ async function respondSmsCampaignRsvp(req, res) {
   }
 }
 
+async function respondSmsCampaignRsvpByToken(req, res) {
+  try {
+    const token = String(req.params.token || "").trim();
+    const response = String(req.body?.response || "").trim().toUpperCase();
+    const found = await findSmsCampaignRecipientByToken(token);
+
+    if (!found) {
+      return res.status(404).json({ message: "Invitation introuvable ou expiree." });
+    }
+
+    return saveSmsCampaignRsvpResponse({ found, response, res });
+  } catch (e) {
+    console.error("respondSmsCampaignRsvpByToken error:", e);
+    return res.status(500).json({ message: "Erreur serveur (respondSmsCampaignRsvpByToken)" });
+  }
+}
+
+async function saveSmsCampaignRsvpResponse({ found, response, res }) {
+  const nextStatus = response === "DECLINED" ? "DECLINED" : "CONFIRMED";
+  const updatedRecipient = {
+    ...found.recipient,
+    status: nextStatus,
+    respondedAt: new Date().toISOString(),
+    lastError: "",
+  };
+  const nextRecipients = [...found.campaign.recipients];
+  nextRecipients[found.recipientIndex] = updatedRecipient;
+  const nextCampaign = normalizeSmsCampaign(
+    {
+      ...found.campaign,
+      recipients: nextRecipients,
+      updatedAt: new Date().toISOString(),
+    },
+    found.campaignIndex,
+  );
+  found.payload.smsCampaigns[found.campaignIndex] = nextCampaign;
+
+  const nextPublishing = buildPublishingRecord({
+    currentPublishing: normalizePublishing(found.content.publishingJson || {}),
+    editorPayload: found.payload,
+    actorEmail: "public-rsvp",
+    published: false,
+  });
+
+  await prisma.countryMarketingContent.update({
+    where: { id: found.content.id },
+    data: { publishingJson: nextPublishing },
+  });
+
+  return res.json({
+    ok: true,
+    status: nextStatus,
+    campaign: {
+      id: nextCampaign.id,
+      name: nextCampaign.name,
+      eventName: nextCampaign.eventName,
+      eventDate: nextCampaign.eventDate,
+      location: nextCampaign.location,
+    },
+    recipient: {
+      id: updatedRecipient.id,
+      nom: updatedRecipient.nom,
+      numeroFbo: updatedRecipient.numeroFbo,
+      status: updatedRecipient.status,
+      respondedAt: updatedRecipient.respondedAt,
+    },
+  });
+}
+
 async function uploadMarketingAsset(req, res) {
   try {
     const countryId = pickCountryId(req);
@@ -1081,6 +1253,8 @@ module.exports = {
   sendSmsCampaign,
   getSmsCampaignRsvp,
   respondSmsCampaignRsvp,
+  getSmsCampaignRsvpByToken,
+  respondSmsCampaignRsvpByToken,
   uploadMarketingAssetMiddleware,
   uploadMarketingAsset,
 };
