@@ -12,7 +12,7 @@ const MAX_MARKETING_SMS_LENGTH = 160;
 const MAX_TITLE_LENGTH = 80;
 const MAX_NOTE_LENGTH = 240;
 const MAX_LINK_LENGTH = 500;
-const MAX_SMS_MESSAGE_LENGTH = 459;
+const MAX_SMS_MESSAGE_LENGTH = MAX_MARKETING_SMS_LENGTH;
 const MAX_IMAGE_LENGTH = 350_000;
 const MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_PUBLISHING_ENVIRONMENTS = new Set(["preview", "production"]);
@@ -371,7 +371,7 @@ function normalizeSmsCampaign(rawCampaign = {}, index = 0) {
     }),
     message: normalizeTextField(rawCampaign.message, {
       fallback:
-        "Bonjour {{nom}}, vous etes invite(e) a {{eventName}} le {{eventDate}} a {{location}}. Infos: {{link}}",
+        "FOREVER: Bonjour {{nom}}, invitation {{eventDate}} a {{location}}.",
       maxLength: MAX_SMS_MESSAGE_LENGTH,
     }),
     status: normalizeCampaignStatus(rawCampaign.status),
@@ -720,22 +720,52 @@ function compactSmsText(value = "") {
 
 function compactMarketingSms(rendered = "", { recipient = {}, campaign = {}, link = "" } = {}) {
   const normalized = compactSmsText(rendered);
-  if (normalized.length <= MAX_MARKETING_SMS_LENGTH) return normalized;
+  return normalized.slice(0, MAX_MARKETING_SMS_LENGTH);
+}
 
+function buildMarketingSmsFallback({ recipient = {}, campaign = {}, includeLink = false } = {}) {
   const name = compactSmsText(recipient.nom || "FBO").slice(0, 24);
   const eventDate = compactSmsText(campaign.eventDate || "").slice(0, 28);
   const location = compactSmsText(campaign.location || "").slice(0, 28);
+  const eventName = compactSmsText(campaign.eventName || campaign.name || "evenement").slice(0, 32);
+  const link = includeLink
+    ? buildShortRsvpLink(
+        normalizePublicBaseUrl(
+          process.env.FRONTEND_PUBLIC_URL ||
+            process.env.APP_PUBLIC_BASE_URL ||
+            process.env.APP_BASE_URL ||
+            "https://forevercivstore.com",
+        ),
+        recipient,
+      )
+    : "";
+
   const candidates = [
-    `FOREVER: ${name}, invitation ${eventDate} ${location}. Confirmez: ${link}`,
-    `FOREVER: Invitation ${eventDate} ${location}. Confirmez: ${link}`,
-    `FOREVER: Invitation evenement. Confirmez: ${link}`,
-    `FOREVER: Confirmez votre invitation: ${link}`,
+    `FOREVER: ${name}, invitation ${eventName} ${eventDate} ${location}.${link ? ` Confirmez: ${link}` : ""}`,
+    `FOREVER: Invitation ${eventName} ${eventDate} ${location}.${link ? ` Confirmez: ${link}` : ""}`,
+    `FOREVER: Invitation evenement ${eventDate} ${location}.`,
+    "FOREVER: Vous etes invite(e) a un evenement. Merci de vous rapprocher de votre responsable.",
   ].map(compactSmsText);
 
-  const fitting = candidates.find((candidate) => candidate.length <= MAX_MARKETING_SMS_LENGTH);
-  if (fitting) return fitting;
+  return (
+    candidates.find((candidate) => candidate.length <= MAX_MARKETING_SMS_LENGTH) ||
+    candidates[candidates.length - 1].slice(0, MAX_MARKETING_SMS_LENGTH)
+  );
+}
 
-  return candidates[candidates.length - 1].slice(0, MAX_MARKETING_SMS_LENGTH);
+async function sendMarketingSmsWithFallback({ to, campaign, recipient, callbackData }) {
+  const primaryMessage = renderSmsTemplate(campaign.message, campaign, recipient);
+  const primaryResult = await sendSms({
+    to,
+    message: primaryMessage,
+    callbackData,
+  });
+
+  return {
+    ...primaryResult,
+    fallbackUsed: false,
+    sentMessageLength: primaryMessage.length,
+  };
 }
 
 async function loadEditorPayload(countryId) {
@@ -800,10 +830,10 @@ async function sendSmsCampaignTest(req, res) {
     }
 
     const sampleRecipient = campaign.recipients.find((recipient) => recipient.phoneNormalized) || {};
-    const message = renderSmsTemplate(campaign.message, campaign, sampleRecipient);
-    const result = await sendSms({
+    const result = await sendMarketingSmsWithFallback({
       to: testPhone,
-      message,
+      campaign,
+      recipient: sampleRecipient,
       callbackData: `marketing_test_${campaign.id}`,
     });
 
@@ -882,10 +912,10 @@ async function sendSmsCampaign(req, res) {
         continue;
       }
 
-      const message = renderSmsTemplate(campaign.message, campaign, recipient);
-      const result = await sendSms({
+      const result = await sendMarketingSmsWithFallback({
         to: recipient.phoneNormalized,
-        message,
+        campaign,
+        recipient,
         callbackData: `marketing_${campaign.id}_${recipient.id}`,
       });
 
@@ -895,7 +925,9 @@ async function sendSmsCampaign(req, res) {
           ...recipient,
           status: "SENT",
           providerMessageId: result.providerMessageId || "",
-          lastError: "",
+          lastError: result.fallbackUsed
+            ? `Envoye sans lien apres rejet Orange: ${result.firstErrorMessage || "message invalide"}`
+            : "",
           sentAt,
         });
       } else {
