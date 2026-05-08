@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const multer = require("multer");
 const prisma = require("../../prisma");
 const { pickCountryId } = require("../../helpers/countryScope");
@@ -279,6 +280,10 @@ function normalizeMarketingPhone(value = "") {
   return /^\+225\d{10}$/.test(normalized) ? normalized : "";
 }
 
+function cryptoRandomToken() {
+  return crypto.randomBytes(16).toString("hex");
+}
+
 function normalizeSmsRecipient(rawRecipient = {}, index = 0) {
   const phoneRaw = normalizeTextField(rawRecipient.phoneRaw || rawRecipient.phone, {
     fallback: "",
@@ -326,10 +331,6 @@ function normalizeSmsRecipient(rawRecipient = {}, index = 0) {
     sentAt: typeof rawRecipient.sentAt === "string" ? rawRecipient.sentAt : null,
     respondedAt: typeof rawRecipient.respondedAt === "string" ? rawRecipient.respondedAt : null,
   };
-}
-
-function cryptoRandomToken() {
-  return require("crypto").randomBytes(16).toString("hex");
 }
 
 function normalizeSmsCampaign(rawCampaign = {}, index = 0) {
@@ -658,11 +659,13 @@ async function publishMarketingCampaigns(req, res) {
 }
 
 function renderSmsTemplate(template = "", campaign = {}, recipient = {}) {
-  const frontendBaseUrl = String(
+  const frontendBaseUrl = normalizePublicBaseUrl(
     process.env.FRONTEND_PUBLIC_URL ||
+      process.env.APP_PUBLIC_BASE_URL ||
+      process.env.APP_BASE_URL ||
       process.env.FRONTEND_URL ||
       "https://forevercivstore.com",
-  ).replace(/\/+$/, "");
+  );
   const rsvpLink =
     campaign.confirmationLink ||
     `${frontendBaseUrl}/event/rsvp/${encodeURIComponent(campaign.id)}/${encodeURIComponent(
@@ -682,6 +685,19 @@ function renderSmsTemplate(template = "", campaign = {}, recipient = {}) {
       message.replace(new RegExp(`{{\\s*${key}\\s*}}`, "gi"), String(value || "")),
     String(template || ""),
   );
+}
+
+function normalizePublicBaseUrl(value = "") {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return "https://forevercivstore.com";
+
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(withProtocol);
+    return parsed.origin;
+  } catch (_) {
+    return "https://forevercivstore.com";
+  }
 }
 
 async function loadEditorPayload(countryId) {
