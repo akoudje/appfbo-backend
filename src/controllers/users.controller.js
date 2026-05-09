@@ -21,6 +21,7 @@ const ROLE_ASSIGNMENT_MATRIX = {
     AdminRole.BILLING_MANAGER,
     AdminRole.COUNTER_MANAGER,
     AdminRole.STOCK_MANAGER,
+    AdminRole.MARKETING_MANAGER,
     AdminRole.MARKETING_ASSISTANT,
     AdminRole.INVOICER,
     AdminRole.CAISSIERE,

@@ -1,5 +1,4 @@
 const prisma = require("../../prisma");
-const { scopeWhere } = require("../../helpers/countryScope");
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -35,16 +34,17 @@ async function getStockDashboard(req, res) {
       criticalProducts,
       recentMovements,
     ] = await Promise.all([
-      prisma.product.count({ where: scopeWhere(req) }),
-      prisma.product.count({ where: scopeWhere(req, { stockQty: { gt: 0 } }) }),
-      prisma.product.count({ where: scopeWhere(req, { stockQty: { lte: 0 } }) }),
-      prisma.product.count({
-        where: scopeWhere(req, {
+      prisma.countryProduct.count({ where: { countryId } }),
+      prisma.countryProduct.count({ where: { countryId, stockQty: { gt: 0 } } }),
+      prisma.countryProduct.count({ where: { countryId, stockQty: { lte: 0 } } }),
+      prisma.countryProduct.count({
+        where: {
+          countryId,
           stockQty: { gt: 0, lte: lowStockThreshold },
-        }),
+        },
       }),
-      prisma.product.aggregate({
-        where: scopeWhere(req),
+      prisma.countryProduct.aggregate({
+        where: { countryId },
         _sum: { stockQty: true },
       }),
       prisma.preorder.count({
@@ -63,24 +63,30 @@ async function getStockDashboard(req, res) {
           resolvedAt: null,
         },
       }),
-      prisma.product.findMany({
-        where: scopeWhere(req, {
+      prisma.countryProduct.findMany({
+        where: {
+          countryId,
           stockQty: { lte: lowStockThreshold },
-        }),
-        orderBy: [{ stockQty: "asc" }, { nom: "asc" }],
+        },
+        orderBy: [{ stockQty: "asc" }, { product: { nom: "asc" } }],
         take: 8,
         select: {
           id: true,
-          sku: true,
-          nom: true,
-          category: true,
           stockQty: true,
           actif: true,
+          product: {
+            select: {
+              id: true,
+              sku: true,
+              nom: true,
+              category: true,
+            },
+          },
         },
       }),
       prisma.stockMovement.findMany({
         where: {
-          product: { is: { countryId } },
+          countryId,
         },
         orderBy: { createdAt: "desc" },
         take: 8,
@@ -123,7 +129,14 @@ async function getStockDashboard(req, res) {
         openAnomaliesCount,
         lowStockThreshold,
       },
-      criticalProducts,
+      criticalProducts: criticalProducts.map((item) => ({
+        id: item.product.id,
+        sku: item.product.sku,
+        nom: item.product.nom,
+        category: item.product.category,
+        stockQty: item.stockQty,
+        actif: item.actif,
+      })),
       recentMovements,
     });
   } catch (error) {
@@ -144,7 +157,7 @@ async function listStockMovements(req, res) {
     const days = Math.min(180, parsePositiveInt(req.query.days, 30));
 
     const where = {
-      product: { is: { countryId: req.countryId } },
+          countryId: req.countryId,
       ...(days
         ? {
             createdAt: {
@@ -247,19 +260,34 @@ async function adjustStock(req, res) {
       });
     }
 
-    const product = await prisma.product.findFirst({
-      where: scopeWhere(req, { id: String(productId).trim() }),
+    const productAvailability = await prisma.countryProduct.findUnique({
+      where: {
+        countryId_productId: {
+          countryId: req.countryId,
+          productId: String(productId).trim(),
+        },
+      },
       select: {
         id: true,
-        sku: true,
-        nom: true,
+        productId: true,
         stockQty: true,
+        product: {
+          select: {
+            id: true,
+            sku: true,
+            nom: true,
+          },
+        },
       },
     });
 
-    if (!product) {
+    if (!productAvailability) {
       return res.status(404).json({ message: "Produit introuvable" });
     }
+    const product = {
+      ...productAvailability.product,
+      stockQty: productAvailability.stockQty,
+    };
 
     const nextStockQty =
       targetQty !== null ? targetQty : Math.max(0, product.stockQty + delta);
@@ -281,23 +309,29 @@ async function adjustStock(req, res) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const updatedProduct = await tx.product.update({
-        where: { id: product.id },
+      const updatedAvailability = await tx.countryProduct.update({
+        where: { id: productAvailability.id },
         data: { stockQty: nextStockQty },
         select: {
           id: true,
-          sku: true,
-          nom: true,
           stockQty: true,
-          category: true,
           actif: true,
           updatedAt: true,
+          product: {
+            select: {
+              id: true,
+              sku: true,
+              nom: true,
+              category: true,
+            },
+          },
         },
       });
 
       const movement = await tx.stockMovement.create({
         data: {
           productId: product.id,
+          countryId: req.countryId,
           type: effectiveDelta > 0 ? "CREDIT" : "DEBIT",
           reason: "MANUAL_ADJUSTMENT",
           qty: Math.abs(effectiveDelta),
@@ -328,6 +362,16 @@ async function adjustStock(req, res) {
           },
         },
       });
+
+      const updatedProduct = {
+        id: updatedAvailability.product.id,
+        sku: updatedAvailability.product.sku,
+        nom: updatedAvailability.product.nom,
+        category: updatedAvailability.product.category,
+        stockQty: updatedAvailability.stockQty,
+        actif: updatedAvailability.actif,
+        updatedAt: updatedAvailability.updatedAt,
+      };
 
       return { updatedProduct, movement };
     });

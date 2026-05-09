@@ -29,6 +29,23 @@ function applyDiscount(prixBaseFcfa, discountPercent) {
   return Math.max(discounted, 0);
 }
 
+function pickCountryProduct(product, countryId) {
+  if (!Array.isArray(product?.countryProducts)) return null;
+  return product.countryProducts.find((item) => item.countryId === countryId) || null;
+}
+
+function applyCountryAvailability(product, countryId) {
+  const availability = pickCountryProduct(product, countryId);
+  if (!availability) return product;
+  return {
+    ...product,
+    prixBaseFcfa: availability.prixBaseFcfa,
+    stockQty: availability.stockQty,
+    actif: availability.actif,
+    maxQtyPerOrder: availability.maxQtyPerOrder,
+  };
+}
+
 async function getDiscountPercentByGrade(grade, countryId) {
   const row = await prisma.gradeDiscount.findUnique({
     where: {
@@ -54,7 +71,11 @@ async function getPreorderPricingContext(preorderId, countryId) {
     include: {
       items: {
         include: {
-          product: true,
+          product: {
+            include: {
+              countryProducts: true,
+            },
+          },
         },
         orderBy: {
           createdAt: "asc",
@@ -96,7 +117,11 @@ async function getPreorderPricingContextForGrade(
     include: {
       items: {
         include: {
-          product: true,
+          product: {
+            include: {
+              countryProducts: true,
+            },
+          },
         },
         orderBy: {
           createdAt: "asc",
@@ -132,21 +157,25 @@ async function getPreorderPricingContextForGrade(
   };
 }
 
-function computeLineFromProduct(product, qty, discountPercent) {
+function computeLineFromProduct(product, qty, discountPercent, countryId = null) {
   if (!product) {
     throw new Error("PRODUCT_NOT_FOUND");
   }
 
-  if (!product.actif) {
+  const effectiveProduct = countryId
+    ? applyCountryAvailability(product, countryId)
+    : product;
+
+  if (!effectiveProduct.actif) {
     throw new Error("PRODUCT_INACTIVE");
   }
 
   const safeQty = Math.max(0, Number(qty || 0));
   if (safeQty <= 0) return null;
 
-  const prixCatalogueFcfa = Number(product.prixBaseFcfa || 0);
-  const ccUnitaire = Number(product.cc || 0);
-  const poidsUnitaireKg = Number(product.poidsKg || 0);
+  const prixCatalogueFcfa = Number(effectiveProduct.prixBaseFcfa || 0);
+  const ccUnitaire = Number(effectiveProduct.cc || 0);
+  const poidsUnitaireKg = Number(effectiveProduct.poidsKg || 0);
   const prixUnitaireFcfa = applyDiscount(prixCatalogueFcfa, discountPercent);
 
   const lineTotalFcfa = prixUnitaireFcfa * safeQty;
@@ -193,14 +222,24 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
 
   const products = await prisma.product.findMany({
     where: {
-      countryId: preorder.countryId,
-      actif: true,
+      countryProducts: {
+        some: {
+          countryId: preorder.countryId,
+          actif: true,
+        },
+      },
     },
     orderBy: { nom: "asc" },
+    include: {
+      countryProducts: {
+        where: { countryId: preorder.countryId },
+      },
+    },
   });
 
   return products.map((product) => {
-    const prixBaseFcfa = Number(product.prixBaseFcfa || 0);
+    const effectiveProduct = applyCountryAvailability(product, preorder.countryId);
+    const prixBaseFcfa = Number(effectiveProduct.prixBaseFcfa || 0);
     const prixFinalFcfa = applyDiscount(prixBaseFcfa, discountPercent);
 
     return {
@@ -210,9 +249,9 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
       imageUrl: product.imageUrl || null,
       category: product.category,
       details: product.details || null,
-      stockQty: Number(product.stockQty || 0),
+      stockQty: Number(effectiveProduct.stockQty || 0),
       maxQtyPerOrder:
-        product.maxQtyPerOrder == null ? null : Number(product.maxQtyPerOrder),
+        effectiveProduct.maxQtyPerOrder == null ? null : Number(effectiveProduct.maxQtyPerOrder),
 
       prixBaseFcfa,
       discountPercent,
@@ -241,11 +280,12 @@ async function computePreorderTotals(preorderId, countryId) {
       throw new Error("PRODUCT_NOT_FOUND");
     }
 
-    if (it.product.countryId !== preorder.countryId) {
+    if (!pickCountryProduct(it.product, preorder.countryId)) {
       throw new Error("PRODUCT_COUNTRY_MISMATCH");
     }
 
-    const line = computeLineFromProduct(it.product, it.qty, discountPercent);
+    const product = applyCountryAvailability(it.product, preorder.countryId);
+    const line = computeLineFromProduct(product, it.qty, discountPercent);
     if (!line) continue;
 
     totalCc += line.lineTotalCc;
@@ -256,8 +296,8 @@ async function computePreorderTotals(preorderId, countryId) {
       productId: it.productId,
       qty: line.qty,
 
-      productSkuSnapshot: it.product.sku || null,
-      productNameSnapshot: it.product.nom || null,
+      productSkuSnapshot: product.sku || null,
+      productNameSnapshot: product.nom || null,
 
       prixCatalogueFcfa: line.prixCatalogueFcfa,
       discountPercent: line.discountPercent,
@@ -270,16 +310,16 @@ async function computePreorderTotals(preorderId, countryId) {
       lineTotalCc: line.lineTotalCc,
       lineTotalPoids: line.lineTotalPoids,
 
-      nom: it.product.nom,
-      sku: it.product.sku,
-      imageUrl: it.product.imageUrl || null,
-      stockQty: Number(it.product.stockQty || 0),
+      nom: product.nom,
+      sku: product.sku,
+      imageUrl: product.imageUrl || null,
+      stockQty: Number(product.stockQty || 0),
       maxQtyPerOrder:
-        it.product.maxQtyPerOrder == null
+        product.maxQtyPerOrder == null
           ? null
-          : Number(it.product.maxQtyPerOrder),
-      category: it.product.category,
-      details: it.product.details || null,
+          : Number(product.maxQtyPerOrder),
+      category: product.category,
+      details: product.details || null,
     });
   }
 
@@ -325,11 +365,12 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
       throw new Error("PRODUCT_NOT_FOUND");
     }
 
-    if (it.product.countryId !== preorder.countryId) {
+    if (!pickCountryProduct(it.product, preorder.countryId)) {
       throw new Error("PRODUCT_COUNTRY_MISMATCH");
     }
 
-    const line = computeLineFromProduct(it.product, it.qty, discountPercent);
+    const product = applyCountryAvailability(it.product, preorder.countryId);
+    const line = computeLineFromProduct(product, it.qty, discountPercent);
     if (!line) continue;
 
     totalCc += line.lineTotalCc;
@@ -340,8 +381,8 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
       productId: it.productId,
       qty: line.qty,
 
-      productSkuSnapshot: it.product.sku || null,
-      productNameSnapshot: it.product.nom || null,
+      productSkuSnapshot: product.sku || null,
+      productNameSnapshot: product.nom || null,
 
       prixCatalogueFcfa: line.prixCatalogueFcfa,
       discountPercent: line.discountPercent,
@@ -354,16 +395,16 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
       lineTotalCc: line.lineTotalCc,
       lineTotalPoids: line.lineTotalPoids,
 
-      nom: it.product.nom,
-      sku: it.product.sku,
-      imageUrl: it.product.imageUrl || null,
-      stockQty: Number(it.product.stockQty || 0),
+      nom: product.nom,
+      sku: product.sku,
+      imageUrl: product.imageUrl || null,
+      stockQty: Number(product.stockQty || 0),
       maxQtyPerOrder:
-        it.product.maxQtyPerOrder == null
+        product.maxQtyPerOrder == null
           ? null
-          : Number(it.product.maxQtyPerOrder),
-      category: it.product.category,
-      details: it.product.details || null,
+          : Number(product.maxQtyPerOrder),
+      category: product.category,
+      details: product.details || null,
     });
   }
 

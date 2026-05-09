@@ -220,6 +220,7 @@ enum AdminRole {
   OPERATIONS_DIRECTOR
   SALES_DIRECTOR
   BILLING_MANAGER
+  MARKETING_MANAGER
   MARKETING_ASSISTANT
   STOCK_MANAGER
   COUNTER_MANAGER
@@ -366,6 +367,7 @@ model Country {
   settings                CountrySettings?
   marketingContent        CountryMarketingContent?
   products                Product[]
+  countryProducts         CountryProduct[]
   preorders               Preorder[]
   gradeDiscounts          GradeDiscount[]
   adminUsers              AdminUser[]
@@ -375,6 +377,7 @@ model Country {
   paymentProviderRules    PaymentProviderRule[]
   customerOtpChallenges   CustomerOtpChallenge[]
   bankPaymentProofs       BankPaymentProof[]
+  stockMovements          StockMovement[]
 }
 
 model CountrySettings {
@@ -548,11 +551,35 @@ model Product {
 
   preorderItems  PreorderItem[]
   stockMovements StockMovement[]
+  countryProducts CountryProduct[]
 
   @@index([actif])
   @@index([nom])
   @@index([category])
   @@index([countryId])
+}
+
+model CountryProduct {
+  id String @id @default(cuid())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  prixBaseFcfa Int
+  stockQty Int @default(0)
+  actif Boolean @default(true)
+  maxQtyPerOrder Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, productId])
+  @@index([productId])
+  @@index([countryId])
+  @@index([actif])
 }
 
 model GradeDiscount {
@@ -951,6 +978,9 @@ model StockMovement {
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  countryId String?
+  country   Country? @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
   preorderId String?
   preorder   Preorder? @relation(fields: [preorderId], references: [id], onDelete: SetNull)
 
@@ -968,6 +998,7 @@ model StockMovement {
   createdAt DateTime @default(now())
 
   @@index([productId, createdAt])
+  @@index([countryId, createdAt])
   @@index([preorderId])
   @@index([reason, createdAt])
   @@index([createdById])

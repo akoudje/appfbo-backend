@@ -415,15 +415,23 @@ async function setItems(req, res) {
 
     if (productIds.length > 0) {
       const products = await prisma.product.findMany({
-        where: scopeWhere(req, {
+        where: {
           id: { in: productIds },
-          actif: true,
-        }),
+          countryProducts: {
+            some: {
+              countryId,
+              actif: true,
+            },
+          },
+        },
         select: {
           id: true,
           sku: true,
           nom: true,
-          maxQtyPerOrder: true,
+          countryProducts: {
+            where: { countryId },
+            select: { maxQtyPerOrder: true },
+          },
         },
       });
 
@@ -434,7 +442,11 @@ async function setItems(req, res) {
       }
 
       for (const product of products) {
-        productsById.set(product.id, product);
+        const countryProduct = product.countryProducts?.[0] || {};
+        productsById.set(product.id, {
+          ...product,
+          maxQtyPerOrder: countryProduct.maxQtyPerOrder,
+        });
       }
     }
 

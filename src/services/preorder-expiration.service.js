@@ -373,8 +373,13 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
 
     if (mustRollbackStock) {
       for (const item of current.items) {
-        await tx.product.update({
-          where: { id: item.productId },
+        await tx.countryProduct.update({
+          where: {
+            countryId_productId: {
+              countryId: current.countryId,
+              productId: item.productId,
+            },
+          },
           data: {
             stockQty: { increment: item.qty },
           },
@@ -383,6 +388,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
         await tx.stockMovement.create({
           data: {
             productId: item.productId,
+            countryId: current.countryId,
             preorderId: current.id,
             type: "CREDIT",
             reason: "CANCEL_ORDER",

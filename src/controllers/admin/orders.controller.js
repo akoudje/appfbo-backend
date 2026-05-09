@@ -1988,10 +1988,10 @@ async function prepareOrder(req, res) {
 
     const updated = await prisma.$transaction(async (tx) => {
       for (const item of order.items) {
-        const updatedStock = await tx.product.updateMany({
+        const updatedStock = await tx.countryProduct.updateMany({
           where: {
-            id: item.productId,
             countryId: order.countryId,
+            productId: item.productId,
             actif: true,
             stockQty: { gte: item.qty },
           },
@@ -2013,6 +2013,7 @@ async function prepareOrder(req, res) {
         await tx.stockMovement.create({
           data: {
             productId: item.productId,
+            countryId: order.countryId,
             preorderId: order.id,
             type: "DEBIT",
             reason: "PREPARE_ORDER",
@@ -2489,8 +2490,13 @@ async function cancelOrder(req, res) {
 
       if (mustRollbackStock) {
         for (const item of order.items) {
-          await tx.product.update({
-            where: { id: item.productId },
+          await tx.countryProduct.update({
+            where: {
+              countryId_productId: {
+                countryId: order.countryId,
+                productId: item.productId,
+              },
+            },
             data: {
               stockQty: { increment: item.qty },
             },
@@ -2499,6 +2505,7 @@ async function cancelOrder(req, res) {
           await tx.stockMovement.create({
             data: {
               productId: item.productId,
+              countryId: order.countryId,
               preorderId: order.id,
               type: "CREDIT",
               reason: "CANCEL_ORDER",

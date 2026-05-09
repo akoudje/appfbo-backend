@@ -6,6 +6,11 @@ const productsController = require("../../controllers/admin/products.controller"
 const router = express.Router();
 
 router.get("/", requirePermission(Permission.PRODUCT_READ), productsController.listProducts);
+router.post(
+  "/copy-from-country",
+  requirePermission(Permission.PRODUCT_WRITE),
+  productsController.copyProductsFromCountry,
+);
 router.get("/:id", requirePermission(Permission.PRODUCT_READ), productsController.getProductById);
 
 router.post("/", requirePermission(Permission.PRODUCT_WRITE), productsController.createProduct);

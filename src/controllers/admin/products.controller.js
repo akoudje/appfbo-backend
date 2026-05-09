@@ -4,11 +4,7 @@ const multer = require("multer");
 
 const prisma = require("../../prisma");
 
-const {
-  scopeCreate,
-  scopeWhere,
-  safeFindUniqueScoped,
-} = require("../../helpers/countryScope");
+const { scopeCreate } = require("../../helpers/countryScope");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -78,6 +74,89 @@ const upload = multer({
   },
 });
 
+function productToCountryDto(product, countryId) {
+  const countryProduct =
+    product?.countryProducts?.find((item) => item.countryId === countryId) ||
+    product?.countryProducts?.[0] ||
+    null;
+
+  return {
+    ...product,
+    prixBaseFcfa: countryProduct?.prixBaseFcfa ?? product.prixBaseFcfa,
+    actif: countryProduct?.actif ?? product.actif,
+    stockQty: countryProduct?.stockQty ?? product.stockQty,
+    maxQtyPerOrder:
+      countryProduct?.maxQtyPerOrder === undefined
+        ? product.maxQtyPerOrder
+        : countryProduct.maxQtyPerOrder,
+    countryProductId: countryProduct?.id || null,
+    countryId,
+    countryProducts: undefined,
+    cc: product.cc?.toString?.() ?? String(product.cc ?? "0.000"),
+    poidsKg: product.poidsKg?.toString?.() ?? String(product.poidsKg ?? "0.000"),
+  };
+}
+
+const productBaseSelect = {
+  id: true,
+  sku: true,
+  nom: true,
+  prixBaseFcfa: true,
+  cc: true,
+  poidsKg: true,
+  actif: true,
+  imageUrl: true,
+  category: true,
+  details: true,
+  stockQty: true,
+  maxQtyPerOrder: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+function productSelectForCountry(countryId, extra = {}) {
+  return {
+    ...productBaseSelect,
+    ...extra,
+    countryProducts: {
+      where: { countryId },
+      select: {
+        id: true,
+        countryId: true,
+        prixBaseFcfa: true,
+        stockQty: true,
+        actif: true,
+        maxQtyPerOrder: true,
+      },
+    },
+  };
+}
+
+async function upsertCountryProduct(tx, { productId, countryId, prixBaseFcfa, stockQty, actif, maxQtyPerOrder }) {
+  return tx.countryProduct.upsert({
+    where: {
+      countryId_productId: {
+        countryId,
+        productId,
+      },
+    },
+    create: {
+      productId,
+      countryId,
+      prixBaseFcfa,
+      stockQty,
+      actif,
+      maxQtyPerOrder,
+    },
+    update: {
+      prixBaseFcfa,
+      stockQty,
+      actif,
+      maxQtyPerOrder,
+    },
+  });
+}
+
 async function createProduct(req, res) {
   try {
     const {
@@ -132,44 +211,61 @@ async function createProduct(req, res) {
     const det =
       details !== undefined && details !== null ? String(details).trim() : null;
 
-    const created = await prisma.product.create({
-      data: scopeCreate(req, {
-        sku: String(sku).trim(),
-        nom: String(nom).trim(),
+    const countryId = req.countryId;
+    const normalizedSku = String(sku).trim();
+
+    const created = await prisma.$transaction(async (tx) => {
+      const existing = await tx.product.findUnique({
+        where: { sku: normalizedSku },
+        select: { id: true },
+      });
+
+      const product = existing
+        ? await tx.product.update({
+            where: { id: existing.id },
+            data: {
+              nom: String(nom).trim(),
+              cc: String(cc),
+              poidsKg: String(poidsKg),
+              imageUrl: imageUrl ? String(imageUrl).trim() : null,
+              category: cat,
+              details: det || null,
+            },
+            select: { id: true },
+          })
+        : await tx.product.create({
+            data: scopeCreate(req, {
+              sku: normalizedSku,
+              nom: String(nom).trim(),
+              prixBaseFcfa: price,
+              cc: String(cc),
+              poidsKg: String(poidsKg),
+              actif: Boolean(actif),
+              imageUrl: imageUrl ? String(imageUrl).trim() : null,
+              category: cat,
+              details: det || null,
+              stockQty: stock,
+              maxQtyPerOrder: maxQty,
+            }),
+            select: { id: true },
+          });
+
+      await upsertCountryProduct(tx, {
+        productId: product.id,
+        countryId,
         prixBaseFcfa: price,
-        cc: String(cc),
-        poidsKg: String(poidsKg),
-        actif: Boolean(actif),
-        imageUrl: imageUrl ? String(imageUrl).trim() : null,
-        category: cat,
-        details: det || null,
         stockQty: stock,
+        actif: Boolean(actif),
         maxQtyPerOrder: maxQty,
-      }),
-      select: {
-        id: true,
-        sku: true,
-        nom: true,
-        prixBaseFcfa: true,
-        cc: true,
-        poidsKg: true,
-        actif: true,
-        imageUrl: true,
-        category: true,
-        details: true,
-        stockQty: true,
-        maxQtyPerOrder: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      });
+
+      return tx.product.findUnique({
+        where: { id: product.id },
+        select: productSelectForCountry(countryId),
+      });
     });
 
-    return res.status(201).json({
-      ...created,
-      cc: created.cc?.toString?.() ?? String(created.cc ?? "0.000"),
-      poidsKg:
-        created.poidsKg?.toString?.() ?? String(created.poidsKg ?? "0.000"),
-    });
+    return res.status(201).json(productToCountryDto(created, countryId));
   } catch (e) {
     console.error("createProduct error:", e);
     if (String(e?.code) === "P2002")
@@ -182,6 +278,7 @@ async function listProducts(req, res) {
   try {
     const { q, actif, take, category, inStock } = req.query;
     const filters = {};
+    const availabilityFilters = { countryId: req.countryId };
 
     if (q && String(q).trim()) {
       const qs = String(q).trim();
@@ -192,8 +289,8 @@ async function listProducts(req, res) {
     }
 
     if (actif !== undefined && actif !== "") {
-      if (String(actif) === "true") filters.actif = true;
-      else if (String(actif) === "false") filters.actif = false;
+      if (String(actif) === "true") availabilityFilters.actif = true;
+      else if (String(actif) === "false") availabilityFilters.actif = false;
     }
 
     if (category && String(category).trim()) {
@@ -203,41 +300,24 @@ async function listProducts(req, res) {
       filters.category = parsed;
     }
 
-    if (String(inStock) === "true") filters.stockQty = { gt: 0 };
-    if (String(inStock) === "false") filters.stockQty = { lte: 0 };
-    const where = scopeWhere(req, filters);
+    if (String(inStock) === "true") availabilityFilters.stockQty = { gt: 0 };
+    if (String(inStock) === "false") availabilityFilters.stockQty = { lte: 0 };
+    const countryId = req.countryId;
+    const where = {
+      ...filters,
+      countryProducts: { some: availabilityFilters },
+    };
 
     const limit = Math.min(500, Math.max(10, Number(take) || 200));
 
     const products = await prisma.product.findMany({
       where,
       take: limit,
-      orderBy: [{ actif: "desc" }, { nom: "asc" }],
-      select: {
-        id: true,
-        sku: true,
-        nom: true,
-        prixBaseFcfa: true,
-        cc: true,
-        poidsKg: true,
-        actif: true,
-        imageUrl: true,
-        category: true,
-        details: true,
-        stockQty: true,
-        maxQtyPerOrder: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      orderBy: [{ nom: "asc" }],
+      select: productSelectForCountry(countryId),
     });
 
-    return res.json(
-      products.map((p) => ({
-        ...p,
-        cc: p.cc?.toString?.() ?? String(p.cc ?? "0.000"),
-        poidsKg: p.poidsKg?.toString?.() ?? String(p.poidsKg ?? "0.000"),
-      })),
-    );
+    return res.json(products.map((p) => productToCountryDto(p, countryId)));
   } catch (e) {
     console.error("listProducts error:", e);
     return res.status(500).json({ message: "Erreur serveur (listProducts)" });
@@ -247,38 +327,18 @@ async function listProducts(req, res) {
 async function getProductById(req, res) {
   try {
     const { id } = req.params;
-    const p = await safeFindUniqueScoped(
-      prisma.product,
-      req,
-      id,
-      {},
-      {
-        select: {
-          id: true,
-          sku: true,
-          nom: true,
-          prixBaseFcfa: true,
-          cc: true,
-          poidsKg: true,
-          actif: true,
-          imageUrl: true,
-          category: true,
-          details: true,
-          stockQty: true,
-          maxQtyPerOrder: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+    const countryId = req.countryId;
+    const p = await prisma.product.findFirst({
+      where: {
+        id,
+        countryProducts: { some: { countryId } },
       },
-    );
+      select: productSelectForCountry(countryId),
+    });
 
     if (!p) return res.status(404).json({ message: "Produit introuvable" });
 
-    return res.json({
-      ...p,
-      cc: p.cc?.toString?.() ?? String(p.cc ?? "0.000"),
-      poidsKg: p.poidsKg?.toString?.() ?? String(p.poidsKg ?? "0.000"),
-    });
+    return res.json(productToCountryDto(p, countryId));
   } catch (e) {
     console.error("getProductById error:", e);
     return res.status(500).json({ message: "Erreur serveur (getProductById)" });
@@ -303,13 +363,9 @@ async function updateProduct(req, res) {
       maxQtyPerOrder,
     } = req.body || {};
 
-    const data = {
+    const productData = {
       ...(sku !== undefined ? { sku: String(sku).trim() } : {}),
       ...(nom !== undefined ? { nom: String(nom).trim() } : {}),
-      ...(prixBaseFcfa !== undefined
-        ? { prixBaseFcfa: Number(prixBaseFcfa) }
-        : {}),
-      ...(actif !== undefined ? { actif: Boolean(actif) } : {}),
       ...(imageUrl !== undefined
         ? { imageUrl: imageUrl ? String(imageUrl).trim() : null }
         : {}),
@@ -327,6 +383,13 @@ async function updateProduct(req, res) {
       ...(details !== undefined
         ? { details: details ? String(details).trim() : null }
         : {}),
+    };
+
+    const availabilityData = {
+      ...(prixBaseFcfa !== undefined
+        ? { prixBaseFcfa: Number(prixBaseFcfa) }
+        : {}),
+      ...(actif !== undefined ? { actif: Boolean(actif) } : {}),
       ...(stockQty !== undefined
         ? { stockQty: parseStockQty(stockQty, 0) }
         : {}),
@@ -341,19 +404,19 @@ async function updateProduct(req, res) {
     };
 
     if (
-      "prixBaseFcfa" in data &&
-      (!Number.isFinite(data.prixBaseFcfa) || data.prixBaseFcfa < 0)
+      "prixBaseFcfa" in availabilityData &&
+      (!Number.isFinite(availabilityData.prixBaseFcfa) || availabilityData.prixBaseFcfa < 0)
     ) {
       return res.status(400).json({ message: "prixBaseFcfa invalide" });
     }
-    if ("sku" in data && !data.sku)
+    if ("sku" in productData && !productData.sku)
       return res.status(400).json({ message: "sku invalide" });
-    if ("nom" in data && !data.nom)
+    if ("nom" in productData && !productData.nom)
       return res.status(400).json({ message: "nom invalide" });
 
-    if ("cc" in data && !isDecimalLike(data.cc))
+    if ("cc" in productData && !isDecimalLike(productData.cc))
       return res.status(400).json({ message: "cc invalide" });
-    if ("poidsKg" in data && !isDecimalLike(data.poidsKg))
+    if ("poidsKg" in productData && !isDecimalLike(productData.poidsKg))
       return res.status(400).json({ message: "poidsKg invalide" });
     if (
       stockQty !== undefined &&
@@ -373,38 +436,64 @@ async function updateProduct(req, res) {
     }
 
     const exists = await prisma.product.findFirst({
-      where: { id, countryId },
-      select: { id: true },
+      where: { id, countryProducts: { some: { countryId } } },
+      select: {
+        id: true,
+        prixBaseFcfa: true,
+        stockQty: true,
+        actif: true,
+        maxQtyPerOrder: true,
+        countryProducts: {
+          where: { countryId },
+          select: {
+            prixBaseFcfa: true,
+            stockQty: true,
+            actif: true,
+            maxQtyPerOrder: true,
+          },
+        },
+      },
     });
     if (!exists)
       return res.status(404).json({ message: "Produit introuvable" });
 
-    const updated = await prisma.product.update({
-      where: { id: exists.id },
-      data,
-      select: {
-        id: true,
-        sku: true,
-        nom: true,
-        prixBaseFcfa: true,
-        cc: true,
-        poidsKg: true,
-        actif: true,
-        imageUrl: true,
-        category: true,
-        details: true,
-        stockQty: true,
-        maxQtyPerOrder: true,
-        updatedAt: true,
-      },
+    const currentAvailability = exists.countryProducts?.[0] || exists;
+    const updated = await prisma.$transaction(async (tx) => {
+      if (Object.keys(productData).length) {
+        await tx.product.update({
+          where: { id: exists.id },
+          data: productData,
+        });
+      }
+
+      await upsertCountryProduct(tx, {
+        productId: exists.id,
+        countryId,
+        prixBaseFcfa:
+          availabilityData.prixBaseFcfa !== undefined
+            ? availabilityData.prixBaseFcfa
+            : Number(currentAvailability.prixBaseFcfa || 0),
+        stockQty:
+          availabilityData.stockQty !== undefined
+            ? availabilityData.stockQty
+            : Number(currentAvailability.stockQty || 0),
+        actif:
+          availabilityData.actif !== undefined
+            ? availabilityData.actif
+            : Boolean(currentAvailability.actif),
+        maxQtyPerOrder:
+          availabilityData.maxQtyPerOrder !== undefined
+            ? availabilityData.maxQtyPerOrder
+            : currentAvailability.maxQtyPerOrder,
+      });
+
+      return tx.product.findUnique({
+        where: { id: exists.id },
+        select: productSelectForCountry(countryId),
+      });
     });
 
-    return res.json({
-      ...updated,
-      cc: updated.cc?.toString?.() ?? String(updated.cc ?? "0.000"),
-      poidsKg:
-        updated.poidsKg?.toString?.() ?? String(updated.poidsKg ?? "0.000"),
-    });
+    return res.json(productToCountryDto(updated, countryId));
   } catch (e) {
     console.error("updateProduct error:", e);
     if (String(e?.code) === "P2002")
@@ -418,20 +507,23 @@ async function deleteProduct(req, res) {
     const { id } = req.params;
     const countryId = req.countryId;
 
-    const p = await prisma.product.findFirst({
-      where: { id, countryId },
-      select: { id: true, imageUrl: true, sku: true },
+    const availability = await prisma.countryProduct.findUnique({
+      where: {
+        countryId_productId: {
+          countryId,
+          productId: id,
+        },
+      },
+      select: {
+        id: true,
+        product: {
+          select: { id: true, sku: true },
+        },
+      },
     });
-    if (!p) return res.status(404).json({ message: "Produit introuvable" });
+    if (!availability) return res.status(404).json({ message: "Produit introuvable" });
 
-    if (p.sku) {
-      const publicId = `appfbo/products/${p.sku}`;
-      try {
-        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
-      } catch (_) {}
-    }
-
-    await prisma.product.delete({ where: { id } });
+    await prisma.countryProduct.delete({ where: { id: availability.id } });
     return res.json({ ok: true });
   } catch (e) {
     console.error("deleteProduct error:", e);
@@ -534,35 +626,32 @@ async function importProductsCsv(req, res) {
       for (const p of clean) {
         const exists = await tx.product.findUnique({
           where: { sku: p.sku },
-          select: { id: true, countryId: true },
+          select: { id: true },
         });
 
         if (exists) {
-          if (exists.countryId !== countryId) {
-            errors.push({
-              sku: p.sku,
-              errors: ["SKU déjà utilisé dans un autre pays"],
-            });
-            continue;
-          }
           await tx.product.update({
             where: { sku: p.sku },
             data: {
               nom: p.nom,
-              prixBaseFcfa: p.prixBaseFcfa,
               cc: String(p.cc),
               poidsKg: String(p.poidsKg),
-              actif: p.actif,
               imageUrl: p.imageUrl,
               category: p.category,
               details: p.details,
-              stockQty: p.stockQty,
-              maxQtyPerOrder: p.maxQtyPerOrder,
             },
+          });
+          await upsertCountryProduct(tx, {
+            productId: exists.id,
+            countryId,
+            prixBaseFcfa: p.prixBaseFcfa,
+            stockQty: p.stockQty,
+            actif: p.actif,
+            maxQtyPerOrder: p.maxQtyPerOrder,
           });
           updated++;
         } else {
-          await tx.product.create({
+          const createdProduct = await tx.product.create({
             data: {
               sku: p.sku,
               nom: p.nom,
@@ -577,6 +666,15 @@ async function importProductsCsv(req, res) {
               stockQty: p.stockQty,
               maxQtyPerOrder: p.maxQtyPerOrder,
             },
+            select: { id: true },
+          });
+          await upsertCountryProduct(tx, {
+            productId: createdProduct.id,
+            countryId,
+            prixBaseFcfa: p.prixBaseFcfa,
+            stockQty: p.stockQty,
+            actif: p.actif,
+            maxQtyPerOrder: p.maxQtyPerOrder,
           });
           created++;
         }
@@ -625,7 +723,10 @@ async function uploadProductImage(req, res) {
       const { id } = req.params;
 
       const exists = await prisma.product.findFirst({
-        where: { id, countryId },
+        where: {
+          id,
+          countryProducts: { some: { countryId } },
+        },
         select: { id: true, imageUrl: true, sku: true, nom: true },
       });
       if (!exists)
@@ -678,6 +779,131 @@ async function uploadProductImage(req, res) {
   }
 }
 
+async function copyProductsFromCountry(req, res) {
+  try {
+    const sourceCode = String(req.body?.sourceCode || "CIV").trim().toUpperCase();
+    const overwrite = Boolean(req.body?.overwrite);
+    const requestedDestinations = Array.isArray(req.body?.destinationCodes)
+      ? req.body.destinationCodes
+          .map((code) => String(code || "").trim().toUpperCase())
+          .filter(Boolean)
+      : [];
+
+    const sourceCountry = await prisma.country.findUnique({
+      where: { code: sourceCode },
+      select: { id: true, code: true, name: true },
+    });
+    if (!sourceCountry) {
+      return res.status(404).json({ message: `Pays source introuvable: ${sourceCode}` });
+    }
+
+    const destinationCountries = await prisma.country.findMany({
+      where: {
+        actif: true,
+        code: requestedDestinations.length
+          ? { in: requestedDestinations.filter((code) => code !== sourceCode) }
+          : { not: sourceCode },
+      },
+      select: { id: true, code: true, name: true },
+      orderBy: { code: "asc" },
+    });
+
+    if (!destinationCountries.length) {
+      return res.status(400).json({ message: "Aucun pays cible actif" });
+    }
+
+    const sourceRows = await prisma.countryProduct.findMany({
+      where: { countryId: sourceCountry.id },
+      include: {
+        product: {
+          select: {
+            id: true,
+            sku: true,
+            nom: true,
+          },
+        },
+      },
+      orderBy: { product: { nom: "asc" } },
+    });
+
+    if (!sourceRows.length) {
+      return res.status(400).json({ message: "Aucun produit disponible dans le pays source" });
+    }
+
+    const summary = [];
+
+    await prisma.$transaction(async (tx) => {
+      for (const country of destinationCountries) {
+        let created = 0;
+        let updated = 0;
+        let skipped = 0;
+
+        for (const row of sourceRows) {
+          const existing = await tx.countryProduct.findUnique({
+            where: {
+              countryId_productId: {
+                countryId: country.id,
+                productId: row.productId,
+              },
+            },
+            select: { id: true },
+          });
+
+          if (existing && !overwrite) {
+            skipped++;
+            continue;
+          }
+
+          await tx.countryProduct.upsert({
+            where: {
+              countryId_productId: {
+                countryId: country.id,
+                productId: row.productId,
+              },
+            },
+            create: {
+              countryId: country.id,
+              productId: row.productId,
+              prixBaseFcfa: row.prixBaseFcfa,
+              stockQty: 0,
+              actif: row.actif,
+              maxQtyPerOrder: row.maxQtyPerOrder,
+            },
+            update: {
+              prixBaseFcfa: row.prixBaseFcfa,
+              actif: row.actif,
+              maxQtyPerOrder: row.maxQtyPerOrder,
+              ...(overwrite ? { stockQty: 0 } : {}),
+            },
+          });
+
+          if (existing) updated++;
+          else created++;
+        }
+
+        summary.push({
+          countryCode: country.code,
+          countryName: country.name,
+          created,
+          updated,
+          skipped,
+        });
+      }
+    });
+
+    return res.json({
+      ok: true,
+      sourceCode,
+      productsCopied: sourceRows.length,
+      overwrite,
+      countries: summary,
+    });
+  } catch (e) {
+    console.error("copyProductsFromCountry error:", e);
+    return res.status(500).json({ message: "Erreur serveur (copyProductsFromCountry)" });
+  }
+}
+
 module.exports = {
   createProduct,
   listProducts,
@@ -686,4 +912,5 @@ module.exports = {
   deleteProduct,
   importProductsCsv,
   uploadProductImage,
+  copyProductsFromCountry,
 };

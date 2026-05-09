@@ -61,7 +61,7 @@ async function getStats(req, res) {
 
     const ids = topRaw.map((x) => x.productId);
     const products = await prisma.product.findMany({
-      where: { id: { in: ids }, countryId },
+      where: { id: { in: ids } },
       select: { id: true, nom: true, sku: true },
     });
     const map = new Map(products.map((p) => [p.id, p]));
