@@ -41,6 +41,7 @@ const stockRoutes = require("./admin/stock.routes");
 const reportsRoutes = require("./admin/reports.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 const eventsController = require("../controllers/admin/events.controller");
+const { adminListCountries, toggleCountry } = require("../controllers/countries.controller");
 
 const router = express.Router();
 
@@ -162,6 +163,18 @@ router.patch(
 );
 
 router.use("/country-settings", settingsRoutes);
+
+router.get(
+  "/countries",
+  requirePermission(Permission.COUNTRY_READ),
+  adminListCountries,
+);
+
+router.patch(
+  "/countries/:code",
+  requirePermission(Permission.COUNTRY_WRITE),
+  toggleCountry,
+);
 
 router.get(
   "/marketing-campaigns",
