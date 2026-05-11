@@ -6,6 +6,7 @@ const FBO_HELP_TOPIC_IDS = new Set([
   "new-order",
   "cache",
   "payment",
+  "payment-link-missing",
   "status",
   "pickup",
   "support",
@@ -43,6 +44,13 @@ const DEFAULT_FBO_HELP_TOPICS = [
     label: "Paiement et lien reçu",
     answer:
       "Après traitement, vous recevez une notification avec les instructions de paiement.",
+  },
+  {
+    id: "payment-link-missing",
+    enabled: true,
+    label: "Je n'ai pas reçu mon lien de paiement",
+    answer:
+      "Renseignez les informations de votre commande. L'équipe vérifiera votre demande avant de renvoyer le lien.",
   },
   {
     id: "status",

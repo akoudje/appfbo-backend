@@ -41,6 +41,7 @@ const stockRoutes = require("./admin/stock.routes");
 const reportsRoutes = require("./admin/reports.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 const eventsController = require("../controllers/admin/events.controller");
+const paymentLinkResendRequestsController = require("../controllers/paymentLinkResendRequests.controller");
 const { adminListCountries, toggleCountry } = require("../controllers/countries.controller");
 
 const router = express.Router();
@@ -163,6 +164,18 @@ router.patch(
 );
 
 router.use("/country-settings", settingsRoutes);
+
+router.get(
+  "/payment-link-resend-requests",
+  requirePermission(Permission.INVOICE_CREATE),
+  paymentLinkResendRequestsController.listPaymentLinkResendRequests,
+);
+
+router.patch(
+  "/payment-link-resend-requests/:id",
+  requirePermission(Permission.INVOICE_CREATE),
+  paymentLinkResendRequestsController.updatePaymentLinkResendRequest,
+);
 
 router.get(
   "/countries",
