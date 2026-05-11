@@ -71,12 +71,17 @@ const DEFAULT_FBO_HELP_TOPICS = [
   },
 ];
 
+function isCustomFboHelpTopicId(id) {
+  return /^custom-[a-z0-9-]{6,80}$/.test(String(id || ""));
+}
+
 function normalizeFboHelpTopics(raw) {
   const custom = Array.isArray(raw) ? raw : [];
-  return DEFAULT_FBO_HELP_TOPICS.map((topic) => {
+  const systemTopics = DEFAULT_FBO_HELP_TOPICS.map((topic) => {
     const override = custom.find((item) => item?.id === topic.id) || {};
     return {
       ...topic,
+      type: "system",
       enabled:
         typeof override.enabled === "boolean" ? override.enabled : topic.enabled,
       label:
@@ -89,6 +94,18 @@ function normalizeFboHelpTopics(raw) {
           : topic.answer,
     };
   });
+
+  const customTopics = custom
+    .filter((item) => isCustomFboHelpTopicId(item?.id))
+    .map((item) => ({
+      id: String(item.id).trim(),
+      type: "custom",
+      enabled: typeof item.enabled === "boolean" ? item.enabled : true,
+      label: String(item.label || "").trim() || "Aide",
+      answer: String(item.answer || "").trim() || "",
+    }));
+
+  return [...systemTopics, ...customTopics];
 }
 
 async function getStorefrontConfig(req, res) {

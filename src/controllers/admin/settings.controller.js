@@ -11,6 +11,10 @@ const FBO_HELP_TOPIC_IDS = new Set([
   "support",
 ]);
 
+function isCustomFboHelpTopicId(id) {
+  return /^custom-[a-z0-9-]{6,80}$/.test(String(id || ""));
+}
+
 const DEFAULT_FBO_HELP_TOPICS = [
   {
     id: "country",
@@ -65,10 +69,11 @@ const DEFAULT_FBO_HELP_TOPICS = [
 
 function normalizeFboHelpTopics(raw) {
   const custom = Array.isArray(raw) ? raw : [];
-  return DEFAULT_FBO_HELP_TOPICS.map((topic) => {
+  const systemTopics = DEFAULT_FBO_HELP_TOPICS.map((topic) => {
     const override = custom.find((item) => item?.id === topic.id) || {};
     return {
       ...topic,
+      type: "system",
       enabled:
         typeof override.enabled === "boolean" ? override.enabled : topic.enabled,
       label:
@@ -81,14 +86,28 @@ function normalizeFboHelpTopics(raw) {
           : topic.answer,
     };
   });
+
+  const customTopics = custom
+    .filter((item) => isCustomFboHelpTopicId(item?.id))
+    .map((item) => ({
+      id: String(item.id).trim(),
+      type: "custom",
+      enabled: typeof item.enabled === "boolean" ? item.enabled : true,
+      label: String(item.label || "").trim() || "Nouvelle rubrique",
+      answer: String(item.answer || "").trim() || "Réponse à compléter.",
+    }));
+
+  return [...systemTopics, ...customTopics];
 }
 
 function sanitizeFboHelpTopics(raw) {
   if (!Array.isArray(raw)) return DEFAULT_FBO_HELP_TOPICS;
   const valid = raw
-    .filter((item) => FBO_HELP_TOPIC_IDS.has(item?.id))
+    .filter(
+      (item) => FBO_HELP_TOPIC_IDS.has(item?.id) || isCustomFboHelpTopicId(item?.id),
+    )
     .map((item) => ({
-      id: item.id,
+      id: String(item.id || "").trim(),
       enabled: Boolean(item.enabled),
       label: String(item.label || "").trim(),
       answer: String(item.answer || "").trim(),
