@@ -1501,7 +1501,9 @@ async function resendInvoiceSms(req, res) {
       actorName,
       paymentLinkTarget: latestMessage?.paymentLinkTarget || paymentLink || null,
       paymentLinkTracked: latestMessage?.paymentLinkTracked || paymentLink || null,
-      forceChannel: ["SMS", "EMAIL"].includes(requestedChannel) ? requestedChannel : null,
+      forceChannel: ["SMS", "WHATSAPP", "EMAIL"].includes(requestedChannel)
+        ? requestedChannel
+        : null,
       toEmail: emailDestination,
     });
     const smsDispatched = Boolean(sendResult?.smsSent);

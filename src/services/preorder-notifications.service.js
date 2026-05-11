@@ -1031,7 +1031,9 @@ async function sendPreorderNotification({
   const channels = [];
 
   if (smsAllowed) {
-    if (resolvedPhone) {
+    if (forcedChannel === "WHATSAPP" && resolvedWhatsapp) {
+      channels.push({ channel: "WHATSAPP", to: resolvedWhatsapp });
+    } else if (resolvedPhone) {
       channels.push({ channel: "SMS", to: resolvedPhone });
     } else if (!forcedChannel && resolvedWhatsapp) {
       channels.push({ channel: "WHATSAPP", to: resolvedWhatsapp });
