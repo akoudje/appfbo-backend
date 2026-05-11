@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const { pickCountryId } = require("../helpers/countryScope");
+const { sendPreorderNotification } = require("../services/preorder-notifications.service");
 
 const OPEN_STATUSES = new Set(["PENDING", "IN_REVIEW"]);
 const ALLOWED_STATUS_UPDATES = new Set(["PENDING", "IN_REVIEW", "RESOLVED", "REJECTED"]);
@@ -59,8 +60,20 @@ async function createPaymentLinkResendRequest(req, res) {
         preorderNumber: true,
         fboNumero: true,
         factureWhatsappTo: true,
+        fboNomComplet: true,
+        fboEmail: true,
+        factureReference: true,
+        paymentCollectionCode: true,
+        totalFcfa: true,
+        preorderPaymentMode: true,
+        paymentProvider: true,
         status: true,
         paymentStatus: true,
+        activePayment: {
+          select: {
+            amountExpectedFcfa: true,
+          },
+        },
         messages: {
           where: {
             OR: [
@@ -71,6 +84,10 @@ async function createPaymentLinkResendRequest(req, res) {
           orderBy: { createdAt: "desc" },
           take: 1,
           select: {
+            id: true,
+            body: true,
+            purpose: true,
+            toPhone: true,
             paymentLinkTracked: true,
             paymentLinkTarget: true,
             createdAt: true,
@@ -81,6 +98,12 @@ async function createPaymentLinkResendRequest(req, res) {
 
     if (!preorder) {
       return res.status(404).json({ message: "Commande introuvable pour ce pays." });
+    }
+
+    if (String(preorder.paymentStatus || "").toUpperCase() === "PAID") {
+      return res.status(409).json({
+        message: "Cette commande est déjà marquée payée. Aucun renvoi de lien n'est nécessaire.",
+      });
     }
 
     if (normalizeFboNumber(preorder.fboNumero) !== fboNumero) {
@@ -98,6 +121,69 @@ async function createPaymentLinkResendRequest(req, res) {
       return res.status(409).json({
         message:
           "Aucun lien de paiement n'est encore disponible pour cette commande. Contactez le service facturation.",
+      });
+    }
+
+    const sameDestination =
+      !requestedWhatsappPhone || requestedWhatsappPhone === originalPhone;
+    const latestMessage = preorder.messages?.[0] || null;
+
+    if (sameDestination) {
+      const message =
+        latestMessage?.body ||
+        `FOREVER: Lien de paiement commande ${preorder.preorderNumber}: ${latestPaymentLink}`;
+      const sendResult = await sendPreorderNotification({
+        preorder: {
+          ...preorder,
+          factureWhatsappTo: originalPhone,
+        },
+        purpose: latestMessage?.purpose || "PAYMENT_LINK",
+        message,
+        actorName: "ASSISTANT_FBO",
+        toPhone: originalPhone,
+        toEmail: preorder.fboEmail || null,
+        paymentLinkTarget: latestMessage?.paymentLinkTarget || latestPaymentLink,
+        paymentLinkTracked: latestMessage?.paymentLinkTracked || latestPaymentLink,
+      });
+
+      const accepted = Boolean(sendResult?.sent || sendResult?.queued || sendResult?.smsQueued);
+
+      await prisma.paymentLinkResendRequest.create({
+        data: {
+          countryId,
+          preorderId: preorder.id,
+          preorderNumber: preorder.preorderNumber,
+          fboNumero,
+          originalPhone,
+          requestedWhatsappPhone: null,
+          note: note || null,
+          status: accepted ? "RESOLVED" : "PENDING",
+          reviewNote: accepted
+            ? `Renvoi automatique ${sendResult?.channel || "notification"} demandé depuis l'aide FBO.`
+            : `Renvoi automatique échoué: ${sendResult?.errorMessage || sendResult?.reason || "canal indisponible"}`,
+          reviewedAt: accepted ? new Date() : null,
+        },
+      });
+
+      if (accepted) {
+        return res.status(200).json({
+          ok: true,
+          autoSent: true,
+          status: "RESOLVED",
+          message:
+            "Le lien de paiement a été renvoyé automatiquement par SMS et/ou email si disponible.",
+          channel: sendResult?.channel || null,
+          toPhone: sendResult?.toPhone || originalPhone,
+          toEmail: sendResult?.toEmail || preorder.fboEmail || null,
+        });
+      }
+
+      return res.status(202).json({
+        ok: true,
+        autoSent: false,
+        status: "PENDING",
+        message:
+          "Le renvoi automatique n'a pas pu être confirmé. Votre demande a été transmise à l'équipe.",
       });
     }
 
