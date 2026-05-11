@@ -417,6 +417,7 @@ model CountrySettings {
   themeSliderEnabled Boolean @default(true)
   themeSidePanelsEnabled Boolean @default(true)
   notificationTemplates Json?
+  fboHelpTopics Json?
 
   // Paramètres opérationnels facturation
   maxActiveBillingPerInvoicer Int @default(5)

@@ -1,6 +1,101 @@
 const prisma = require("../../prisma");
 const { pickCountryId } = require("../../helpers/countryScope");
 
+const FBO_HELP_TOPIC_IDS = new Set([
+  "country",
+  "new-order",
+  "cache",
+  "payment",
+  "status",
+  "pickup",
+  "support",
+]);
+
+const DEFAULT_FBO_HELP_TOPICS = [
+  {
+    id: "country",
+    enabled: true,
+    label: "Quel catalogue est affiché ?",
+    answer:
+      "Le catalogue dépend du pays choisi à l'étape 1. Les produits, prix, stocks et moyens de paiement sont chargés pour ce pays.",
+  },
+  {
+    id: "new-order",
+    enabled: true,
+    label: "Faire une nouvelle précommande",
+    answer:
+      "Pour refaire une précommande, revenez à l'étape 1. Si l'ancien panier reste affiché, utilisez Nouvelle précommande.",
+  },
+  {
+    id: "cache",
+    enabled: true,
+    label: "Anciennes informations affichées",
+    answer:
+      "Si le téléphone affiche encore les anciennes informations, réinitialisez la précommande en cours puis recommencez depuis l'étape 1.",
+  },
+  {
+    id: "payment",
+    enabled: false,
+    label: "Paiement et lien reçu",
+    answer:
+      "Après traitement, vous recevez une notification avec les instructions de paiement.",
+  },
+  {
+    id: "status",
+    enabled: false,
+    label: "Voir mes commandes",
+    answer:
+      "Ouvrez l'espace client avec votre téléphone pour consulter vos commandes et leur statut.",
+  },
+  {
+    id: "pickup",
+    enabled: false,
+    label: "Retrait de commande",
+    answer:
+      "Le retrait se fait selon les informations confirmées après paiement.",
+  },
+  {
+    id: "support",
+    enabled: false,
+    label: "Contacter le support",
+    answer:
+      "Si vous êtes bloqué, contactez le support avec votre numéro FBO et votre code de précommande.",
+  },
+];
+
+function normalizeFboHelpTopics(raw) {
+  const custom = Array.isArray(raw) ? raw : [];
+  return DEFAULT_FBO_HELP_TOPICS.map((topic) => {
+    const override = custom.find((item) => item?.id === topic.id) || {};
+    return {
+      ...topic,
+      enabled:
+        typeof override.enabled === "boolean" ? override.enabled : topic.enabled,
+      label:
+        typeof override.label === "string" && override.label.trim()
+          ? override.label.trim()
+          : topic.label,
+      answer:
+        typeof override.answer === "string" && override.answer.trim()
+          ? override.answer.trim()
+          : topic.answer,
+    };
+  });
+}
+
+function sanitizeFboHelpTopics(raw) {
+  if (!Array.isArray(raw)) return DEFAULT_FBO_HELP_TOPICS;
+  const valid = raw
+    .filter((item) => FBO_HELP_TOPIC_IDS.has(item?.id))
+    .map((item) => ({
+      id: item.id,
+      enabled: Boolean(item.enabled),
+      label: String(item.label || "").trim(),
+      answer: String(item.answer || "").trim(),
+    }));
+  return normalizeFboHelpTopics(valid);
+}
+
 async function getCountrySettings(req, res) {
   try {
     const countryId = pickCountryId(req);
@@ -41,6 +136,7 @@ async function getCountrySettings(req, res) {
         themeSliderEnabled: true,
         themeSidePanelsEnabled: true,
         notificationTemplates: true,
+        fboHelpTopics: true,
         maxActiveBillingPerInvoicer: true,
         billingClaimTimeoutMin: true,
         preinvoicedAutoCancelAfterHours: true,
@@ -89,6 +185,7 @@ async function getCountrySettings(req, res) {
         themeSliderEnabled: true,
         themeSidePanelsEnabled: true,
         notificationTemplates: null,
+        fboHelpTopics: DEFAULT_FBO_HELP_TOPICS,
         maxActiveBillingPerInvoicer: 5,
         billingClaimTimeoutMin: 15,
         preinvoicedAutoCancelAfterHours: 2,
@@ -101,6 +198,7 @@ async function getCountrySettings(req, res) {
     }
     return res.json({
       ...settings,
+      fboHelpTopics: normalizeFboHelpTopics(settings.fboHelpTopics),
       countryCode: req.country?.code || null,
     });
   } catch (e) {
@@ -156,6 +254,7 @@ async function updateCountrySettings(req, res) {
       themeSliderEnabled,
       themeSidePanelsEnabled,
       notificationTemplates,
+      fboHelpTopics,
       maxActiveBillingPerInvoicer,
       billingClaimTimeoutMin,
       preinvoicedAutoCancelAfterHours,
@@ -389,6 +488,10 @@ async function updateCountrySettings(req, res) {
       data.notificationTemplates = notificationTemplates;
     }
 
+    if (fboHelpTopics !== undefined) {
+      data.fboHelpTopics = sanitizeFboHelpTopics(fboHelpTopics);
+    }
+
     const updated = await prisma.countrySettings.upsert({
       where: { countryId },
       update: data,
@@ -447,6 +550,7 @@ async function updateCountrySettings(req, res) {
             data.themeSidePanelsEnabled !== undefined
               ? data.themeSidePanelsEnabled
               : true,
+          fboHelpTopics: data.fboHelpTopics ?? DEFAULT_FBO_HELP_TOPICS,
           maxActiveBillingPerInvoicer:
             data.maxActiveBillingPerInvoicer !== undefined
             ? data.maxActiveBillingPerInvoicer
@@ -507,6 +611,7 @@ async function updateCountrySettings(req, res) {
         themeSliderEnabled: true,
         themeSidePanelsEnabled: true,
         notificationTemplates: true,
+        fboHelpTopics: true,
         maxActiveBillingPerInvoicer: true,
         billingClaimTimeoutMin: true,
         preinvoicedAutoCancelAfterHours: true,
@@ -518,7 +623,10 @@ async function updateCountrySettings(req, res) {
       },
     });
 
-    return res.json(updated);
+    return res.json({
+      ...updated,
+      fboHelpTopics: normalizeFboHelpTopics(updated.fboHelpTopics),
+    });
   } catch (e) {
     console.error("updateCountrySettings error:", e);
     return res
