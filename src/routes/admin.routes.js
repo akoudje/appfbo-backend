@@ -178,6 +178,18 @@ router.patch(
 );
 
 router.get(
+  "/pickup-code-resend-requests",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  paymentLinkResendRequestsController.listPickupCodeResendRequests,
+);
+
+router.patch(
+  "/pickup-code-resend-requests/:id",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  paymentLinkResendRequestsController.updatePickupCodeResendRequest,
+);
+
+router.get(
   "/countries",
   requirePermission(Permission.COUNTRY_READ),
   adminListCountries,

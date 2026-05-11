@@ -379,6 +379,7 @@ model Country {
   bankPaymentProofs       BankPaymentProof[]
   stockMovements          StockMovement[]
   paymentLinkResendRequests PaymentLinkResendRequest[]
+  pickupCodeResendRequests PickupCodeResendRequest[]
 }
 
 model CountrySettings {
@@ -746,6 +747,7 @@ model Preorder {
   stockMovements StockMovement[]
   bankPaymentProofs BankPaymentProof[]
   paymentLinkResendRequests PaymentLinkResendRequest[]
+  pickupCodeResendRequests PickupCodeResendRequest[]
 
   @@index([status, createdAt])
   @@index([preorderPaymentMode])
@@ -1008,6 +1010,34 @@ model StockMovement {
 }
 
 model PaymentLinkResendRequest {
+  id String @id @default(cuid())
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  preorderId String
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  preorderNumber String?
+  fboNumero String
+  originalPhone String
+  requestedWhatsappPhone String?
+  note String? @db.Text
+  status String @default("PENDING")
+
+  reviewedByAdminId String?
+  reviewedAt DateTime?
+  reviewNote String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, status, createdAt])
+  @@index([preorderId, createdAt])
+  @@index([fboNumero, createdAt])
+}
+
+model PickupCodeResendRequest {
   id String @id @default(cuid())
 
   countryId String

@@ -14,6 +14,7 @@ const {
 const { resolveCountry } = require("../middlewares/resolveCountry");
 const {
   createPaymentLinkResendRequest,
+  createPickupCodeResendRequest,
 } = require("../controllers/paymentLinkResendRequests.controller");
 
 router.use(resolveCountry);
@@ -28,5 +29,6 @@ router.post("/:id/submit", submit);
 router.post("/:id/notify-sms", notifySms);
 router.get("/:id/sms-status", getSmsStatus);
 router.post("/payment-link-resend-requests", createPaymentLinkResendRequest);
+router.post("/pickup-code-resend-requests", createPickupCodeResendRequest);
 
 module.exports = router;
