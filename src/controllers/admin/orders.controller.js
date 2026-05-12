@@ -2563,7 +2563,7 @@ async function regularizeFulfillmentNoNotification(req, res) {
               countryId: order.countryId,
               preorderId: order.id,
               type: "DEBIT",
-              reason: "FULFILL_NO_NOTIFICATION",
+              reason: "PREPARE_ORDER",
               qty: item.qty,
               note: "Sortie de stock lors d'une clôture admin sans notification",
               meta: {
@@ -2571,6 +2571,8 @@ async function regularizeFulfillmentNoNotification(req, res) {
                 productId: item.productId,
                 qty: item.qty,
                 fromStatus: status,
+                regularization: true,
+                notificationsSkipped: true,
               },
               createdById: req.user?.id || null,
             },
@@ -2616,13 +2618,14 @@ async function regularizeFulfillmentNoNotification(req, res) {
       await addLogTx(
         tx,
         order.id,
-        "FULFILL_NO_NOTIFICATION",
+        "FULFILL",
         regularizationNote,
         {
           fromStatus: order.status,
           toStatus: "FULFILLED",
           stockDeducted: mustDebitStock,
           notificationsSkipped: true,
+          regularization: true,
           reason: "PHYSICAL_DELIVERY_REGULARIZATION",
           parcelNumber,
           fulfillmentMode: normalizedFulfillmentMode,
