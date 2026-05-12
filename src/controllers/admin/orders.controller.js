@@ -133,6 +133,15 @@ function isGlobalAdminRole(role) {
   );
 }
 
+function canRegularizeFulfillment(role) {
+  const normalized = String(role || "").trim().toUpperCase();
+  return (
+    normalized === AdminRole.SUPER_ADMIN ||
+    normalized === AdminRole.TECH_ADMIN ||
+    normalized === AdminRole.OPERATIONS_DIRECTOR
+  );
+}
+
 function normalizeOptionalNotificationPhone(value) {
   if (value === undefined) return undefined;
   const raw = String(value || "").trim();
@@ -2445,6 +2454,201 @@ async function fulfillOrder(req, res) {
     return res
       .status(e.statusCode || 500)
       .json({ message: e.message || "Erreur serveur (fulfillOrder)" });
+  }
+}
+
+async function regularizeFulfillmentNoNotification(req, res) {
+  try {
+    const { id } = req.params;
+    const { note, fulfillmentMode, pickupPointLabel, deliveryCarrier, deliveryTracking } =
+      req.body || {};
+
+    if (!canRegularizeFulfillment(req.user?.role)) {
+      return res.status(403).json({
+        message:
+          "Seuls les administrateurs autorisés peuvent clôturer une commande sans notification.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: {
+          include: {
+            product: {
+              select: { id: true, nom: true, sku: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const status = String(order.status || "").toUpperCase();
+    const paymentStatus = String(order.paymentStatus || "").toUpperCase();
+
+    if (status === "FULFILLED") {
+      return res.json({
+        ok: true,
+        alreadyDone: true,
+        status: order.status,
+        order,
+      });
+    }
+
+    if (!["PAID", "READY"].includes(status) || paymentStatus !== "PAID") {
+      return res.status(400).json({
+        message:
+          "La clôture sans notification est réservée aux commandes payées, en préparation ou prêtes.",
+      });
+    }
+
+    if (!order.items || order.items.length === 0) {
+      return res.status(400).json({
+        message: "Impossible de clôturer une commande vide.",
+      });
+    }
+
+    const now = new Date();
+    const normalizedFulfillmentMode =
+      String(
+        fulfillmentMode ||
+          order.fulfillmentMode ||
+          (order.deliveryMode === "RETRAIT_SITE_FLP" ? "PICKUP" : "DELIVERY"),
+      )
+        .trim()
+        .toUpperCase() || null;
+    const regularizationNote =
+      String(note || "").trim() ||
+      "Régularisation admin : commande déjà livrée physiquement, clôturée sans notification.";
+    const parcelNumber = order.parcelNumber || generateParcelNumber(order);
+    const pickupSecretCode =
+      order.pickupSecretCode ||
+      String(Math.floor(100000 + Math.random() * 900000));
+    const mustDebitStock = !order.stockDeductedAt;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await ensurePreparationChecklist(tx, order);
+
+      if (mustDebitStock) {
+        for (const item of order.items) {
+          const updatedStock = await tx.countryProduct.updateMany({
+            where: {
+              countryId: order.countryId,
+              productId: item.productId,
+              actif: true,
+              stockQty: { gte: item.qty },
+            },
+            data: {
+              stockQty: { decrement: item.qty },
+            },
+          });
+
+          if (updatedStock.count !== 1) {
+            const err = new Error(
+              `Stock insuffisant pour ${
+                item.productNameSnapshot || item.product?.nom || item.productId
+              }`,
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          await tx.stockMovement.create({
+            data: {
+              productId: item.productId,
+              countryId: order.countryId,
+              preorderId: order.id,
+              type: "DEBIT",
+              reason: "FULFILL_NO_NOTIFICATION",
+              qty: item.qty,
+              note: "Sortie de stock lors d'une clôture admin sans notification",
+              meta: {
+                preorderId: order.id,
+                productId: item.productId,
+                qty: item.qty,
+                fromStatus: status,
+              },
+              createdById: req.user?.id || null,
+            },
+          });
+        }
+      }
+
+      await tx.preparationChecklistItem.updateMany({
+        where: { preorderId: order.id, checked: false },
+        data: {
+          checked: true,
+          checkedAt: now,
+          checkedById: req.user?.id || null,
+          note: "Cochée automatiquement lors de la régularisation admin.",
+        },
+      });
+
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "FULFILLED",
+          parcelNumber,
+          preparedAt: order.preparedAt || now,
+          preparedById: order.preparedById || req.user?.id || null,
+          stockDeductedAt: order.stockDeductedAt || now,
+          pickupSecretCode,
+          fulfilledAt: order.fulfilledAt || now,
+          fulfilledById: order.fulfilledById || req.user?.id || null,
+          fulfillmentMode: normalizedFulfillmentMode,
+          deliveryTracking: deliveryTracking
+            ? String(deliveryTracking).trim()
+            : order.deliveryTracking,
+          pickupPointLabel: pickupPointLabel
+            ? String(pickupPointLabel).trim()
+            : order.pickupPointLabel,
+          deliveryCarrier: deliveryCarrier
+            ? String(deliveryCarrier).trim()
+            : order.deliveryCarrier,
+          internalNote: regularizationNote,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "FULFILL_NO_NOTIFICATION",
+        regularizationNote,
+        {
+          fromStatus: order.status,
+          toStatus: "FULFILLED",
+          stockDeducted: mustDebitStock,
+          notificationsSkipped: true,
+          reason: "PHYSICAL_DELIVERY_REGULARIZATION",
+          parcelNumber,
+          fulfillmentMode: normalizedFulfillmentMode,
+        },
+        req.user?.id || null,
+      );
+
+      return saved;
+    });
+
+    return res.json({
+      ok: true,
+      notificationsSkipped: true,
+      stockDeducted: mustDebitStock,
+      order: updated,
+      ...updated,
+    });
+  } catch (e) {
+    console.error("regularizeFulfillmentNoNotification error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({
+        message:
+          e.message ||
+          "Erreur serveur (regularizeFulfillmentNoNotification)",
+      });
   }
 }
 
