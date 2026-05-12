@@ -2789,5 +2789,6 @@ module.exports = {
   resolvePreparationAnomaly,
   prepareOrder,
   fulfillOrder,
+  regularizeFulfillmentNoNotification,
   cancelOrder,
 };

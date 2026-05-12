@@ -113,6 +113,12 @@ router.post(
 );
 
 router.post(
+  "/:id/fulfill-no-notification",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.regularizeFulfillmentNoNotification,
+);
+
+router.post(
   "/:id/cancel",
   requirePermission(Permission.PREORDER_UPDATE_STATUS),
   ordersController.cancelOrder,
