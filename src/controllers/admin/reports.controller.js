@@ -13,6 +13,112 @@ function parseReportDate(value) {
   return { iso, start, end };
 }
 
+function parseIsoDate(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+}
+
+function startOfUtcDay(iso) {
+  return new Date(`${iso}T00:00:00.000Z`);
+}
+
+function endOfUtcDay(iso) {
+  return new Date(`${iso}T23:59:59.999Z`);
+}
+
+function shiftIsoDay(iso, days) {
+  const date = startOfUtcDay(iso);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function inclusiveDayCount(fromIso, toIso) {
+  return Math.max(
+    1,
+    Math.round((startOfUtcDay(toIso).getTime() - startOfUtcDay(fromIso).getTime()) / 86400000) + 1,
+  );
+}
+
+function resolveReportPeriod(query = {}) {
+  const periodType = String(query.period || query.periodType || "day")
+    .trim()
+    .toLowerCase();
+  const date = parseIsoDate(query.date) || new Date().toISOString().slice(0, 10);
+
+  if (periodType === "custom") {
+    const fromIso = parseIsoDate(query.dateFrom) || date;
+    const toIso = parseIsoDate(query.dateTo) || fromIso;
+    const safeFrom = fromIso <= toIso ? fromIso : toIso;
+    const safeTo = fromIso <= toIso ? toIso : fromIso;
+    const days = inclusiveDayCount(safeFrom, safeTo);
+    const previousStartIso = shiftIsoDay(safeFrom, -days);
+    const previousEndIso = shiftIsoDay(safeFrom, -1);
+    return {
+      type: "custom",
+      label: `${safeFrom} au ${safeTo}`,
+      iso: safeFrom,
+      start: startOfUtcDay(safeFrom),
+      end: endOfUtcDay(safeTo),
+      previous: {
+        iso: previousStartIso,
+        start: startOfUtcDay(previousStartIso),
+        end: endOfUtcDay(previousEndIso),
+      },
+    };
+  }
+
+  if (periodType === "week") {
+    const anchor = startOfUtcDay(date);
+    const day = anchor.getUTCDay() || 7;
+    anchor.setUTCDate(anchor.getUTCDate() - day + 1);
+    const startIso = anchor.toISOString().slice(0, 10);
+    const endIso = shiftIsoDay(startIso, 6);
+    return {
+      type: "week",
+      label: `Semaine du ${startIso}`,
+      iso: startIso,
+      start: startOfUtcDay(startIso),
+      end: endOfUtcDay(endIso),
+      previous: {
+        iso: shiftIsoDay(startIso, -7),
+        start: startOfUtcDay(shiftIsoDay(startIso, -7)),
+        end: endOfUtcDay(shiftIsoDay(startIso, -1)),
+      },
+    };
+  }
+
+  if (periodType === "month") {
+    const [year, month] = date.split("-").map((part) => Number(part));
+    const startIso = `${year}-${String(month).padStart(2, "0")}-01`;
+    const nextMonth = new Date(Date.UTC(year, month, 1));
+    nextMonth.setUTCDate(nextMonth.getUTCDate() - 1);
+    const endIso = nextMonth.toISOString().slice(0, 10);
+    const previousEnd = new Date(Date.UTC(year, month - 1, 0));
+    const previousStart = new Date(Date.UTC(previousEnd.getUTCFullYear(), previousEnd.getUTCMonth(), 1));
+    return {
+      type: "month",
+      label: `${startIso.slice(0, 7)}`,
+      iso: startIso,
+      start: startOfUtcDay(startIso),
+      end: endOfUtcDay(endIso),
+      previous: {
+        iso: previousStart.toISOString().slice(0, 10),
+        start: previousStart,
+        end: endOfUtcDay(previousEnd.toISOString().slice(0, 10)),
+      },
+    };
+  }
+
+  const day = parseReportDate(date);
+  return {
+    type: "day",
+    label: day.iso,
+    ...day,
+    previous: shiftDayRange(day.start, -1),
+  };
+}
+
 function shiftDayRange(start, days) {
   const shiftedStart = new Date(start);
   shiftedStart.setUTCDate(shiftedStart.getUTCDate() + days);
@@ -262,7 +368,8 @@ async function getDailySnapshot(req, start, end, filters = {}) {
 async function getDailySalesReport(req, res) {
   try {
     const countryId = pickCountryId(req);
-    const { iso, start, end } = parseReportDate(req.query?.date);
+    const reportPeriod = resolveReportPeriod(req.query || {});
+    const { iso, start, end } = reportPeriod;
     const base = (where = {}) => scopeWhere(req, where);
     const filters = {
       paymentMode: normalizePaymentModeFilter(req.query?.paymentMode),
@@ -384,7 +491,7 @@ async function getDailySalesReport(req, res) {
       const submittedAt = new Date(row.submittedAt);
       return submittedAt < start;
     });
-    const previousDay = shiftDayRange(start, -1);
+    const previousDay = reportPeriod.previous;
     const previousSnapshot = await getDailySnapshot(req, previousDay.start, previousDay.end, filters);
     const currentSnapshot = {
       submitted: summarizeRows(submittedRows, "totalFcfa"),
@@ -399,8 +506,12 @@ async function getDailySalesReport(req, res) {
       countryId,
       filters,
       period: {
+        type: reportPeriod.type,
+        label: reportPeriod.label,
         start: start.toISOString(),
         end: end.toISOString(),
+        previousStart: previousDay.start.toISOString(),
+        previousEnd: previousDay.end.toISOString(),
       },
       submitted: {
         ...summarizeRows(submittedRows, "totalFcfa"),
@@ -466,6 +577,7 @@ async function getDailySalesReport(req, res) {
       comparison: {
         previousDay: {
           date: previousDay.iso,
+          label: reportPeriod.type === "day" ? "veille" : "période précédente",
           submitted: buildComparisonMetric(currentSnapshot.submitted, previousSnapshot.submitted),
           invoiced: buildComparisonMetric(currentSnapshot.invoiced, previousSnapshot.invoiced),
           paid: buildComparisonMetric(currentSnapshot.paid, previousSnapshot.paid),
