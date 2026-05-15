@@ -350,6 +350,7 @@ model Fbo {
   fboCountries FboCountry[]
   customerOtpChallenges CustomerOtpChallenge[]
   bankPaymentProofs BankPaymentProof[]
+  mobilePushTokens MobilePushToken[]
 
   @@index([pointDeVente])
   @@index([grade])
@@ -380,6 +381,30 @@ model Country {
   stockMovements          StockMovement[]
   paymentLinkResendRequests PaymentLinkResendRequest[]
   pickupCodeResendRequests PickupCodeResendRequest[]
+  mobilePushTokens MobilePushToken[]
+}
+
+model MobilePushToken {
+  id String @id @default(cuid())
+
+  token String @unique
+  platform String?
+  enabled Boolean @default(true)
+
+  fboId String?
+  fbo Fbo? @relation(fields: [fboId], references: [id], onDelete: Cascade)
+
+  countryId String?
+  country Country? @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  lastSeenAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([fboId, enabled])
+  @@index([countryId, enabled])
+  @@index([platform])
+  @@index([lastSeenAt])
 }
 
 model CountrySettings {
