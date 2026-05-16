@@ -464,6 +464,18 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
   }
 
   try {
+    const latestPaymentMessage = await prisma.orderMessage.findFirst({
+      where: {
+        preorderId,
+        purpose: { in: ["INVOICE", "PAYMENT_LINK"] },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { paymentLinkTracked: true, paymentLinkTarget: true },
+    });
+    const cancelPaymentLink = String(
+      latestPaymentMessage?.paymentLinkTracked || latestPaymentMessage?.paymentLinkTarget || "",
+    ).trim();
+
     await sendPreorderNotification({
       preorder: {
         ...order,
@@ -475,6 +487,8 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
         ...updated,
       }, countrySettings),
       actorName: "SYSTEM_AUTO_CANCEL_EXPIRY_WINDOW",
+      paymentLinkTarget: cancelPaymentLink || null,
+      paymentLinkTracked: cancelPaymentLink || null,
     });
   } catch (error) {
     console.error("[preorder-expiration] notification failed", {
