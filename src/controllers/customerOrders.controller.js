@@ -3,6 +3,16 @@ const { computePreorderTotals } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
 
+const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
+
+function canonicalFboNumber(raw = "") {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length === 12) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6, 9)}-${digits.slice(9, 12)}`;
+  }
+  return String(raw || "").trim();
+}
+
 function attachCustomerPaymentWindow(order) {
   if (!order || typeof order !== "object") return order;
 
@@ -22,19 +32,33 @@ function attachCustomerPaymentWindow(order) {
 
 async function listMyOrders(req, res) {
   try {
-    const countryId = req.country?.id || req.countryId;
     const fboId = req.customer?.fboId;
+    const numeroFbo = canonicalFboNumber(req.customer?.numeroFbo || "");
     const rows = await prisma.preorder.findMany({
       where: {
-        countryId,
-        fboId,
+        country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
+        OR: [
+          { fboId },
+          ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
+        ],
       },
       select: {
         id: true,
+        country: {
+          select: {
+            code: true,
+            name: true,
+          },
+        },
         preorderNumber: true,
         status: true,
         paymentStatus: true,
         preorderPaymentMode: true,
+        fboNumero: true,
+        fboNomComplet: true,
+        placedByFboNumero: true,
+        placedByFboName: true,
+        placedByHomeCountryCode: true,
         totalFcfa: true,
         factureReference: true,
         paymentCollectionCode: true,
@@ -61,12 +85,15 @@ async function listMyOrders(req, res) {
     });
 
     return res.json({
-      data: rows.map((row) =>
-        attachCustomerPaymentWindow({
+      data: rows.map((row) => {
+        const relationType =
+          row.fboNumero === numeroFbo ? "SELF" : "PLACED_FOR_OTHER";
+        return attachCustomerPaymentWindow({
           ...row,
+          relationType,
           latestBankProof: row.bankPaymentProofs?.[0] || null,
-        }),
-      ),
+        });
+      }),
     });
   } catch (e) {
     console.error("listMyOrders error:", e);
@@ -76,17 +103,26 @@ async function listMyOrders(req, res) {
 
 async function getMyOrder(req, res) {
   try {
-    const countryId = req.country?.id || req.countryId;
     const fboId = req.customer?.fboId;
+    const numeroFbo = canonicalFboNumber(req.customer?.numeroFbo || "");
     const { id } = req.params;
 
     const order = await prisma.preorder.findFirst({
       where: {
         id,
-        countryId,
-        fboId,
+        country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
+        OR: [
+          { fboId },
+          ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
+        ],
       },
       include: {
+        country: {
+          select: {
+            code: true,
+            name: true,
+          },
+        },
         items: {
           include: {
             product: {

@@ -656,6 +656,13 @@ model Preorder {
   billingGrade  Grade?
   pointDeVente  String
 
+  // FBO qui a passé la commande lorsqu'il agit pour un autre FBO.
+  placedByFboNumero      String?
+  placedByFboName        String?
+  placedByFboPhone       String?
+  placedByFboEmail       String?
+  placedByHomeCountryCode String?
+
   // Livraison
   deliveryMode DeliveryMode?
 
@@ -779,6 +786,7 @@ model Preorder {
   @@index([countryId, status, createdAt])
   @@index([paymentStatus, createdAt])
   @@index([fboId])
+  @@index([placedByFboNumero])
   @@index([pointDeVente])
   @@index([billingWorkStatus, billingPriority, billingQueueEnteredAt])
   @@index([assignedInvoicerId, billingWorkStatus])

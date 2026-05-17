@@ -1908,10 +1908,7 @@ async function getPublicWavePaymentContext({ req, preorderId }) {
             initiatedAt: preorder.activePayment.initiatedAt,
           }
         : null,
-      payerPhoneHint:
-        lastAttempt?.providerPayerPhone ||
-        lastAttempt?.requestPayloadJson?.restrictPayerMobile ||
-        null,
+      payerPhoneHint: lastAttempt?.providerPayerPhone || null,
       publicPaymentUrl: buildPublicWavePaymentUrl(
         preorder.id,
         preorder.country?.code || "CIV",

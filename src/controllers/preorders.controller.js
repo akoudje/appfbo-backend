@@ -165,6 +165,11 @@ async function createDraft(req, res) {
       pointDeVente,
       paymentMode = null,
       deliveryMode = null,
+      placedByFboNumero = "",
+      placedByFboName = "",
+      placedByFboPhone = "",
+      placedByFboEmail = "",
+      placedByHomeCountryCode = "",
     } = req.body || {};
 
     if (
@@ -194,6 +199,20 @@ async function createDraft(req, res) {
     const normalizedPaymentMode = paymentMode
       ? String(paymentMode).trim().toUpperCase()
       : null;
+    const normalizedPlacedByFboNumero = placedByFboNumero
+      ? normalizeNumeroFbo(placedByFboNumero)
+      : null;
+    const normalizedPlacedByName = String(placedByFboName || "").trim().toUpperCase() || null;
+    const normalizedPlacedByPhone = String(placedByFboPhone || "").trim() || null;
+    const normalizedPlacedByEmail = normalizeEmail(placedByFboEmail);
+    const normalizedPlacedByHomeCountryCode =
+      String(placedByHomeCountryCode || "").trim().toUpperCase() || null;
+
+    if (normalizedPlacedByEmail === "__INVALID_EMAIL__") {
+      return res.status(400).json({
+        error: "Format email du FBO initiateur invalide",
+      });
+    }
 
     const requestedDeliveryMode = deliveryMode
       ? String(deliveryMode).trim().toUpperCase()
@@ -272,6 +291,31 @@ async function createDraft(req, res) {
           fboEmail: fbo.email || null,
           fboGrade: fbo.grade,
           pointDeVente: fbo.pointDeVente,
+          placedByFboNumero:
+            normalizedPlacedByFboNumero &&
+            normalizedPlacedByFboNumero !== fbo.numeroFbo
+              ? normalizedPlacedByFboNumero
+              : null,
+          placedByFboName:
+            normalizedPlacedByFboNumero &&
+            normalizedPlacedByFboNumero !== fbo.numeroFbo
+              ? normalizedPlacedByName
+              : null,
+          placedByFboPhone:
+            normalizedPlacedByFboNumero &&
+            normalizedPlacedByFboNumero !== fbo.numeroFbo
+              ? normalizedPlacedByPhone
+              : null,
+          placedByFboEmail:
+            normalizedPlacedByFboNumero &&
+            normalizedPlacedByFboNumero !== fbo.numeroFbo
+              ? normalizedPlacedByEmail || null
+              : null,
+          placedByHomeCountryCode:
+            normalizedPlacedByFboNumero &&
+            normalizedPlacedByFboNumero !== fbo.numeroFbo
+              ? normalizedPlacedByHomeCountryCode
+              : null,
 
           preorderPaymentMode: normalizedPaymentMode,
           deliveryMode: normalizedDeliveryMode,
@@ -302,6 +346,12 @@ async function createDraft(req, res) {
             preorderDateKey,
             countryId,
             countryCode,
+            placedByFboNumero:
+              normalizedPlacedByFboNumero &&
+              normalizedPlacedByFboNumero !== fbo.numeroFbo
+                ? normalizedPlacedByFboNumero
+                : null,
+            placedByHomeCountryCode: normalizedPlacedByHomeCountryCode,
           },
         },
       });
