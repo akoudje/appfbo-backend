@@ -130,6 +130,35 @@ function buildNotificationsFromOrders(orders, numeroFbo) {
       });
     }
 
+    if (
+      order?.preparationLaunchedAt &&
+      !["READY", "FULFILLED", "CANCELLED"].includes(status)
+    ) {
+      notifications.push({
+        key: `${id}:preparation-started`,
+        orderId: id,
+        preorderNumber: reference,
+        relationType,
+        severity: "info",
+        title: "Préparation lancée",
+        body: `${reference} ${relationLabel} est en préparation.`,
+        eventAt: order.preparationLaunchedAt,
+      });
+    }
+
+    if (status === "FULFILLED") {
+      notifications.push({
+        key: `${id}:fulfilled`,
+        orderId: id,
+        preorderNumber: reference,
+        relationType,
+        severity: "success",
+        title: "Commande clôturée",
+        body: `${reference} ${relationLabel} a été clôturée.`,
+        eventAt: order?.fulfilledAt || order?.updatedAt || order?.createdAt,
+      });
+    }
+
     if (status === "CANCELLED") {
       notifications.push({
         key: `${id}:cancelled`,
@@ -204,7 +233,9 @@ async function loadScopedOrders(req) {
       paymentCollectionCode: true,
       invoicedAt: true,
       paidAt: true,
+      preparationLaunchedAt: true,
       preparedAt: true,
+      fulfilledAt: true,
       cancelledAt: true,
       updatedAt: true,
       createdAt: true,

@@ -4,6 +4,7 @@ const whatsappService = require("./whatsapp.service");
 const { normalizeEmail, sendEmail } = require("./email.service");
 const { MAX_SMS_LENGTH } = require("./sms.orange.service");
 const { getPaymentExpiryHours } = require("./notification-template-defaults");
+const { sendPreorderMobilePush } = require("./mobile-push.service");
 
 function compactText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -1045,7 +1046,17 @@ async function sendPreorderNotification({
   }
 
   if (!resolvedPhone && !resolvedWhatsapp && !resolvedEmail) {
-    return { sent: false, skipped: true, reason: "NO_DESTINATION" };
+    const pushResult = await sendPreorderMobilePush({
+      preorder,
+      purpose: persistedPurpose,
+      message: resolvedSmsMessage,
+    });
+    return {
+      sent: Boolean(pushResult?.sent),
+      skipped: !pushResult?.sent,
+      reason: pushResult?.sent ? null : "NO_DESTINATION",
+      push: pushResult,
+    };
   }
 
   const effectiveChannels = forcedChannel
@@ -1053,13 +1064,19 @@ async function sendPreorderNotification({
     : channels;
 
   if (effectiveChannels.length === 0) {
+    const pushResult = await sendPreorderMobilePush({
+      preorder,
+      purpose: persistedPurpose,
+      message: resolvedSmsMessage,
+    });
     return {
-      sent: false,
-      skipped: true,
+      sent: Boolean(pushResult?.sent),
+      skipped: !pushResult?.sent,
       reason: forcedChannel
         ? "FORCED_CHANNEL_UNAVAILABLE"
         : "CHANNEL_DISABLED_FOR_PURPOSE",
       attempts: [],
+      push: pushResult,
       smsSent: false,
       smsQueued: false,
       whatsappSent: false,
@@ -1203,6 +1220,11 @@ async function sendPreorderNotification({
   const whatsappSent = attempts.some((a) => a.channel === "WHATSAPP" && a.sent);
   const emailSent = attempts.some((a) => a.channel === "EMAIL" && a.sent);
   const anyAccepted = attempts.some((a) => a.sent || a.queued);
+  const pushResult = await sendPreorderMobilePush({
+    preorder,
+    purpose: persistedPurpose,
+    message: resolvedSmsMessage,
+  });
 
   if (anyAccepted) {
     return {
@@ -1218,6 +1240,7 @@ async function sendPreorderNotification({
       errorCode: null,
       errorMessage: null,
       attempts,
+      push: pushResult,
       smsSent,
       smsQueued,
       whatsappSent,
@@ -1239,6 +1262,7 @@ async function sendPreorderNotification({
       attempts[attempts.length - 1]?.errorMessage ||
       "Toutes les tentatives de notification ont échoué.",
     attempts,
+    push: pushResult,
     smsSent: false,
     whatsappSent: false,
     emailSent: false,
