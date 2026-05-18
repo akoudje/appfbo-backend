@@ -351,6 +351,7 @@ model Fbo {
   customerOtpChallenges CustomerOtpChallenge[]
   bankPaymentProofs BankPaymentProof[]
   mobilePushTokens MobilePushToken[]
+  customerNotificationReads CustomerNotificationRead[]
 
   @@index([pointDeVente])
   @@index([grade])
@@ -833,6 +834,22 @@ model CustomerOtpChallenge {
 
   @@index([countryId, fboId, createdAt])
   @@index([fboId, consumedAt, expiresAt])
+}
+
+model CustomerNotificationRead {
+  id String @id @default(cuid())
+
+  fboId String
+  fbo   Fbo    @relation(fields: [fboId], references: [id], onDelete: Cascade)
+
+  notificationKey String
+  readAt          DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([fboId, notificationKey])
+  @@index([fboId, readAt])
 }
 
 model BankPaymentProof {

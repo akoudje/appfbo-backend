@@ -5,6 +5,7 @@ const { requireCustomerAuth } = require("../middlewares/customerAuth");
 const customerAuthController = require("../controllers/customerAuth.controller");
 const customerOrdersController = require("../controllers/customerOrders.controller");
 const customerBankProofController = require("../controllers/customerBankProof.controller");
+const customerNotificationsController = require("../controllers/customerNotifications.controller");
 
 const router = express.Router();
 
@@ -44,6 +45,9 @@ router.post("/auth/logout", customerAuthController.logout);
 
 router.get("/me", requireCustomerAuth, customerAuthController.me);
 router.get("/me/orders", requireCustomerAuth, customerOrdersController.listMyOrders);
+router.get("/me/notifications", requireCustomerAuth, customerNotificationsController.listMyNotifications);
+router.post("/me/notifications/read", requireCustomerAuth, customerNotificationsController.markMyNotificationsRead);
+router.post("/me/notifications/read-all", requireCustomerAuth, customerNotificationsController.markAllMyNotificationsRead);
 router.get("/me/orders/:id", requireCustomerAuth, customerOrdersController.getMyOrder);
 router.post("/me/orders/:id/reorder", requireCustomerAuth, customerOrdersController.reorderMyOrder);
 router.get(
