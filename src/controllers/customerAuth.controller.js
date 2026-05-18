@@ -3,12 +3,17 @@ const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
 const { normalizeEmail, sendEmail } = require("../services/email.service");
 const { normalizePhone, sendSms } = require("../services/sms.service");
+const {
+  buildNotificationSummaryForCustomer,
+} = require("./customerNotifications.controller");
 
 const GENERIC_OTP_REQUEST_MESSAGE =
   "Si ce compte existe, un code de vérification sera envoyé sur le canal disponible.";
 const GENERIC_OTP_VERIFY_MESSAGE = "Code OTP invalide ou expiré.";
 const OTP_RESEND_UNAVAILABLE_MESSAGE =
   "Aucun canal de réception n'est disponible pour ce compte. Ajoutez un téléphone ou un email valide sur une commande récente.";
+const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
+const ACTIVE_ORDER_STATUSES = ["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID", "READY"];
 
 function canonicalFboNumber(raw = "") {
   const digits = String(raw || "").replace(/\D/g, "");
@@ -514,9 +519,150 @@ async function me(req, res) {
   }
 }
 
+async function dashboard(req, res) {
+  try {
+    const customer = req.customer;
+    const numeroFbo = canonicalFboNumber(customer?.numeroFbo || "");
+    const fbo = await prisma.fbo.findUnique({
+      where: { id: customer.fboId },
+      select: {
+        id: true,
+        numeroFbo: true,
+        nomComplet: true,
+        email: true,
+        grade: true,
+        pointDeVente: true,
+      },
+    });
+
+    if (!fbo) {
+      return res.status(404).json({ message: "Client introuvable" });
+    }
+
+    const where = {
+      country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
+      OR: [
+        { fboId: fbo.id },
+        ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
+      ],
+    };
+
+    const [
+      totalOrders,
+      activeOrders,
+      selfOrders,
+      placedForOthers,
+      waitingPayment,
+      readyOrders,
+      latestOrders,
+      countryRows,
+      notificationSummary,
+    ] = await Promise.all([
+      prisma.preorder.count({ where }),
+      prisma.preorder.count({
+        where: { ...where, status: { in: ACTIVE_ORDER_STATUSES } },
+      }),
+      prisma.preorder.count({
+        where: { country: where.country, fboId: fbo.id },
+      }),
+      numeroFbo
+        ? prisma.preorder.count({
+            where: { country: where.country, placedByFboNumero: numeroFbo },
+          })
+        : 0,
+      prisma.preorder.count({
+        where: {
+          ...where,
+          status: { in: ["INVOICED", "PAYMENT_PENDING"] },
+          paymentStatus: { notIn: ["PAID", "PAYMENT_CONFIRMED"] },
+        },
+      }),
+      prisma.preorder.count({
+        where: { ...where, status: "READY" },
+      }),
+      prisma.preorder.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        take: 4,
+        select: {
+          id: true,
+          preorderNumber: true,
+          status: true,
+          paymentStatus: true,
+          totalFcfa: true,
+          fboNumero: true,
+          fboNomComplet: true,
+          updatedAt: true,
+          country: {
+            select: {
+              code: true,
+              name: true,
+            },
+          },
+        },
+      }),
+      prisma.preorder.groupBy({
+        by: ["countryId"],
+        where,
+        _count: { _all: true },
+      }),
+      buildNotificationSummaryForCustomer({
+        fboId: fbo.id,
+        numeroFbo,
+      }),
+    ]);
+
+    const countries = countryRows.length
+      ? await prisma.country.findMany({
+          where: { id: { in: countryRows.map((row) => row.countryId) } },
+          select: { id: true, code: true, name: true },
+        })
+      : [];
+    const countryById = new Map(countries.map((country) => [country.id, country]));
+
+    return res.json({
+      profile: {
+        id: fbo.id,
+        numeroFbo: fbo.numeroFbo,
+        nomComplet: fbo.nomComplet,
+        email: fbo.email || null,
+        grade: fbo.grade,
+        pointDeVente: fbo.pointDeVente,
+        countryCode: req.country?.code || null,
+      },
+      stats: {
+        totalOrders,
+        activeOrders,
+        selfOrders,
+        placedForOthers,
+        waitingPayment,
+        readyOrders,
+        notifications: notificationSummary.total,
+        unreadNotifications: notificationSummary.unreadCount,
+      },
+      countries: countryRows.map((row) => {
+        const country = countryById.get(row.countryId);
+        return {
+          code: country?.code || "",
+          name: country?.name || "",
+          ordersCount: row._count?._all || 0,
+        };
+      }),
+      latestOrders: latestOrders.map((order) => ({
+        ...order,
+        relationType: order.fboNumero === numeroFbo ? "SELF" : "PLACED_FOR_OTHER",
+      })),
+    });
+  } catch (e) {
+    console.error("customer dashboard error:", e);
+    return res.status(500).json({ message: "Erreur serveur (customer dashboard)" });
+  }
+}
+
 module.exports = {
   requestOtp,
   verifyOtp,
   logout,
   me,
+  dashboard,
 };

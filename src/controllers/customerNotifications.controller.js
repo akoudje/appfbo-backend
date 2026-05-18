@@ -210,15 +210,14 @@ function buildNotificationsFromOrders(orders, numeroFbo) {
     .sort((a, b) => b.sortTime - a.sortTime);
 }
 
-async function loadScopedOrders(req) {
-  const fboId = req.customer?.fboId;
-  const numeroFbo = canonicalFboNumber(req.customer?.numeroFbo || "");
+async function loadScopedOrdersForCustomer({ fboId, numeroFbo }) {
+  const canonicalNumeroFbo = canonicalFboNumber(numeroFbo || "");
   const rows = await prisma.preorder.findMany({
     where: {
       country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
       OR: [
         { fboId },
-        ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
+        ...(canonicalNumeroFbo ? [{ placedByFboNumero: canonicalNumeroFbo }] : []),
       ],
     },
     select: {
@@ -254,7 +253,37 @@ async function loadScopedOrders(req) {
     orderBy: { updatedAt: "desc" },
     take: 80,
   });
-  return { rows, numeroFbo };
+  return { rows, numeroFbo: canonicalNumeroFbo };
+}
+
+async function loadScopedOrders(req) {
+  return loadScopedOrdersForCustomer({
+    fboId: req.customer?.fboId,
+    numeroFbo: req.customer?.numeroFbo || "",
+  });
+}
+
+async function buildNotificationSummaryForCustomer({ fboId, numeroFbo }) {
+  const { rows, numeroFbo: canonicalNumeroFbo } = await loadScopedOrdersForCustomer({
+    fboId,
+    numeroFbo,
+  });
+  const notifications = buildNotificationsFromOrders(rows, canonicalNumeroFbo);
+  const reads = notifications.length
+    ? await prisma.customerNotificationRead.findMany({
+        where: {
+          fboId,
+          notificationKey: { in: notifications.map((item) => item.key) },
+        },
+        select: { notificationKey: true },
+      })
+    : [];
+  const readKeys = new Set(reads.map((read) => read.notificationKey));
+
+  return {
+    total: notifications.length,
+    unreadCount: notifications.filter((item) => !readKeys.has(item.key)).length,
+  };
 }
 
 async function listMyNotifications(req, res) {
@@ -342,4 +371,5 @@ module.exports = {
   listMyNotifications,
   markMyNotificationsRead,
   markAllMyNotificationsRead,
+  buildNotificationSummaryForCustomer,
 };

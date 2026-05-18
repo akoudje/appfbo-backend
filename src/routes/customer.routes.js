@@ -44,6 +44,7 @@ router.post("/auth/otp/verify", otpVerifyLimiter, customerAuthController.verifyO
 router.post("/auth/logout", customerAuthController.logout);
 
 router.get("/me", requireCustomerAuth, customerAuthController.me);
+router.get("/me/dashboard", requireCustomerAuth, customerAuthController.dashboard);
 router.get("/me/orders", requireCustomerAuth, customerOrdersController.listMyOrders);
 router.get("/me/notifications", requireCustomerAuth, customerNotificationsController.listMyNotifications);
 router.post("/me/notifications/read", requireCustomerAuth, customerNotificationsController.markMyNotificationsRead);
