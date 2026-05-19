@@ -448,8 +448,8 @@ model CountrySettings {
   fboHelpTopics Json?
 
   // Paramètres opérationnels facturation
-  maxActiveBillingPerInvoicer Int @default(5)
-  billingClaimTimeoutMin      Int @default(15)
+  maxActiveBillingPerInvoicer Int @default(10)
+  billingClaimTimeoutMin      Int @default(30)
   preinvoicedAutoCancelAfterHours Int @default(2)
   preinvoicedAutoReminderAfterHours Int @default(1)
   preinvoicedAutoCancelAfterMinutes Int @default(120)

@@ -95,11 +95,11 @@ async function main() {
   const minCartFcfa = readIntEnv("DEFAULT_MIN_CART_FCFA", 36000);
   const maxActiveBillingPerInvoicer = readIntEnv(
     "DEFAULT_MAX_ACTIVE_BILLING_PER_INVOICER",
-    5,
+    10,
   );
   const billingClaimTimeoutMin = readIntEnv(
     "DEFAULT_BILLING_CLAIM_TIMEOUT_MIN",
-    15,
+    30,
   );
   const forceSettingsUpdate = readBoolEnv("SEED_FORCE_SETTINGS_UPDATE", false);
   const defaultNotificationTemplates = buildDefaultNotificationTemplates();

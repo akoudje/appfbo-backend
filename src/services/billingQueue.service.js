@@ -40,9 +40,18 @@ async function getBillingSettings(countryId) {
   });
 
   return {
-    billingClaimTimeoutMin: settings?.billingClaimTimeoutMin || 15,
-    maxActiveBillingPerInvoicer: settings?.maxActiveBillingPerInvoicer || 5,
+    billingClaimTimeoutMin: settings?.billingClaimTimeoutMin || 30,
+    maxActiveBillingPerInvoicer: settings?.maxActiveBillingPerInvoicer || 10,
   };
+}
+
+function billingAutoAssignPriority(role) {
+  if (role === "INVOICER") return 0;
+  if (role === "SALES_DIRECTOR") return 1;
+  if (role === "BILLING_MANAGER") return 2;
+  if (role === "TECH_ADMIN") return 3;
+  if (role === "SUPER_ADMIN") return 4;
+  return 5;
 }
 
 async function countActiveAssignments(tx, { countryId, userId }) {
@@ -105,6 +114,8 @@ async function loadConnectedBillingInvoicers({
       activeCount: loadMap.get(String(admin.id)) || 0,
     }))
     .sort((a, b) => {
+      const rolePriority = billingAutoAssignPriority(a.role) - billingAutoAssignPriority(b.role);
+      if (rolePriority !== 0) return rolePriority;
       if (a.activeCount !== b.activeCount) return a.activeCount - b.activeCount;
       const aLogin = a.lastLoginAt ? new Date(a.lastLoginAt).getTime() : 0;
       const bLogin = b.lastLoginAt ? new Date(b.lastLoginAt).getTime() : 0;
@@ -221,7 +232,12 @@ async function autoAssignQueuedPreorder({
     };
   }
 
-  for (const invoicer of connectedInvoicers) {
+  const primaryInvoicers = connectedInvoicers.filter((invoicer) =>
+    ["INVOICER", "SALES_DIRECTOR"].includes(invoicer.role),
+  );
+  const eligibleInvoicers = primaryInvoicers.length ? primaryInvoicers : connectedInvoicers;
+
+  for (const invoicer of eligibleInvoicers) {
     const result = await prisma.$transaction((tx) =>
       assignQueuedPreorderToInvoicer({
         tx,

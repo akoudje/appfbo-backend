@@ -761,7 +761,7 @@ async function submit(req, res) {
       });
     }
 
-    const timeoutMin = preorder.country?.settings?.billingClaimTimeoutMin || 15;
+    const timeoutMin = preorder.country?.settings?.billingClaimTimeoutMin || 30;
     const now = new Date();
     const sla = new Date(now.getTime() + timeoutMin * 60 * 1000);
 
