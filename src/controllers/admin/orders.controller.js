@@ -1949,12 +1949,71 @@ async function prepareOrder(req, res) {
     }
 
     if (order.stockDeductedAt) {
-      return res.json({
-        ok: true,
-        alreadyDone: true,
-        status: order.status,
-        message: "Le stock a déjà été décrémenté pour cette commande.",
+      const now = new Date();
+      const parcelNumber = order.parcelNumber || generateParcelNumber(order);
+      const pickupSecretCode =
+        order.pickupSecretCode ||
+        String(Math.floor(100000 + Math.random() * 900000));
+      const actorName = actorLabel(req);
+
+      const updated = await prisma.$transaction(async (tx) => {
+        const saved = await tx.preorder.update({
+          where: { id: order.id },
+          data: {
+            status: "READY",
+            parcelNumber,
+            preparedAt: order.preparedAt || now,
+            pickupSecretCode,
+            packingNote: packingNote
+              ? String(packingNote).trim()
+              : order.packingNote,
+            preparedById: order.preparedById || req.user?.id || null,
+          },
+        });
+
+        await addLogTx(
+          tx,
+          id,
+          "PREPARE",
+          packingNote || "Colis prêt",
+          {
+            fromStatus: order.status,
+            toStatus: "READY",
+            stockDeducted: false,
+            stockAlreadyDeducted: true,
+            parcelNumber,
+            pickupSecretCode,
+          },
+          req.user?.id || null,
+        );
+
+        return saved;
       });
+
+      try {
+        await sendPreorderNotification({
+          preorder: {
+            ...order,
+            ...updated,
+            parcelNumber,
+            pickupSecretCode,
+          },
+          purpose: "ORDER_READY",
+          message: buildOrderReadySmsMessage({
+            preorder: {
+              ...order,
+              ...updated,
+              parcelNumber,
+            },
+            pickupSecretCode,
+          }),
+          actorName,
+        });
+      } catch (smsError) {
+        console.error("prepareOrder already-deducted sms error:", smsError);
+      }
+
+      return res.json(updated);
     }
 
     const unresolvedBlockingAnomalies = await prisma.preparationAnomaly.count({
