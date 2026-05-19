@@ -18,7 +18,9 @@ const { publishRealtimeEvent } = require("../services/realtime-events.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 
-const BILLING_WHATSAPPS = [process.env.BILLING_WA_1 || "+2250506025071"];
+const BILLING_WHATSAPPS = [process.env.BILLING_WA_1]
+  .map((phone) => String(phone || "").trim())
+  .filter(Boolean);
 const PREORDER_SUBMISSION_DISABLED_MESSAGE =
   process.env.PREORDER_SUBMISSION_DISABLED_MESSAGE ||
   "Les soumissions de précommandes sont temporairement suspendues.";
