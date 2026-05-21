@@ -235,7 +235,9 @@ function buildDefaultEmailBodyByPurpose({
   )
     .trim()
     .toUpperCase();
+  const isEcobankPayFlow = paymentMode === "ECOBANK_PAY" || paymentMode.includes("ECOBANK");
   const isBankTransferFlow =
+    isEcobankPayFlow ||
     paymentMode === "BANK_TRANSFER" ||
     paymentMode.includes("BANK_TRANSFER") ||
     paymentMode.includes("VIREMENT") ||
@@ -266,7 +268,9 @@ function buildDefaultEmailBodyByPurpose({
       "1. Vérifiez le montant et votre numéro de précommande.",
       paymentLink
         ? isBankTransferFlow
-          ? "2. Ouvrez le lien, joignez votre preuve de virement et validez l'envoi."
+          ? isEcobankPayFlow
+            ? "2. Ouvrez le lien, joignez votre preuve Ecobank Pay et validez l'envoi."
+            : "2. Ouvrez le lien, joignez votre preuve de virement et validez l'envoi."
           : "2. Ouvrez le lien et finalisez le paiement en ligne."
         : "2. Présentez le code encaissement au comptoir pour régler.",
       `3. Finalisez le paiement dans un délai maximal de ${expiryHours}h.`,
@@ -479,13 +483,16 @@ function resolvePaymentFlowKey(preorder = {}, paymentLink = "") {
     .trim()
     .toUpperCase();
   const hasPaymentLink = Boolean(String(paymentLink || "").trim());
+  const isEcobankPay = mode === "ECOBANK_PAY" || mode.includes("ECOBANK");
   const isBankTransfer =
-    mode === "BANK_TRANSFER" ||
-    mode.includes("BANK_TRANSFER") ||
-    mode.includes("VIREMENT") ||
-    mode.includes("BANK");
+    !isEcobankPay &&
+    (mode === "BANK_TRANSFER" ||
+      mode.includes("BANK_TRANSFER") ||
+      mode.includes("VIREMENT") ||
+      mode.includes("BANK"));
   const isCash = mode.includes("ESPE") || mode === "MANUAL" || mode === "CASH";
 
+  if (isEcobankPay) return "ECOBANK_PAY";
   if (isBankTransfer) return "BANK_TRANSFER";
   if (hasPaymentLink || mode.includes("WAVE")) return "WAVE";
   if (isCash) return "CASH";
@@ -579,7 +586,7 @@ function buildTemplateContext({
   const pickupCode = preorder?.pickupSecretCode || "-";
   const paymentFlow = resolvePaymentFlowKey(preorder, paymentLink);
   const bankProofUploadLink =
-    paymentFlow === "BANK_TRANSFER" ? paymentLink : "";
+    paymentFlow === "BANK_TRANSFER" || paymentFlow === "ECOBANK_PAY" ? paymentLink : "";
 
   return {
     purpose: normalizePurposeKey(purpose),
@@ -609,6 +616,9 @@ function buildSmsTemplateCandidates({ purpose, context }) {
   if (flow === "WAVE") {
     return ["INVOICE_WAVE", "INVOICE"];
   }
+  if (flow === "ECOBANK_PAY") {
+    return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
+  }
   if (flow === "BANK_TRANSFER") {
     return ["INVOICE_BANK_TRANSFER", "INVOICE"];
   }
@@ -623,11 +633,15 @@ function buildEmailTemplateCandidates({ purpose, context }) {
     return ["PAYMENT_LINK", "INVOICE_WAVE", "INVOICE"];
   }
 
+  if (purposeKey === "INVOICE" && flow === "ECOBANK_PAY") {
+    return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
+  }
+
   if (purposeKey === "INVOICE" && flow === "BANK_TRANSFER") {
     return ["INVOICE_BANK_TRANSFER", "INVOICE"];
   }
 
-  if (purposeKey === "REMINDER" && flow === "BANK_TRANSFER") {
+  if (purposeKey === "REMINDER" && (flow === "ECOBANK_PAY" || flow === "BANK_TRANSFER")) {
     return ["REMINDER_BANK_TRANSFER", "REMINDER"];
   }
 
@@ -646,7 +660,7 @@ function ensureEmailBodyIncludesActionLink({ purpose, context, emailBody }) {
 
   const flow = String(context?.paymentFlow || "").toUpperCase();
   const label =
-    flow === "BANK_TRANSFER"
+    flow === "BANK_TRANSFER" || flow === "ECOBANK_PAY"
       ? "Lien sécurisé de dépôt de preuve"
       : "Lien de paiement sécurisé";
 

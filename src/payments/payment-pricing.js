@@ -2,6 +2,7 @@ const MOBILE_MONEY_SERVICE_FEE_RATES = {
   WAVE: 1,
   ORANGE_MONEY: 0,
   BANK_TRANSFER: 0,
+  ECOBANK_PAY: 0,
 };
 
 function normalizePaymentMode(value) {
@@ -31,6 +32,10 @@ function resolveServiceFeeRatePercent(mode) {
 
   if (normalized === "ORANGE_MONEY" || normalized.includes("ORANGE")) {
     return MOBILE_MONEY_SERVICE_FEE_RATES.ORANGE_MONEY;
+  }
+
+  if (normalized === "ECOBANK_PAY" || normalized.includes("ECOBANK")) {
+    return MOBILE_MONEY_SERVICE_FEE_RATES.ECOBANK_PAY;
   }
 
   if (normalized === "BANK_TRANSFER" || normalized.includes("BANK")) {

@@ -18,6 +18,8 @@ function buildDefaultNotificationTemplates() {
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Reglez sous ${expiryHours}H via le lien Wave: {{paymentLink}}`,
       INVOICE_BANK_TRANSFER:
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Effectuez le virement puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
+      INVOICE_ECOBANK_PAY:
+        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Scannez le QR Ecobank Pay puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
       INVOICE_CASH:
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Passez a la caisse FLP sous ${expiryHours}H. Passe ce delai, la commande sera annulee.`,
       PAYMENT_CONFIRMED:
@@ -83,6 +85,26 @@ function buildDefaultNotificationTemplates() {
           "Equipe FOREVER",
         ].join("\n"),
       },
+      INVOICE_ECOBANK_PAY: {
+        subject: "FOREVER CI - Dépôt de preuve Ecobank Pay ({{preorderNumber}})",
+        body: [
+          "Bonjour {{customerName}},",
+          "",
+          "Votre précommande {{preorderNumber}} est prête pour paiement via Ecobank Pay.",
+          "Code encaissement: {{paymentCollectionCode}}",
+          "Montant à payer: {{totalFcfaLabel}}",
+          "Lien sécurisé de dépôt de preuve: {{bankProofUploadLink}}",
+          "Cette préfacture reste payable pendant {{paymentExpiryHours}}h maximum après émission.",
+          "",
+          "Étapes recommandées:",
+          "1. Scannez le QR code Ecobank Pay et payez le montant exact.",
+          "2. Ouvrez le lien sécurisé et joignez votre justificatif de paiement.",
+          "3. Finalisez le dépôt dans un délai maximal de {{paymentExpiryHours}}h.",
+          "",
+          "Merci de votre confiance.",
+          "Equipe FOREVER",
+        ].join("\n"),
+      },
       REMINDER_BANK_TRANSFER: {
         subject: "FOREVER CI - Rappel dépôt preuve bancaire ({{preorderNumber}})",
         body: [
@@ -140,6 +162,10 @@ function mergeNotificationTemplates(baseTemplates = {}, overrideTemplates = {}) 
       INVOICE_BANK_TRANSFER: {
         ...(baseTemplates?.email?.INVOICE_BANK_TRANSFER || {}),
         ...(overrideTemplates?.email?.INVOICE_BANK_TRANSFER || {}),
+      },
+      INVOICE_ECOBANK_PAY: {
+        ...(baseTemplates?.email?.INVOICE_ECOBANK_PAY || {}),
+        ...(overrideTemplates?.email?.INVOICE_ECOBANK_PAY || {}),
       },
       REMINDER_BANK_TRANSFER: {
         ...(baseTemplates?.email?.REMINDER_BANK_TRANSFER || {}),

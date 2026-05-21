@@ -152,6 +152,13 @@ async function getCountrySettings(req, res) {
         enableOrangeMoney: true,
         enableCash: true,
         enableBankTransfer: true,
+        enableEcobankPay: true,
+        ecobankPayMerchantName: true,
+        ecobankPayMerchantId: true,
+        ecobankPayTerminalName: true,
+        ecobankPayTerminalId: true,
+        ecobankPayQrImageUrl: true,
+        ecobankPayInstructions: true,
         enableDelivery: true,
         enablePickup: true,
         bankAccountLabel: true,
@@ -201,6 +208,13 @@ async function getCountrySettings(req, res) {
         enableOrangeMoney: true,
         enableCash: true,
         enableBankTransfer: true,
+        enableEcobankPay: false,
+        ecobankPayMerchantName: null,
+        ecobankPayMerchantId: null,
+        ecobankPayTerminalName: null,
+        ecobankPayTerminalId: null,
+        ecobankPayQrImageUrl: null,
+        ecobankPayInstructions: null,
         enableDelivery: true,
         enablePickup: true,
         bankAccountLabel: null,
@@ -270,6 +284,13 @@ async function updateCountrySettings(req, res) {
       enableOrangeMoney,
       enableCash,
       enableBankTransfer,
+      enableEcobankPay,
+      ecobankPayMerchantName,
+      ecobankPayMerchantId,
+      ecobankPayTerminalName,
+      ecobankPayTerminalId,
+      ecobankPayQrImageUrl,
+      ecobankPayInstructions,
       enableDelivery,
       enablePickup,
       bankAccountLabel,
@@ -456,8 +477,28 @@ async function updateCountrySettings(req, res) {
     if (enableOrangeMoney !== undefined) data.enableOrangeMoney = Boolean(enableOrangeMoney);
     if (enableCash !== undefined) data.enableCash = Boolean(enableCash);
     if (enableBankTransfer !== undefined) data.enableBankTransfer = Boolean(enableBankTransfer);
+    if (enableEcobankPay !== undefined) data.enableEcobankPay = Boolean(enableEcobankPay);
     if (enableDelivery !== undefined) data.enableDelivery = Boolean(enableDelivery);
     if (enablePickup !== undefined) data.enablePickup = Boolean(enablePickup);
+
+    if (ecobankPayMerchantName !== undefined) {
+      data.ecobankPayMerchantName = ecobankPayMerchantName ? String(ecobankPayMerchantName).trim() : null;
+    }
+    if (ecobankPayMerchantId !== undefined) {
+      data.ecobankPayMerchantId = ecobankPayMerchantId ? String(ecobankPayMerchantId).trim() : null;
+    }
+    if (ecobankPayTerminalName !== undefined) {
+      data.ecobankPayTerminalName = ecobankPayTerminalName ? String(ecobankPayTerminalName).trim() : null;
+    }
+    if (ecobankPayTerminalId !== undefined) {
+      data.ecobankPayTerminalId = ecobankPayTerminalId ? String(ecobankPayTerminalId).trim() : null;
+    }
+    if (ecobankPayQrImageUrl !== undefined) {
+      data.ecobankPayQrImageUrl = ecobankPayQrImageUrl ? String(ecobankPayQrImageUrl).trim() : null;
+    }
+    if (ecobankPayInstructions !== undefined) {
+      data.ecobankPayInstructions = ecobankPayInstructions ? String(ecobankPayInstructions).trim() : null;
+    }
 
     if (bankAccountLabel !== undefined) {
       data.bankAccountLabel = bankAccountLabel ? String(bankAccountLabel).trim() : null;
@@ -558,6 +599,14 @@ async function updateCountrySettings(req, res) {
           enableCash: data.enableCash !== undefined ? data.enableCash : true,
           enableBankTransfer:
             data.enableBankTransfer !== undefined ? data.enableBankTransfer : true,
+          enableEcobankPay:
+            data.enableEcobankPay !== undefined ? data.enableEcobankPay : false,
+          ecobankPayMerchantName: data.ecobankPayMerchantName ?? null,
+          ecobankPayMerchantId: data.ecobankPayMerchantId ?? null,
+          ecobankPayTerminalName: data.ecobankPayTerminalName ?? null,
+          ecobankPayTerminalId: data.ecobankPayTerminalId ?? null,
+          ecobankPayQrImageUrl: data.ecobankPayQrImageUrl ?? null,
+          ecobankPayInstructions: data.ecobankPayInstructions ?? null,
           enableDelivery:
             data.enableDelivery !== undefined ? data.enableDelivery : true,
           enablePickup: data.enablePickup !== undefined ? data.enablePickup : true,
@@ -627,6 +676,13 @@ async function updateCountrySettings(req, res) {
         enableOrangeMoney: true,
         enableCash: true,
         enableBankTransfer: true,
+        enableEcobankPay: true,
+        ecobankPayMerchantName: true,
+        ecobankPayMerchantId: true,
+        ecobankPayTerminalName: true,
+        ecobankPayTerminalId: true,
+        ecobankPayQrImageUrl: true,
+        ecobankPayInstructions: true,
         enableDelivery: true,
         enablePickup: true,
         bankAccountLabel: true,

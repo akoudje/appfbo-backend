@@ -263,6 +263,7 @@ async function reorderMyOrder(req, res) {
         "WAVE",
         "ORANGE_MONEY",
         "BANK_TRANSFER",
+        "ECOBANK_PAY",
       ].includes(String(normalizedPaymentMode || "").toUpperCase());
 
       const created = await tx.preorder.create({

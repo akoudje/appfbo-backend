@@ -249,7 +249,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     return { ok: false, reason: "INITIAL_PAYMENT_NOTIFICATION_FAILED", preorder: order };
   }
   if (
-    String(order.preorderPaymentMode || "").toUpperCase() === "BANK_TRANSFER" &&
+    ["BANK_TRANSFER", "ECOBANK_PAY"].includes(String(order.preorderPaymentMode || "").toUpperCase()) &&
     ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(
       String(order.bankPaymentStatus || "").toUpperCase(),
     )
@@ -342,7 +342,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
       return null;
     }
     if (
-      String(current.preorderPaymentMode || "").toUpperCase() === "BANK_TRANSFER" &&
+      ["BANK_TRANSFER", "ECOBANK_PAY"].includes(String(current.preorderPaymentMode || "").toUpperCase()) &&
       ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(
         String(current.bankPaymentStatus || "").toUpperCase(),
       )
@@ -520,7 +520,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
       invoicedAt: { not: null },
       NOT: {
         AND: [
-          { preorderPaymentMode: "BANK_TRANSFER" },
+          { preorderPaymentMode: { in: ["BANK_TRANSFER", "ECOBANK_PAY"] } },
           { bankPaymentStatus: { in: ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"] } },
         ],
       },
@@ -679,7 +679,7 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
       ],
       NOT: {
         AND: [
-          { preorderPaymentMode: "BANK_TRANSFER" },
+          { preorderPaymentMode: { in: ["BANK_TRANSFER", "ECOBANK_PAY"] } },
           { bankPaymentStatus: { in: ["PROOF_SUBMITTED", "UNDER_REVIEW", "APPROVED"] } },
         ],
       },

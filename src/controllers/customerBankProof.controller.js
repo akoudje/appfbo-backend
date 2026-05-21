@@ -17,6 +17,11 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 
 const BANK_PROOF_TMP_DIR = path.join(os.tmpdir(), "appfbo-bank-proofs");
+const PROOF_PAYMENT_MODES = new Set(["BANK_TRANSFER", "ECOBANK_PAY"]);
+
+function isProofPaymentMode(mode) {
+  return PROOF_PAYMENT_MODES.has(String(mode || "").trim().toUpperCase());
+}
 
 function ensureBankProofTmpDir() {
   fs.mkdirSync(BANK_PROOF_TMP_DIR, { recursive: true });
@@ -112,6 +117,17 @@ function buildPublicBankProofContext(order) {
     latestBankProof: latestProof,
     paymentExpiryHours,
     paymentExpiresAt,
+    ecobankPay:
+      String(order?.preorderPaymentMode || "").trim().toUpperCase() === "ECOBANK_PAY"
+        ? {
+            merchantName: order?.country?.settings?.ecobankPayMerchantName || null,
+            merchantId: order?.country?.settings?.ecobankPayMerchantId || null,
+            terminalName: order?.country?.settings?.ecobankPayTerminalName || null,
+            terminalId: order?.country?.settings?.ecobankPayTerminalId || null,
+            qrImageUrl: order?.country?.settings?.ecobankPayQrImageUrl || null,
+            instructions: order?.country?.settings?.ecobankPayInstructions || null,
+          }
+        : null,
   };
 }
 
@@ -372,8 +388,8 @@ async function submitMyBankProof(req, res) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
 
-    if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
-      return res.status(400).json({ message: "Le dépôt de preuve est réservé au mode virement bancaire." });
+    if (!isProofPaymentMode(order.preorderPaymentMode)) {
+      return res.status(400).json({ message: "Le dépôt de preuve est réservé aux paiements à preuve." });
     }
 
     const status = String(order.status || "").toUpperCase();
@@ -466,7 +482,22 @@ async function getPublicBankProofContext(req, res) {
         paymentCollectionCode: true,
         invoicedAt: true,
         bankPaymentStatus: true,
-        country: { select: { code: true, name: true } },
+        country: {
+          select: {
+            code: true,
+            name: true,
+            settings: {
+              select: {
+                ecobankPayMerchantName: true,
+                ecobankPayMerchantId: true,
+                ecobankPayTerminalName: true,
+                ecobankPayTerminalId: true,
+                ecobankPayQrImageUrl: true,
+                ecobankPayInstructions: true,
+              },
+            },
+          },
+        },
         bankPaymentProofs: {
           orderBy: { createdAt: "desc" },
           take: 1,
@@ -491,13 +522,13 @@ async function getPublicBankProofContext(req, res) {
       });
     }
 
-    if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
+    if (!isProofPaymentMode(order.preorderPaymentMode)) {
       logBankProofRequest(req, "context_by_token_wrong_payment_mode", {
         orderId: order.id,
         preorderPaymentMode: order.preorderPaymentMode || null,
       });
       return res.status(400).json({
-        message: "Ce lien est réservé au dépôt de preuve bancaire.",
+        message: "Ce lien est réservé au dépôt de preuve de paiement.",
         requestId: getResponseRequestId(req, res),
       });
     }
@@ -581,7 +612,22 @@ async function getPublicBankProofContextByOrderId(req, res) {
         paymentCollectionCode: true,
         invoicedAt: true,
         bankPaymentStatus: true,
-        country: { select: { code: true, name: true } },
+        country: {
+          select: {
+            code: true,
+            name: true,
+            settings: {
+              select: {
+                ecobankPayMerchantName: true,
+                ecobankPayMerchantId: true,
+                ecobankPayTerminalName: true,
+                ecobankPayTerminalId: true,
+                ecobankPayQrImageUrl: true,
+                ecobankPayInstructions: true,
+              },
+            },
+          },
+        },
         bankPaymentProofs: {
           orderBy: { createdAt: "desc" },
           take: 1,
@@ -610,13 +656,13 @@ async function getPublicBankProofContextByOrderId(req, res) {
       });
     }
 
-    if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
+    if (!isProofPaymentMode(order.preorderPaymentMode)) {
       logBankProofRequest(req, "context_by_order_wrong_payment_mode", {
         orderId: order.id,
         preorderPaymentMode: order.preorderPaymentMode || null,
       });
       return res.status(400).json({
-        message: "Ce lien est réservé au dépôt de preuve bancaire.",
+        message: "Ce lien est réservé au dépôt de preuve de paiement.",
         requestId: getResponseRequestId(req, res),
       });
     }
@@ -712,8 +758,8 @@ async function submitPublicBankProof(req, res) {
       return res.status(404).json({ message: "Commande introuvable", requestId: getResponseRequestId(req, res) });
     }
 
-    if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
-      return res.status(400).json({ message: "Le dépôt de preuve est réservé au mode virement bancaire.", requestId: getResponseRequestId(req, res) });
+    if (!isProofPaymentMode(order.preorderPaymentMode)) {
+      return res.status(400).json({ message: "Le dépôt de preuve est réservé aux paiements à preuve.", requestId: getResponseRequestId(req, res) });
     }
 
     const paymentWindow = resolveCustomerPaymentWindow(order);
@@ -787,8 +833,8 @@ async function submitPublicBankProofByOrderId(req, res) {
 
     if (!order) return res.status(404).json({ message: "Commande introuvable", requestId: getResponseRequestId(req, res) });
 
-    if (String(order.preorderPaymentMode || "").toUpperCase() !== "BANK_TRANSFER") {
-      return res.status(400).json({ message: "Le dépôt de preuve est réservé au mode virement bancaire.", requestId: getResponseRequestId(req, res) });
+    if (!isProofPaymentMode(order.preorderPaymentMode)) {
+      return res.status(400).json({ message: "Le dépôt de preuve est réservé aux paiements à preuve.", requestId: getResponseRequestId(req, res) });
     }
 
     const paymentWindow = resolveCustomerPaymentWindow(order);

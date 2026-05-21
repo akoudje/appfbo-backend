@@ -81,6 +81,7 @@ enum PreorderPaymentMode {
   WAVE
   ORANGE_MONEY
   BANK_TRANSFER
+  ECOBANK_PAY
 }
 
 enum PaymentStatus {
@@ -426,6 +427,13 @@ model CountrySettings {
   enableOrangeMoney Boolean @default(true)
   enableCash Boolean @default(true)
   enableBankTransfer Boolean @default(true)
+  enableEcobankPay Boolean @default(false)
+  ecobankPayMerchantName String?
+  ecobankPayMerchantId String?
+  ecobankPayTerminalName String?
+  ecobankPayTerminalId String?
+  ecobankPayQrImageUrl String?
+  ecobankPayInstructions String? @db.Text
   enableDelivery Boolean @default(true)
   enablePickup Boolean @default(true)
   bankAccountLabel String?

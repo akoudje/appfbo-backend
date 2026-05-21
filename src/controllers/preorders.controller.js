@@ -225,6 +225,7 @@ async function createDraft(req, res) {
       "WAVE",
       "ORANGE_MONEY",
       "BANK_TRANSFER",
+      "ECOBANK_PAY",
     ].includes(String(normalizedPaymentMode || "").toUpperCase());
 
     const normalizedDeliveryMode = isRestrictedDeliveryPayment
@@ -709,6 +710,7 @@ async function submit(req, res) {
       "WAVE",
       "ORANGE_MONEY",
       "BANK_TRANSFER",
+      "ECOBANK_PAY",
     ].includes(String(normalizedPaymentMode || "").toUpperCase())
       ? "RETRAIT_SITE_FLP"
       : preorder.deliveryMode;

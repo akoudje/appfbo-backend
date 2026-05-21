@@ -283,11 +283,29 @@ function buildInvoiceMessage({
     .trim()
     .toUpperCase();
   const isCashFlow = normalizedMode.includes("ESPE") || normalizedMode === "MANUAL";
+  const isEcobankPayFlow = normalizedMode === "ECOBANK_PAY" || normalizedMode.includes("ECOBANK");
   const isBankTransferFlow =
+    isEcobankPayFlow ||
     normalizedMode === "BANK_TRANSFER" ||
     normalizedMode.includes("BANK_TRANSFER") ||
     normalizedMode.includes("VIREMENT") ||
     normalizedMode.includes("BANK");
+
+  if (isEcobankPayFlow) {
+    const expiryHours = getPaymentExpiryHours();
+    if (normalizedLink) {
+      return firstSmsCandidate([
+        `Code ${collectionCode}. Montant ${amountFmt}F. Ecobank Pay puis depot preuve sous ${expiryHours}H: ${normalizedLink}`,
+        `Code ${collectionCode}. ${amountFmt}F. Deposez votre preuve Ecobank Pay ici sous ${expiryHours}H: ${normalizedLink}`,
+        `Code ${collectionCode}. Lien depot preuve Ecobank Pay: ${normalizedLink}`,
+      ]);
+    }
+    return firstSmsCandidate([
+      `Code ${collectionCode}. Montant ${amountFmt}F. Payez via Ecobank Pay sous ${expiryHours}H. Consultez votre email ou l'espace client.`,
+      `Code ${collectionCode}. ${amountFmt}F. Instructions Ecobank Pay envoyees. Paiement sous ${expiryHours}H.`,
+      `Code ${collectionCode}. Voir espace client pour Ecobank Pay. Delai ${expiryHours}H.`,
+    ]);
+  }
 
   if (isBankTransferFlow) {
     const expiryHours = getPaymentExpiryHours();
@@ -512,7 +530,9 @@ async function invoiceAndSendPreorder({
     .toUpperCase();
   const isBankTransferPreorder =
     normalizedPaymentMode === "BANK_TRANSFER" ||
+    normalizedPaymentMode === "ECOBANK_PAY" ||
     normalizedPaymentMode.includes("BANK_TRANSFER") ||
+    normalizedPaymentMode.includes("ECOBANK") ||
     normalizedPaymentMode.includes("VIREMENT") ||
     normalizedPaymentMode.includes("BANK");
 

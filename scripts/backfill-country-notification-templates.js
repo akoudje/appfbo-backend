@@ -24,12 +24,14 @@ function buildUpdatedTemplates(currentTemplates = null) {
     INVOICE: defaults.sms.INVOICE,
     INVOICE_WAVE: defaults.sms.INVOICE_WAVE,
     INVOICE_BANK_TRANSFER: defaults.sms.INVOICE_BANK_TRANSFER,
+    INVOICE_ECOBANK_PAY: defaults.sms.INVOICE_ECOBANK_PAY,
     INVOICE_CASH: defaults.sms.INVOICE_CASH,
     PAYMENT_CONFIRMED: defaults.sms.PAYMENT_CONFIRMED,
   };
   merged.email = {
     ...(current.email || {}),
     INVOICE: defaults.email.INVOICE,
+    INVOICE_ECOBANK_PAY: defaults.email.INVOICE_ECOBANK_PAY,
     PAYMENT_CONFIRMED: defaults.email.PAYMENT_CONFIRMED,
   };
   merged.meta = {
