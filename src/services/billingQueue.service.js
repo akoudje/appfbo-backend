@@ -289,8 +289,15 @@ async function releaseExpiredAssignments({ countryId }) {
 
   await prisma.$transaction(async (tx) => {
     for (const row of expired) {
-      await tx.preorder.update({
-        where: { id: row.id },
+      const released = await tx.preorder.updateMany({
+        where: {
+          id: row.id,
+          countryId,
+          assignedInvoicerId: row.assignedInvoicerId,
+          billingWorkStatus: { in: ["ASSIGNED", "IN_PROGRESS"] },
+          billingLastActivityAt: { lt: cutoff },
+          status: { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] },
+        },
         data: {
           assignedInvoicerId: null,
           assignedAt: null,
@@ -299,6 +306,8 @@ async function releaseExpiredAssignments({ countryId }) {
           billingLastActivityAt: now,
         },
       });
+
+      if (released.count !== 1) continue;
 
       await tx.preorderLog.create({
         data: {
