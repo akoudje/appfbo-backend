@@ -2,11 +2,12 @@
 // Routes d'administration (protegees par auth + RBAC)
 
 const express = require("express");
-const { Permission } = require("../auth/permissions.js");
+const { AdminRole, Permission } = require("../auth/permissions.js");
 const { resolveCountry } = require("../middlewares/resolveCountry");
 const {
   requireAuth,
   requirePermission,
+  requireRole,
   requireCountryScope,
 } = require("../middlewares/rbac");
 
@@ -198,6 +199,7 @@ router.get(
 router.patch(
   "/countries/:code",
   requirePermission(Permission.COUNTRY_WRITE),
+  requireRole(AdminRole.SUPER_ADMIN),
   toggleCountry,
 );
 

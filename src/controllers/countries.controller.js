@@ -1,4 +1,5 @@
 const prisma = require("../prisma");
+const { AdminRole } = require("../auth/permissions");
 
 // GET /api/countries — liste publique des pays actifs
 async function listActiveCountries(req, res) {
@@ -33,6 +34,12 @@ async function adminListCountries(req, res) {
 async function toggleCountry(req, res) {
   const { code } = req.params;
   const { actif } = req.body;
+
+  if (req.user?.role !== AdminRole.SUPER_ADMIN) {
+    return res.status(403).json({
+      error: "Seul le super admin peut activer ou désactiver un pays.",
+    });
+  }
 
   if (typeof actif !== "boolean") {
     return res.status(400).json({ error: "Le champ 'actif' (boolean) est requis" });
