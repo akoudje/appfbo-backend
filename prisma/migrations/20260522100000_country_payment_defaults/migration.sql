@@ -1,13 +1,10 @@
-ALTER TYPE "PreorderPaymentMode" ADD VALUE IF NOT EXISTS 'ECOBANK_PAY';
-
-ALTER TABLE "CountrySettings"
-  ADD COLUMN IF NOT EXISTS "enableEcobankPay" BOOLEAN NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS "ecobankPayMerchantName" TEXT,
-  ADD COLUMN IF NOT EXISTS "ecobankPayMerchantId" TEXT,
-  ADD COLUMN IF NOT EXISTS "ecobankPayTerminalName" TEXT,
-  ADD COLUMN IF NOT EXISTS "ecobankPayTerminalId" TEXT,
-  ADD COLUMN IF NOT EXISTS "ecobankPayQrImageUrl" TEXT,
-  ADD COLUMN IF NOT EXISTS "ecobankPayInstructions" TEXT;
+UPDATE "CountrySettings" cs
+SET
+  "enableWave" = true,
+  "enableEcobankPay" = false
+FROM "Country" c
+WHERE cs."countryId" = c."id"
+  AND c."code" = 'CIV';
 
 UPDATE "CountrySettings" cs
 SET
@@ -24,11 +21,3 @@ SET
 FROM "Country" c
 WHERE cs."countryId" = c."id"
   AND c."code" = 'BFA';
-
-UPDATE "CountrySettings" cs
-SET
-  "enableWave" = true,
-  "enableEcobankPay" = false
-FROM "Country" c
-WHERE cs."countryId" = c."id"
-  AND c."code" = 'CIV';

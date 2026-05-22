@@ -57,6 +57,10 @@ function attachCountry(req, country) {
   req.countryId = country.id;
 }
 
+function isAdminRequest(req) {
+  return String(req.originalUrl || req.url || "").startsWith("/api/admin");
+}
+
 async function resolveCountry(req, res, next) {
   try {
     const countryCode = normalizeCountryCode(
@@ -70,7 +74,7 @@ async function resolveCountry(req, res, next) {
     if (!country) {
       return res.status(404).json({ message: `Country not found: ${countryCode}` });
     }
-    if (!country.actif) {
+    if (!country.actif && !isAdminRequest(req)) {
       return res.status(403).json({ message: `Country inactive: ${countryCode}` });
     }
 
@@ -91,7 +95,7 @@ async function optionalCountry(req, res, next) {
     if (!country) {
       return res.status(404).json({ message: `Country not found: ${countryCode}` });
     }
-    if (!country.actif) {
+    if (!country.actif && !isAdminRequest(req)) {
       return res.status(403).json({ message: `Country inactive: ${countryCode}` });
     }
 
