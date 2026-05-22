@@ -17,6 +17,10 @@ const billingQueueService = require("../services/billingQueue.service");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
+const {
+  resolveDeliveryModeForPayment,
+  validateCountryOrderOptions,
+} = require("../services/country-order-options.service");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1]
   .map((phone) => String(phone || "").trim())
@@ -220,18 +224,6 @@ async function createDraft(req, res) {
       ? String(deliveryMode).trim().toUpperCase()
       : null;
 
-    const isRestrictedDeliveryPayment = [
-      "ESPECES",
-      "WAVE",
-      "ORANGE_MONEY",
-      "BANK_TRANSFER",
-      "ECOBANK_PAY",
-    ].includes(String(normalizedPaymentMode || "").toUpperCase());
-
-    const normalizedDeliveryMode = isRestrictedDeliveryPayment
-      ? "RETRAIT_SITE_FLP"
-      : requestedDeliveryMode;
-
     const countryId = req.country?.id || req.scope?.countryId || req.countryId;
     const countryCode =
       req.country?.code ||
@@ -242,6 +234,37 @@ async function createDraft(req, res) {
     if (!countryId) {
       return res.status(400).json({
         error: "countryId introuvable dans le scope de la requête",
+      });
+    }
+
+    const countrySettings = await prisma.countrySettings.findUnique({
+      where: { countryId },
+      select: {
+        enableWave: true,
+        enableOrangeMoney: true,
+        enableCash: true,
+        enableBankTransfer: true,
+        enableEcobankPay: true,
+        enableDelivery: true,
+        enablePickup: true,
+      },
+    });
+
+    const normalizedDeliveryMode = resolveDeliveryModeForPayment(
+      normalizedPaymentMode,
+      requestedDeliveryMode,
+    );
+
+    const optionValidation = validateCountryOrderOptions({
+      settings: countrySettings,
+      paymentMode: normalizedPaymentMode,
+      deliveryMode: normalizedDeliveryMode,
+    });
+
+    if (!optionValidation.ok) {
+      return res.status(400).json({
+        error: optionValidation.message,
+        code: optionValidation.code,
       });
     }
 
@@ -705,15 +728,30 @@ async function submit(req, res) {
       ? String(paymentMode).trim().toUpperCase()
       : null;
 
-    const normalizedDeliveryMode = [
-      "ESPECES",
-      "WAVE",
-      "ORANGE_MONEY",
-      "BANK_TRANSFER",
-      "ECOBANK_PAY",
-    ].includes(String(normalizedPaymentMode || "").toUpperCase())
-      ? "RETRAIT_SITE_FLP"
-      : preorder.deliveryMode;
+    const effectivePaymentMode =
+      normalizedPaymentMode ||
+      String(preorder.preorderPaymentMode || "").trim().toUpperCase() ||
+      null;
+
+    const normalizedDeliveryMode = resolveDeliveryModeForPayment(
+      effectivePaymentMode,
+      preorder.deliveryMode,
+    );
+
+    const optionValidation = validateCountryOrderOptions({
+      settings: preorder.country?.settings,
+      paymentMode: effectivePaymentMode,
+      deliveryMode: normalizedDeliveryMode,
+      requirePaymentMode: true,
+      requireDeliveryMode: true,
+    });
+
+    if (!optionValidation.ok) {
+      return res.status(400).json({
+        error: optionValidation.message,
+        code: optionValidation.code,
+      });
+    }
 
     if (
       (hasEmailField && normalizedEmail !== preorder.fboEmail) ||

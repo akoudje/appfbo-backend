@@ -2,6 +2,11 @@ const prisma = require("../prisma");
 const { computePreorderTotals } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
+const {
+  isPaymentModeEnabled,
+  resolveDeliveryModeForPayment,
+  validateCountryOrderOptions,
+} = require("../services/country-order-options.service");
 
 const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
 
@@ -202,6 +207,21 @@ async function reorderMyOrder(req, res) {
             pointDeVente: true,
           },
         },
+        country: {
+          select: {
+            settings: {
+              select: {
+                enableWave: true,
+                enableOrangeMoney: true,
+                enableCash: true,
+                enableBankTransfer: true,
+                enableEcobankPay: true,
+                enableDelivery: true,
+                enablePickup: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -257,14 +277,27 @@ async function reorderMyOrder(req, res) {
         seq: nextSeq,
       });
 
-      const normalizedPaymentMode = sourceOrder.preorderPaymentMode || null;
-      const isRestrictedDeliveryPayment = [
-        "ESPECES",
-        "WAVE",
-        "ORANGE_MONEY",
-        "BANK_TRANSFER",
-        "ECOBANK_PAY",
-      ].includes(String(normalizedPaymentMode || "").toUpperCase());
+      const sourcePaymentMode = sourceOrder.preorderPaymentMode || null;
+      let normalizedPaymentMode = isPaymentModeEnabled(
+        sourceOrder.country?.settings,
+        sourcePaymentMode,
+      )
+        ? sourcePaymentMode
+        : null;
+      let normalizedDeliveryMode = resolveDeliveryModeForPayment(
+        normalizedPaymentMode,
+        normalizedPaymentMode ? sourceOrder.deliveryMode : null,
+      );
+      const optionValidation = validateCountryOrderOptions({
+        settings: sourceOrder.country?.settings,
+        paymentMode: normalizedPaymentMode,
+        deliveryMode: normalizedDeliveryMode,
+      });
+
+      if (!optionValidation.ok) {
+        normalizedPaymentMode = null;
+        normalizedDeliveryMode = null;
+      }
 
       const created = await tx.preorder.create({
         data: {
@@ -276,9 +309,7 @@ async function reorderMyOrder(req, res) {
           fboGrade: sourceOrder.fbo.grade,
           pointDeVente: sourceOrder.fbo.pointDeVente,
           preorderPaymentMode: normalizedPaymentMode,
-          deliveryMode: isRestrictedDeliveryPayment
-            ? "RETRAIT_SITE_FLP"
-            : sourceOrder.deliveryMode || null,
+          deliveryMode: normalizedDeliveryMode,
           status: "DRAFT",
           paymentStatus: "UNPAID",
           billingWorkStatus: "NONE",
