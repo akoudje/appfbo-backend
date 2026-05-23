@@ -30,22 +30,49 @@ async function getStats(req, res) {
       to = dateTo ? normalizeDateEnd(String(dateTo)) : null;
     }
 
-    const where = { countryId, status: { not: "DRAFT" } };
+    const periodFilter = {};
     if (from || to) {
-      where.createdAt = {};
-      if (from) where.createdAt.gte = from;
-      if (to) where.createdAt.lte = to;
+      periodFilter.createdAt = {};
+      if (from) periodFilter.createdAt.gte = from;
+      if (to) periodFilter.createdAt.lte = to;
     }
 
-    const [agg, byStatus] = await Promise.all([
+    const baseWhere = { countryId, status: { not: "DRAFT" }, ...periodFilter };
+    const activeWhere = {
+      countryId,
+      status: { notIn: ["DRAFT", "CANCELLED"] },
+      ...periodFilter,
+    };
+    const cancelledWhere = { countryId, status: "CANCELLED", ...periodFilter };
+    const testCancelledWhere = {
+      ...cancelledWhere,
+      cancelReason: { contains: "test", mode: "insensitive" },
+    };
+
+    const [grossAgg, activeAgg, cancelledAgg, testCancelledAgg, byStatus] = await Promise.all([
       prisma.preorder.aggregate({
-        where,
+        where: baseWhere,
+        _count: { _all: true },
+        _sum: { totalFcfa: true },
+      }),
+      prisma.preorder.aggregate({
+        where: activeWhere,
+        _count: { _all: true },
+        _sum: { totalFcfa: true },
+      }),
+      prisma.preorder.aggregate({
+        where: cancelledWhere,
+        _count: { _all: true },
+        _sum: { totalFcfa: true },
+      }),
+      prisma.preorder.aggregate({
+        where: testCancelledWhere,
         _count: { _all: true },
         _sum: { totalFcfa: true },
       }),
       prisma.preorder.groupBy({
         by: ["status"],
-        where,
+        where: baseWhere,
         _count: { _all: true },
         _sum: { totalFcfa: true },
       }),
@@ -53,7 +80,7 @@ async function getStats(req, res) {
 
     const topRaw = await prisma.preorderItem.groupBy({
       by: ["productId"],
-      where: { preorder: where },
+      where: { preorder: activeWhere },
       _sum: { qty: true, lineTotalFcfa: true },
       orderBy: { _sum: { lineTotalFcfa: "desc" } },
       take: 5,
@@ -79,8 +106,14 @@ async function getStats(req, res) {
         from: from?.toISOString() ?? null,
         to: to?.toISOString() ?? null,
       },
-      totalOrders: agg._count._all,
-      totalRevenueFcfa: agg._sum.totalFcfa || 0,
+      totalOrders: activeAgg._count._all,
+      totalRevenueFcfa: activeAgg._sum.totalFcfa || 0,
+      grossOrders: grossAgg._count._all,
+      grossRevenueFcfa: grossAgg._sum.totalFcfa || 0,
+      cancelledOrders: cancelledAgg._count._all,
+      cancelledRevenueFcfa: cancelledAgg._sum.totalFcfa || 0,
+      testCancelledOrders: testCancelledAgg._count._all,
+      testCancelledRevenueFcfa: testCancelledAgg._sum.totalFcfa || 0,
       byStatus: byStatus.map((s) => ({
         status: s.status,
         count: s._count._all,
