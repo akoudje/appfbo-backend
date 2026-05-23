@@ -371,6 +371,7 @@ model Country {
   marketingContent        CountryMarketingContent?
   products                Product[]
   countryProducts         CountryProduct[]
+  gradePrices             ProductGradePrice[]
   preorders               Preorder[]
   gradeDiscounts          GradeDiscount[]
   adminUsers              AdminUser[]
@@ -576,6 +577,7 @@ model Product {
   details  String?         @db.Text
   stockQty Int             @default(0)
   maxQtyPerOrder Int?
+  gradePrices ProductGradePrice[]
 
   prixBaseFcfa Int
   cc           Decimal @db.Decimal(10, 3)
@@ -617,6 +619,26 @@ model CountryProduct {
   @@index([productId])
   @@index([countryId])
   @@index([actif])
+}
+
+model ProductGradePrice {
+  id String @id @default(cuid())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  grade Grade
+  prixFcfa Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, productId, grade])
+  @@index([productId])
+  @@index([countryId])
 }
 
 model GradeDiscount {

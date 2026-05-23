@@ -6,6 +6,14 @@ const prisma = require("../../prisma");
 
 const { scopeCreate } = require("../../helpers/countryScope");
 
+const GRADE_PRICE_FIELDS = [
+  "CLIENT_PRIVILEGIE",
+  "ANIMATEUR_ADJOINT",
+  "ANIMATEUR",
+  "MANAGER_ADJOINT",
+  "MANAGER",
+];
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -34,6 +42,64 @@ function parseStockQty(v, fallback = 0) {
   const n = Number.parseInt(v, 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(0, n);
+}
+
+function parseGradePrices(input = {}) {
+  const source = input?.gradePrices && typeof input.gradePrices === "object"
+    ? input.gradePrices
+    : input;
+
+  const result = {};
+  const errors = [];
+
+  for (const grade of GRADE_PRICE_FIELDS) {
+    const aliases = [
+      grade,
+      grade.toLowerCase(),
+      `prix${grade}`,
+      `prix_${grade}`,
+      `price${grade}`,
+      `price_${grade}`,
+    ];
+    const raw = aliases
+      .map((key) => source?.[key])
+      .find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+
+    if (raw === undefined) continue;
+
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      errors.push(`${grade} invalide`);
+      continue;
+    }
+    result[grade] = Math.round(value);
+  }
+
+  return { gradePrices: result, errors };
+}
+
+async function upsertProductGradePrices(tx, { productId, countryId, gradePrices }) {
+  const entries = Object.entries(gradePrices || {});
+  for (const [grade, prixFcfa] of entries) {
+    await tx.productGradePrice.upsert({
+      where: {
+        countryId_productId_grade: {
+          countryId,
+          productId,
+          grade,
+        },
+      },
+      create: {
+        countryId,
+        productId,
+        grade,
+        prixFcfa,
+      },
+      update: {
+        prixFcfa,
+      },
+    });
+  }
 }
 
 function isIntegerLike(v) {
@@ -91,6 +157,13 @@ function productToCountryDto(product, countryId) {
         : countryProduct.maxQtyPerOrder,
     countryProductId: countryProduct?.id || null,
     countryId,
+    gradePrices: GRADE_PRICE_FIELDS.reduce((acc, grade) => {
+      const row = product?.gradePrices?.find(
+        (item) => item.countryId === countryId && item.grade === grade,
+      );
+      acc[grade] = row ? Number(row.prixFcfa || 0) : "";
+      return acc;
+    }, {}),
     countryProducts: undefined,
     cc: product.cc?.toString?.() ?? String(product.cc ?? "0.000"),
     poidsKg: product.poidsKg?.toString?.() ?? String(product.poidsKg ?? "0.000"),
@@ -127,6 +200,14 @@ function productSelectForCountry(countryId, extra = {}) {
         stockQty: true,
         actif: true,
         maxQtyPerOrder: true,
+      },
+    },
+    gradePrices: {
+      where: { countryId },
+      select: {
+        countryId: true,
+        grade: true,
+        prixFcfa: true,
       },
     },
   };
@@ -171,6 +252,7 @@ async function createProduct(req, res) {
       details,
       stockQty,
       maxQtyPerOrder,
+      gradePrices,
     } = req.body || {};
 
     if (!sku || !String(sku).trim())
@@ -210,6 +292,12 @@ async function createProduct(req, res) {
         : parseStockQty(maxQtyPerOrder, null);
     const det =
       details !== undefined && details !== null ? String(details).trim() : null;
+    const parsedGradePrices = parseGradePrices({ gradePrices });
+    if (parsedGradePrices.errors.length) {
+      return res.status(400).json({
+        message: `Prix par grade invalide: ${parsedGradePrices.errors.join(", ")}`,
+      });
+    }
 
     const countryId = req.countryId;
     const normalizedSku = String(sku).trim();
@@ -257,6 +345,11 @@ async function createProduct(req, res) {
         stockQty: stock,
         actif: Boolean(actif),
         maxQtyPerOrder: maxQty,
+      });
+      await upsertProductGradePrices(tx, {
+        productId: product.id,
+        countryId,
+        gradePrices: parsedGradePrices.gradePrices,
       });
 
       return tx.product.findUnique({
@@ -361,6 +454,7 @@ async function updateProduct(req, res) {
       details,
       stockQty,
       maxQtyPerOrder,
+      gradePrices,
     } = req.body || {};
 
     const productData = {
@@ -408,6 +502,12 @@ async function updateProduct(req, res) {
       (!Number.isFinite(availabilityData.prixBaseFcfa) || availabilityData.prixBaseFcfa < 0)
     ) {
       return res.status(400).json({ message: "prixBaseFcfa invalide" });
+    }
+    const parsedGradePrices = parseGradePrices({ gradePrices });
+    if (parsedGradePrices.errors.length) {
+      return res.status(400).json({
+        message: `Prix par grade invalide: ${parsedGradePrices.errors.join(", ")}`,
+      });
     }
     if ("sku" in productData && !productData.sku)
       return res.status(400).json({ message: "sku invalide" });
@@ -485,6 +585,11 @@ async function updateProduct(req, res) {
           availabilityData.maxQtyPerOrder !== undefined
             ? availabilityData.maxQtyPerOrder
             : currentAvailability.maxQtyPerOrder,
+      });
+      await upsertProductGradePrices(tx, {
+        productId: exists.id,
+        countryId,
+        gradePrices: parsedGradePrices.gradePrices,
       });
 
       return tx.product.findUnique({
@@ -568,6 +673,7 @@ async function importProductsCsv(req, res) {
         String(maxQtyPerOrderRaw).trim() === ""
           ? null
           : parseStockQty(maxQtyPerOrderRaw, null);
+      const parsedGradePrices = parseGradePrices(r);
 
       const rowErr = [];
       if (!sku) rowErr.push("sku manquant");
@@ -594,6 +700,7 @@ async function importProductsCsv(req, res) {
       ) {
         rowErr.push("maxQtyPerOrder invalide");
       }
+      rowErr.push(...parsedGradePrices.errors);
 
       if (rowErr.length) {
         errors.push({ index: i + 1, sku, errors: rowErr });
@@ -612,6 +719,7 @@ async function importProductsCsv(req, res) {
         details,
         stockQty,
         maxQtyPerOrder,
+        gradePrices: parsedGradePrices.gradePrices,
       });
     }
 
@@ -649,6 +757,11 @@ async function importProductsCsv(req, res) {
             actif: p.actif,
             maxQtyPerOrder: p.maxQtyPerOrder,
           });
+          await upsertProductGradePrices(tx, {
+            productId: exists.id,
+            countryId,
+            gradePrices: p.gradePrices,
+          });
           updated++;
         } else {
           const createdProduct = await tx.product.create({
@@ -675,6 +788,11 @@ async function importProductsCsv(req, res) {
             stockQty: p.stockQty,
             actif: p.actif,
             maxQtyPerOrder: p.maxQtyPerOrder,
+          });
+          await upsertProductGradePrices(tx, {
+            productId: createdProduct.id,
+            countryId,
+            gradePrices: p.gradePrices,
           });
           created++;
         }

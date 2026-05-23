@@ -601,6 +601,12 @@ async function setItems(req, res) {
       totals: summary.totals,
     });
   } catch (e) {
+    if (String(e.message) === "PRODUCT_GRADE_PRICE_MISSING") {
+      return res.status(400).json({
+        error:
+          "Un ou plusieurs produits n'ont pas encore de prix par grade pour le Burkina Faso.",
+      });
+    }
     return res.status(500).json({ error: e.message || "Erreur setItems" });
   }
 }
@@ -637,10 +643,14 @@ async function getSummary(req, res) {
         "PRODUCT_COUNTRY_MISMATCH",
         "PRODUCT_NOT_FOUND",
         "PRODUCT_INACTIVE",
+        "PRODUCT_GRADE_PRICE_MISSING",
       ].includes(String(e.message))
     ) {
       return res.status(400).json({
-        error: "Un ou plusieurs produits du panier sont invalides.",
+        error:
+          String(e.message) === "PRODUCT_GRADE_PRICE_MISSING"
+            ? "Un ou plusieurs produits n'ont pas encore de prix par grade pour le Burkina Faso."
+            : "Un ou plusieurs produits du panier sont invalides.",
       });
     }
 
@@ -960,6 +970,12 @@ async function submit(req, res) {
       notificationAttempts: notificationResult.attempts || [],
     });
   } catch (e) {
+    if (String(e.message) === "PRODUCT_GRADE_PRICE_MISSING") {
+      return res.status(400).json({
+        error:
+          "Un ou plusieurs produits n'ont pas encore de prix par grade pour le Burkina Faso.",
+      });
+    }
     return res.status(500).json({ error: e.message || "Erreur submit" });
   }
 }

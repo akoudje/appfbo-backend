@@ -3,6 +3,8 @@
 
 const prisma = require("../prisma");
 
+const DIRECT_GRADE_PRICE_COUNTRY_CODES = new Set(["BFA"]);
+
 function round3(n) {
   return Math.round(Number(n || 0) * 1000) / 1000;
 }
@@ -27,6 +29,22 @@ function applyDiscount(prixBaseFcfa, discountPercent) {
 
   const discounted = Math.round(p * (1 - d / 100));
   return Math.max(discounted, 0);
+}
+
+function usesDirectGradePricing(countryCode) {
+  return DIRECT_GRADE_PRICE_COUNTRY_CODES.has(
+    String(countryCode || "").trim().toUpperCase(),
+  );
+}
+
+function pickGradePrice(product, countryId, grade) {
+  if (!Array.isArray(product?.gradePrices)) return null;
+  const normalizedGrade = String(grade || "").trim().toUpperCase();
+  return (
+    product.gradePrices.find(
+      (item) => item.countryId === countryId && item.grade === normalizedGrade,
+    ) || null
+  );
 }
 
 function pickCountryProduct(product, countryId) {
@@ -74,6 +92,9 @@ async function getPreorderPricingContext(preorderId, countryId) {
           product: {
             include: {
               countryProducts: true,
+              gradePrices: {
+                where: { countryId },
+              },
             },
           },
         },
@@ -120,6 +141,9 @@ async function getPreorderPricingContextForGrade(
           product: {
             include: {
               countryProducts: true,
+              gradePrices: {
+                where: { countryId },
+              },
             },
           },
         },
@@ -176,7 +200,12 @@ function computeLineFromProduct(product, qty, discountPercent, countryId = null)
   const prixCatalogueFcfa = Number(effectiveProduct.prixBaseFcfa || 0);
   const ccUnitaire = Number(effectiveProduct.cc || 0);
   const poidsUnitaireKg = Number(effectiveProduct.poidsKg || 0);
-  const prixUnitaireFcfa = applyDiscount(prixCatalogueFcfa, discountPercent);
+  const directGradePrice = Number(effectiveProduct.directGradePriceFcfa);
+  const hasDirectGradePrice = Number.isFinite(directGradePrice) && directGradePrice >= 0;
+  const prixUnitaireFcfa = hasDirectGradePrice
+    ? Math.round(directGradePrice)
+    : applyDiscount(prixCatalogueFcfa, discountPercent);
+  const appliedDiscountPercent = hasDirectGradePrice ? 0 : discountPercent;
 
   const lineTotalFcfa = prixUnitaireFcfa * safeQty;
   const lineTotalCc = ccUnitaire * safeQty;
@@ -186,7 +215,7 @@ function computeLineFromProduct(product, qty, discountPercent, countryId = null)
     qty: safeQty,
 
     prixCatalogueFcfa,
-    discountPercent,
+    discountPercent: appliedDiscountPercent,
     prixUnitaireFcfa,
 
     ccUnitaire: round3(ccUnitaire),
@@ -208,6 +237,9 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
       id: true,
       countryId: true,
       fboGrade: true,
+      country: {
+        select: { code: true },
+      },
     },
   });
 
@@ -234,33 +266,49 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
       countryProducts: {
         where: { countryId: preorder.countryId },
       },
+      gradePrices: {
+        where: { countryId: preorder.countryId },
+      },
     },
   });
 
-  return products.map((product) => {
-    const effectiveProduct = applyCountryAvailability(product, preorder.countryId);
-    const prixBaseFcfa = Number(effectiveProduct.prixBaseFcfa || 0);
-    const prixFinalFcfa = applyDiscount(prixBaseFcfa, discountPercent);
+  const directPricing = usesDirectGradePricing(preorder.country?.code);
 
-    return {
-      id: product.id,
-      sku: product.sku,
-      nom: product.nom,
-      imageUrl: product.imageUrl || null,
-      category: product.category,
-      details: product.details || null,
-      stockQty: Number(effectiveProduct.stockQty || 0),
-      maxQtyPerOrder:
-        effectiveProduct.maxQtyPerOrder == null ? null : Number(effectiveProduct.maxQtyPerOrder),
+  return products
+    .map((product) => {
+      const effectiveProduct = applyCountryAvailability(product, preorder.countryId);
+      const prixBaseFcfa = Number(effectiveProduct.prixBaseFcfa || 0);
+      const gradePrice = directPricing
+        ? pickGradePrice(product, preorder.countryId, preorder.fboGrade)
+        : null;
 
-      prixBaseFcfa,
-      discountPercent,
-      prixFinalFcfa,
+      if (directPricing && !gradePrice) return null;
 
-      cc: Number(product.cc || 0),
-      poidsKg: Number(product.poidsKg || 0),
-    };
-  });
+      const prixFinalFcfa = gradePrice
+        ? Number(gradePrice.prixFcfa || 0)
+        : applyDiscount(prixBaseFcfa, discountPercent);
+
+      return {
+        id: product.id,
+        sku: product.sku,
+        nom: product.nom,
+        imageUrl: product.imageUrl || null,
+        category: product.category,
+        details: product.details || null,
+        stockQty: Number(effectiveProduct.stockQty || 0),
+        maxQtyPerOrder:
+          effectiveProduct.maxQtyPerOrder == null ? null : Number(effectiveProduct.maxQtyPerOrder),
+
+        prixBaseFcfa,
+        discountPercent: gradePrice ? 0 : discountPercent,
+        prixFinalFcfa,
+        pricingMode: gradePrice ? "DIRECT_GRADE_PRICE" : "DISCOUNT_FROM_PUBLIC_PRICE",
+
+        cc: Number(product.cc || 0),
+        poidsKg: Number(product.poidsKg || 0),
+      };
+    })
+    .filter(Boolean);
 }
 
 async function computePreorderTotals(preorderId, countryId) {
@@ -285,6 +333,16 @@ async function computePreorderTotals(preorderId, countryId) {
     }
 
     const product = applyCountryAvailability(it.product, preorder.countryId);
+    const directPricing = usesDirectGradePricing(preorder.country?.code);
+    const gradePrice = directPricing
+      ? pickGradePrice(it.product, preorder.countryId, preorder.fboGrade)
+      : null;
+    if (directPricing && !gradePrice) {
+      throw new Error("PRODUCT_GRADE_PRICE_MISSING");
+    }
+    if (gradePrice) {
+      product.directGradePriceFcfa = Number(gradePrice.prixFcfa || 0);
+    }
     const line = computeLineFromProduct(product, it.qty, discountPercent);
     if (!line) continue;
 
@@ -370,6 +428,16 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
     }
 
     const product = applyCountryAvailability(it.product, preorder.countryId);
+    const directPricing = usesDirectGradePricing(preorder.country?.code);
+    const gradePrice = directPricing
+      ? pickGradePrice(it.product, preorder.countryId, preorder.fboGrade)
+      : null;
+    if (directPricing && !gradePrice) {
+      throw new Error("PRODUCT_GRADE_PRICE_MISSING");
+    }
+    if (gradePrice) {
+      product.directGradePriceFcfa = Number(gradePrice.prixFcfa || 0);
+    }
     const line = computeLineFromProduct(product, it.qty, discountPercent);
     if (!line) continue;
 
@@ -442,4 +510,5 @@ module.exports = {
   computeDeliveryFeeFcfa,
   computeLineFromProduct,
   applyDiscount,
+  usesDirectGradePricing,
 };
