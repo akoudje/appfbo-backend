@@ -129,7 +129,6 @@ async function main() {
       update: {
         name: entry.name,
         currencyCode: entry.currencyCode,
-        actif: true,
       },
       create: {
         code: entry.code,
