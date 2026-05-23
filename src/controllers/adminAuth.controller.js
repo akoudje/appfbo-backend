@@ -39,6 +39,8 @@ function sanitizeAdmin(admin) {
     permissions: getRolePermissions(admin.role),
     actif: admin.actif,
     countryId: admin.countryId || null,
+    countryCode: admin.country?.code || null,
+    countryName: admin.country?.name || null,
     lastLoginAt: admin.lastLoginAt || null,
     passwordChangedAt: admin.passwordChangedAt || null,
     lockedUntil: admin.lockedUntil || null,
@@ -104,6 +106,9 @@ async function adminLogin(req, res) {
         failedLoginCount: 0,
         lockedUntil: null,
       },
+      include: {
+        country: { select: { code: true, name: true } },
+      },
     });
 
     await createAdminAuditLog(prisma, {
@@ -131,6 +136,9 @@ async function adminMe(req, res) {
 
     const admin = await prisma.adminUser.findUnique({
       where: { id: req.user.id },
+      include: {
+        country: { select: { code: true, name: true } },
+      },
     });
 
     if (!admin || !admin.actif) {

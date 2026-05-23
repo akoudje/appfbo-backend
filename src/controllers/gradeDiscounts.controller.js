@@ -22,16 +22,12 @@ function parsePercent(v) {
 
 async function getGradeDiscounts(req, res) {
   try {
-    const countryCode = String(
-      req.query.countryCode || req.countryCode || ""
-    ).trim().toUpperCase();
-
-    if (!countryCode) {
-      return res.status(400).json({ message: "countryCode requis" });
+    if (!req.country?.id) {
+      return res.status(400).json({ message: "Country required" });
     }
 
     const country = await prisma.country.findUnique({
-      where: { code: countryCode },
+      where: { id: req.country.id },
       select: { id: true, code: true, name: true },
     });
 
@@ -70,14 +66,10 @@ async function getGradeDiscounts(req, res) {
 
 async function upsertGradeDiscounts(req, res) {
   try {
-    const countryCode = String(
-      req.query.countryCode || req.countryCode || ""
-    ).trim().toUpperCase();
-
     const items = Array.isArray(req.body?.items) ? req.body.items : null;
 
-    if (!countryCode) {
-      return res.status(400).json({ message: "countryCode requis" });
+    if (!req.country?.id) {
+      return res.status(400).json({ message: "Country required" });
     }
 
     if (!items) {
@@ -85,7 +77,7 @@ async function upsertGradeDiscounts(req, res) {
     }
 
     const country = await prisma.country.findUnique({
-      where: { code: countryCode },
+      where: { id: req.country.id },
       select: { id: true, code: true, name: true },
     });
 

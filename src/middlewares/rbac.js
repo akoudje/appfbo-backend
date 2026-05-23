@@ -144,7 +144,7 @@ function requireCountryScope(req, res, next) {
   if (!req.country?.id)
     return res.status(400).json({ message: "Country required" });
 
-  const globalRoles = new Set([AdminRole.SUPER_ADMIN, AdminRole.TECH_ADMIN]);
+  const globalRoles = new Set([AdminRole.SUPER_ADMIN]);
 
   if (globalRoles.has(user.role)) {
     return next();

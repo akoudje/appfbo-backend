@@ -19,7 +19,13 @@ async function listActiveCountries(req, res) {
 // GET /api/admin/countries — liste complète pour l'admin (actif + inactif)
 async function adminListCountries(req, res) {
   try {
+    const where =
+      req.user?.role === AdminRole.SUPER_ADMIN
+        ? {}
+        : { id: req.country?.id };
+
     const countries = await prisma.country.findMany({
+      where,
       select: { code: true, name: true, actif: true },
       orderBy: { name: "asc" },
     });

@@ -10,7 +10,7 @@ const {
 } = require("../services/admin-security.service");
 
 const SALT_ROUNDS = 10;
-const GLOBAL_ROLES = new Set(["SUPER_ADMIN", "TECH_ADMIN"]);
+const GLOBAL_ROLES = new Set(["SUPER_ADMIN"]);
 const VALID_ROLES = new Set(Object.values(AdminRole));
 const ROLE_ASSIGNMENT_MATRIX = {
   SUPER_ADMIN: new Set(Object.values(AdminRole)),
@@ -201,14 +201,26 @@ async function listUsers(req, res) {
       where.actif = actifBool;
     }
 
-    if (countryCode && String(countryCode).trim()) {
+    if (!isGlobalRole(req.user?.role)) {
+      if (!req.country?.id) {
+        return res.status(400).json({ message: "Country required" });
+      }
+      if (countryCode && String(countryCode).trim()) {
+        const country = await resolveCountryIdFromCode(countryCode);
+        if (!country) {
+          return res.status(404).json({ message: "Pays introuvable" });
+        }
+        if (country.id !== req.country.id) {
+          return res.status(403).json({ message: "Forbidden: country scope mismatch" });
+        }
+      }
+      where.countryId = req.country.id;
+    } else if (countryCode && String(countryCode).trim()) {
       const country = await resolveCountryIdFromCode(countryCode);
       if (!country) {
         return res.status(404).json({ message: "Pays introuvable" });
       }
       where.countryId = country.id;
-    } else if (!isGlobalRole(req.user?.role) && req.country?.id) {
-      where.countryId = req.country.id;
     }
 
     const [totalCount, users] = await Promise.all([
