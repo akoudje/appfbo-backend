@@ -883,6 +883,7 @@ async function sendSmsWithRetry({
   to,
   message,
   callbackData,
+  countryCode = "CIV",
   maxRetries = 2,
 }) {
   const retries = Math.max(0, Number(maxRetries) || 0);
@@ -895,6 +896,7 @@ async function sendSmsWithRetry({
       to,
       message,
       callbackData,
+      countryCode,
     });
     lastResult = result;
 
@@ -921,6 +923,7 @@ async function sendByChannel({
   html,
   subject,
   preorderId,
+  countryCode = "CIV",
   maxSmsRetries = 2,
 }) {
   if (!to) {
@@ -940,6 +943,7 @@ async function sendByChannel({
       to,
       message,
       callbackData: preorderId,
+      countryCode,
       maxRetries: maxSmsRetries,
     });
   }
@@ -1040,6 +1044,7 @@ async function sendPreorderNotification({
   const resolvedEmailSubject = configuredTemplates.emailSubject;
   const resolvedEmailMessage = configuredTemplates.emailBody;
   const resolvedEmailHtml = configuredTemplates.emailHtml;
+  const preorderCountryCode = preorder?.country?.code || preorder?.countryCode || "CIV";
 
   const smsAllowed = shouldSendSmsForPurpose(purpose);
   const forcedChannel = String(forceChannel || "").trim().toUpperCase();
@@ -1188,6 +1193,7 @@ async function sendPreorderNotification({
       html: item.channel === "EMAIL" ? resolvedEmailHtml : undefined,
       subject: item.channel === "EMAIL" ? resolvedEmailSubject : undefined,
       preorderId: preorder.id,
+      countryCode: preorderCountryCode,
       maxSmsRetries,
     });
 

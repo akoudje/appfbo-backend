@@ -3,11 +3,12 @@
 
 const axios = require("axios");
 
-const { normalizeCI } = require("../utils/phone");
+const { normalizeForCountry } = require("../utils/phone");
 const {
   MAX_SMS_LENGTH,
   clampSmsContent,
   getAccessToken,
+  getCountryOrangeConfig,
   sendText,
 } = require("./sms.orange.service");
 
@@ -29,7 +30,17 @@ function prependNotificationPrefix(preorder = {}, message = "") {
 }
 
 function normalizePhone(raw = "") {
-  return normalizeCI(raw);
+  return normalizeForCountry(raw, "CIV");
+}
+
+function normalizePhoneForCountry(raw = "", countryCode = "CIV") {
+  return normalizeForCountry(raw, countryCode);
+}
+
+function getOrangeEnvName(baseName, countryCode = "CIV") {
+  const normalizedCountry = String(countryCode || "CIV").trim().toUpperCase();
+  if (normalizedCountry === "CIV") return baseName;
+  return `${baseName}_${normalizedCountry}`;
 }
 
 function buildPreorderSmsMessage({ preorder, totals }) {
@@ -49,12 +60,13 @@ function buildPreorderSmsMessage({ preorder, totals }) {
   return prependNotificationPrefix(preorder, candidates[0]).slice(0, MAX_SMS_LENGTH);
 }
 
-function orangeConfigured() {
+function orangeConfigured(countryCode = "CIV") {
+  const normalizedCountry = String(countryCode || "CIV").trim().toUpperCase();
   return Boolean(
-    process.env.ORANGE_CLIENT_ID &&
-      process.env.ORANGE_CLIENT_SECRET &&
-      process.env.ORANGE_SENDER_ADDRESS &&
-      process.env.ORANGE_SENDER_NUMBER,
+    process.env[getOrangeEnvName("ORANGE_CLIENT_ID", normalizedCountry)] &&
+      process.env[getOrangeEnvName("ORANGE_CLIENT_SECRET", normalizedCountry)] &&
+      process.env[getOrangeEnvName("ORANGE_SENDER_ADDRESS", normalizedCountry)] &&
+      process.env[getOrangeEnvName("ORANGE_SENDER_NUMBER", normalizedCountry)],
   );
 }
 
@@ -66,8 +78,9 @@ function buildSafeClientCorrelator(callbackData = null) {
   return `app${Date.now()}${safeData || "sms"}`.slice(0, 48);
 }
 
-async function sendSms({ to, message, callbackData = null }) {
-  const toAddress = normalizePhone(to);
+async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }) {
+  const normalizedCountry = String(countryCode || "CIV").trim().toUpperCase();
+  const toAddress = normalizePhoneForCountry(to, normalizedCountry);
   const normalizedMessage = clampSmsContent(message);
   const clientCorrelator = buildSafeClientCorrelator(callbackData);
 
@@ -82,21 +95,23 @@ async function sendSms({ to, message, callbackData = null }) {
     };
   }
 
-  if (!orangeConfigured()) {
+  if (!orangeConfigured(normalizedCountry)) {
     return {
       accepted: false,
       provider: "ORANGE",
       providerMessageId: null,
       rawPayload: null,
       errorCode: "SMS_PROVIDER_NOT_CONFIGURED",
-      errorMessage: "Provider SMS Orange non configuré.",
+      errorMessage: `Provider SMS Orange non configuré pour ${normalizedCountry}.`,
     };
   }
 
   try {
+    const orangeConfig = getCountryOrangeConfig(normalizedCountry);
     console.log("[sms][orange] send requested", {
       to: `tel:${toAddress}`,
-      senderAddress: process.env.ORANGE_SENDER_ADDRESS,
+      countryCode: normalizedCountry,
+      senderAddress: orangeConfig.senderAddress,
       messageLength: normalizedMessage.length,
       maxLength: MAX_SMS_LENGTH,
       clientCorrelator: clientCorrelator || "(auto)",
@@ -106,6 +121,7 @@ async function sendSms({ to, message, callbackData = null }) {
       phone: toAddress,
       message: normalizedMessage,
       clientCorrelator,
+      countryCode: normalizedCountry,
     });
 
     console.log("[sms][orange] send accepted", {
@@ -193,7 +209,8 @@ function mapOrangeDeliveryStatus(raw = "") {
   return "unknown";
 }
 
-async function fetchSmsStatus({ resourceUrl }) {
+async function fetchSmsStatus({ resourceUrl, countryCode = "CIV" }) {
+  const normalizedCountry = String(countryCode || "CIV").trim().toUpperCase();
   if (!resourceUrl || typeof resourceUrl !== "string") {
     return {
       ok: false,
@@ -205,19 +222,19 @@ async function fetchSmsStatus({ resourceUrl }) {
     };
   }
 
-  if (!orangeConfigured()) {
+  if (!orangeConfigured(normalizedCountry)) {
     return {
       ok: false,
       provider: "ORANGE",
       deliveryStatus: "unknown",
       providerStatus: null,
-      error: "SMS_PROVIDER_NOT_CONFIGURED",
+      error: `SMS_PROVIDER_NOT_CONFIGURED_${normalizedCountry}`,
       raw: null,
     };
   }
 
   try {
-    const token = await getAccessToken();
+    const token = await getAccessToken(normalizedCountry);
     const res = await axios.get(resourceUrl, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -262,6 +279,7 @@ async function fetchSmsStatus({ resourceUrl }) {
 module.exports = {
   buildPreorderSmsMessage,
   normalizePhone,
+  normalizePhoneForCountry,
   sendSms,
   fetchSmsStatus,
   mapOrangeDeliveryStatus,

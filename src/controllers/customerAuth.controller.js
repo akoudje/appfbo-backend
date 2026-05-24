@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
 const { normalizeEmail, sendEmail } = require("../services/email.service");
-const { normalizePhone, sendSms } = require("../services/sms.service");
+const { normalizePhoneForCountry, sendSms } = require("../services/sms.service");
 const {
   buildNotificationSummaryForCustomer,
 } = require("./customerNotifications.controller");
@@ -133,7 +133,7 @@ function signCustomerToken({ fboId, countryId, numeroFbo, email }) {
   );
 }
 
-async function resolveFboAndDestinations({ countryId, numeroFbo, requestedChannel, phoneInput }) {
+async function resolveFboAndDestinations({ countryId, countryCode, numeroFbo, requestedChannel, phoneInput }) {
   const canonical = canonicalFboNumber(numeroFbo);
   if (!canonical) return null;
 
@@ -160,7 +160,10 @@ async function resolveFboAndDestinations({ countryId, numeroFbo, requestedChanne
     },
   });
 
-  const smsPhone = normalizePhone(phoneInput || latestOrder?.factureWhatsappTo || "");
+  const smsPhone = normalizePhoneForCountry(
+    phoneInput || latestOrder?.factureWhatsappTo || "",
+    countryCode || "CIV",
+  );
   const email = normalizeEmail(fbo.email || latestOrder?.fboEmail || "");
 
   let channel = String(requestedChannel || "").trim().toUpperCase();
@@ -199,6 +202,7 @@ async function requestOtp(req, res) {
 
     const resolved = await resolveFboAndDestinations({
       countryId,
+      countryCode: req.country?.code || "CIV",
       numeroFbo,
       requestedChannel: channel,
       phoneInput: phone,
@@ -276,6 +280,7 @@ async function requestOtp(req, res) {
         const smsResult = await sendSms({
           to: resolved.smsPhone,
           message: `Code connexion ${otp}. Expire dans ${expiresMin} min.`,
+          countryCode: req.country?.code || "CIV",
         });
         if (smsResult?.accepted) {
           successes.push({ channel: "SMS", result: smsResult });

@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-const { normalizeCI } = require("../utils/phone");
+const { normalizeForCountry } = require("../utils/phone");
 
 const DEFAULT_TOKEN_URL = "https://api.orange.com/oauth/v3/token";
 const ORANGE_SMS_API_BASE_URL = "https://api.orange.com/smsmessaging/v1";
@@ -8,8 +8,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_SMS_LENGTH = 160;
 
 let tokenCache = {
-  accessToken: null,
-  expiresAt: 0,
+  byCountry: new Map(),
 };
 
 class OrangeApiError extends Error {
@@ -35,6 +34,42 @@ function requireEnv(name, fallback = "") {
     });
   }
   return value;
+}
+
+function normalizeCountryCode(countryCode = "CIV") {
+  return String(countryCode || "CIV").trim().toUpperCase();
+}
+
+function envNameForCountry(baseName, countryCode) {
+  const normalized = normalizeCountryCode(countryCode);
+  if (normalized === "CIV") return baseName;
+  return `${baseName}_${normalized}`;
+}
+
+function getCountryOrangeConfig(countryCode = "CIV") {
+  const normalizedCountryCode = normalizeCountryCode(countryCode);
+  const suffix = normalizedCountryCode === "CIV" ? "" : `_${normalizedCountryCode}`;
+  const label = normalizedCountryCode === "CIV" ? "CIV" : normalizedCountryCode;
+
+  const clientId = requireEnv(envNameForCountry("ORANGE_CLIENT_ID", normalizedCountryCode));
+  const clientSecret = requireEnv(envNameForCountry("ORANGE_CLIENT_SECRET", normalizedCountryCode));
+  const tokenUrl = requireEnv(
+    envNameForCountry("ORANGE_TOKEN_URL", normalizedCountryCode),
+    DEFAULT_TOKEN_URL,
+  );
+  const senderAddress = requireEnv(envNameForCountry("ORANGE_SENDER_ADDRESS", normalizedCountryCode));
+  const senderNumber = requireEnv(envNameForCountry("ORANGE_SENDER_NUMBER", normalizedCountryCode));
+
+  return {
+    countryCode: normalizedCountryCode,
+    label,
+    suffix,
+    clientId,
+    clientSecret,
+    tokenUrl,
+    senderAddress,
+    senderNumber,
+  };
 }
 
 function buildClientCorrelator() {
@@ -83,19 +118,18 @@ function buildOrangeError(error, fallbackMessage) {
   );
 }
 
-async function getAccessToken() {
-  if (tokenCache.accessToken && Date.now() < tokenCache.expiresAt) {
-    return tokenCache.accessToken;
+async function getAccessToken(countryCode = "CIV") {
+  const config = getCountryOrangeConfig(countryCode);
+  const cached = tokenCache.byCountry.get(config.countryCode);
+  if (cached?.accessToken && Date.now() < cached.expiresAt) {
+    return cached.accessToken;
   }
 
-  const clientId = requireEnv("ORANGE_CLIENT_ID");
-  const clientSecret = requireEnv("ORANGE_CLIENT_SECRET");
-  const tokenUrl = requireEnv("ORANGE_TOKEN_URL", DEFAULT_TOKEN_URL);
-  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  const basicAuth = Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64");
 
   try {
     const response = await axios.post(
-      tokenUrl,
+      config.tokenUrl,
       new URLSearchParams({ grant_type: "client_credentials" }).toString(),
       {
         headers: {
@@ -119,10 +153,10 @@ async function getAccessToken() {
     const expiresInSeconds = Number(response.data?.expires_in || 0);
     const ttlMs = Math.max((expiresInSeconds - 120) * 1000, 0);
 
-    tokenCache = {
+    tokenCache.byCountry.set(config.countryCode, {
       accessToken,
       expiresAt: Date.now() + ttlMs,
-    };
+    });
 
     return accessToken;
   } catch (error) {
@@ -138,27 +172,27 @@ async function postOrangeSms({
   phone,
   message,
   clientCorrelator = buildClientCorrelator(),
+  countryCode = "CIV",
 }) {
-  const target = normalizeCI(phone);
+  const config = getCountryOrangeConfig(countryCode);
+  const target = normalizeForCountry(phone, config.countryCode);
   if (!target) {
-    throw new OrangeApiError("Numero de destination invalide pour la Cote d'Ivoire", {
+    throw new OrangeApiError(`Numero de destination invalide pour ${config.label}`, {
       code: "INVALID_DESTINATION",
     });
   }
 
-  const senderAddress = requireEnv("ORANGE_SENDER_ADDRESS");
-  const senderNumber = requireEnv("ORANGE_SENDER_NUMBER");
-  const accessToken = await getAccessToken();
+  const accessToken = await getAccessToken(config.countryCode);
   const normalizedMessage = clampSmsContent(message);
 
   try {
     const response = await axios.post(
-      buildOrangeSmsUrl(senderAddress),
+      buildOrangeSmsUrl(config.senderAddress),
       {
         outboundSMSMessageRequest: {
           address: [`tel:${target}`],
-          senderAddress,
-          senderName: senderNumber,
+          senderAddress: config.senderAddress,
+          senderName: config.senderNumber,
           outboundSMSTextMessage: {
             message: normalizedMessage,
           },
@@ -179,6 +213,8 @@ async function postOrangeSms({
       response,
       target,
       clientCorrelator,
+      countryCode: config.countryCode,
+      senderAddress: config.senderAddress,
     };
   } catch (error) {
     throw buildOrangeError(error, "Echec d'envoi du SMS via Orange");
@@ -186,7 +222,8 @@ async function postOrangeSms({
 }
 
 async function send(dest, communique) {
-  const target = normalizeCI(dest?.contact1 || dest?.phone);
+  const countryCode = normalizeCountryCode(dest?.countryCode || "CIV");
+  const target = normalizeForCountry(dest?.contact1 || dest?.phone, countryCode);
   if (!target) {
     throw new OrangeApiError("Numero de destination invalide", {
       code: "INVALID_DESTINATION",
@@ -204,6 +241,7 @@ async function send(dest, communique) {
   const { response, clientCorrelator } = await postOrangeSms({
     phone: target,
     message,
+    countryCode,
   });
 
   return {
@@ -216,11 +254,12 @@ async function send(dest, communique) {
   };
 }
 
-async function sendText({ phone, message, clientCorrelator }) {
+async function sendText({ phone, message, clientCorrelator, countryCode = "CIV" }) {
   const { response } = await postOrangeSms({
     phone,
     message,
     clientCorrelator,
+    countryCode,
   });
 
   return {
@@ -239,6 +278,7 @@ module.exports = {
   clampSmsContent,
   OrangeApiError,
   getAccessToken,
+  getCountryOrangeConfig,
   send,
   sendText,
 };

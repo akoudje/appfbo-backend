@@ -7,7 +7,7 @@ const {
 } = require("../services/pricing.service");
 const {
   buildPreorderSmsMessage,
-  normalizePhone,
+  normalizePhoneForCountry,
   fetchSmsStatus,
 } = require("../services/sms.service");
 const {
@@ -786,7 +786,10 @@ async function submit(req, res) {
       preorder.deliveryMode = updatedPreorder.deliveryMode;
     }
 
-    const smsTo = normalizePhone(phoneNormalized || phoneRaw);
+    const smsTo = normalizePhoneForCountry(
+      phoneNormalized || phoneRaw,
+      preorder.country?.code || req.country?.code || "CIV",
+    );
     if (!smsTo) {
       return res.status(400).json({ error: "Le numéro de téléphone est obligatoire." });
     }
@@ -1000,7 +1003,10 @@ async function notifySms(req, res) {
       return res.status(400).json({ error: "Précommande non éligible au renvoi SMS." });
     }
 
-    const smsTo = normalizePhone(phoneNormalized || phoneRaw || preorder.factureWhatsappTo);
+    const smsTo = normalizePhoneForCountry(
+      phoneNormalized || phoneRaw || preorder.factureWhatsappTo,
+      preorder.country?.code || req.country?.code || "CIV",
+    );
     if (!smsTo) {
       return res.status(400).json({ error: "Aucun numéro disponible pour le SMS." });
     }
@@ -1110,6 +1116,9 @@ async function getSmsStatus(req, res) {
         lastWhatsappStatus: true,
         lastWhatsappStatusAt: true,
         factureWhatsappTo: true,
+        country: {
+          select: { code: true },
+        },
       },
     });
 
@@ -1129,7 +1138,10 @@ async function getSmsStatus(req, res) {
       });
     }
 
-    const statusResult = await fetchSmsStatus({ resourceUrl });
+    const statusResult = await fetchSmsStatus({
+      resourceUrl,
+      countryCode: preorder.country?.code || req.country?.code || "CIV",
+    });
     const now = new Date();
 
     let smsStatus = mapSmsStatus(preorder.lastWhatsappStatus);

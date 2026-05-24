@@ -81,6 +81,13 @@ async function processQueuedSmsMessage(message) {
       body: true,
       attempts: true,
       maxAttempts: true,
+      preorder: {
+        select: {
+          country: {
+            select: { code: true },
+          },
+        },
+      },
     },
   });
 
@@ -121,6 +128,7 @@ async function processQueuedSmsMessage(message) {
     to: current.toPhone,
     message: current.body,
     callbackData: current.preorderId,
+    countryCode: current.preorder?.country?.code || "CIV",
   });
 
   const exhausted = current.attempts >= Math.max(1, Number(current.maxAttempts) || 1);
