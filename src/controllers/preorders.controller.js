@@ -32,6 +32,9 @@ const FBO_SERVICE_URL = String(process.env.FBO_SERVICE_URL || "").trim().replace
 const FBO_SERVICE_INTERNAL_TOKEN = String(
   process.env.FBO_SERVICE_INTERNAL_TOKEN || "",
 ).trim();
+const FBO_CHECK_RATE_LIMIT_WINDOW_MS = Number(process.env.FBO_CHECK_RATE_LIMIT_WINDOW_MS || 60000);
+const FBO_CHECK_RATE_LIMIT_MAX = Number(process.env.FBO_CHECK_RATE_LIMIT_MAX || 30);
+const fboCheckRateLimitBuckets = new Map();
 
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -57,6 +60,41 @@ function mapSmsStatus(rawStatus) {
 
 function digitsOnly(v = "") {
   return String(v || "").replace(/\D/g, "");
+}
+
+function getRequestIp(req) {
+  const forwarded = String(req.headers?.["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+function enforceFboCheckRateLimit(req) {
+  const now = Date.now();
+  const ip = getRequestIp(req);
+  const bucket = fboCheckRateLimitBuckets.get(ip) || { count: 0, resetAt: now + FBO_CHECK_RATE_LIMIT_WINDOW_MS };
+
+  if (bucket.resetAt <= now) {
+    bucket.count = 0;
+    bucket.resetAt = now + FBO_CHECK_RATE_LIMIT_WINDOW_MS;
+  }
+
+  bucket.count += 1;
+  fboCheckRateLimitBuckets.set(ip, bucket);
+
+  if (fboCheckRateLimitBuckets.size > 5000) {
+    for (const [key, value] of fboCheckRateLimitBuckets.entries()) {
+      if (value.resetAt <= now) fboCheckRateLimitBuckets.delete(key);
+    }
+  }
+
+  return bucket.count <= FBO_CHECK_RATE_LIMIT_MAX;
+}
+
+function sanitizeFboDirectoryPayload(payload) {
+  if (!payload || payload.exists === false) return { exists: false };
+  return {
+    exists: true,
+    grade: typeof payload.grade === "string" ? payload.grade : null,
+  };
 }
 
 async function fetchFboDirectoryProfile(numeroFbo) {
@@ -410,8 +448,13 @@ async function checkFboDirectory(req, res) {
       return res.status(400).json({ error: "Numéro FBO invalide" });
     }
 
+    if (!enforceFboCheckRateLimit(req)) {
+      return res.status(429).json({ error: "Trop de vérifications FBO. Réessayez plus tard." });
+    }
+
     const payload = await fetchFboDirectoryProfile(numero);
-    return res.json(payload || { exists: false });
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(sanitizeFboDirectoryPayload(payload));
   } catch (e) {
     console.error("checkFboDirectory error:", {
       message: e?.message || String(e),
