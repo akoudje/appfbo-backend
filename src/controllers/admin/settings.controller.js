@@ -148,6 +148,7 @@ async function getCountrySettings(req, res) {
         closedOnSaturday: true,
         supportPhone: true,
         pickupAddress: true,
+        defaultPointDeVente: true,
         enableWave: true,
         enableOrangeMoney: true,
         enableCash: true,
@@ -204,6 +205,7 @@ async function getCountrySettings(req, res) {
         closedOnSaturday: false,
         supportPhone: null,
         pickupAddress: null,
+        defaultPointDeVente: null,
         enableWave: true,
         enableOrangeMoney: true,
         enableCash: true,
@@ -280,6 +282,7 @@ async function updateCountrySettings(req, res) {
       closedOnSaturday,
       supportPhone,
       pickupAddress,
+      defaultPointDeVente,
       enableWave,
       enableOrangeMoney,
       enableCash,
@@ -473,6 +476,12 @@ async function updateCountrySettings(req, res) {
       data.pickupAddress = pickupAddress ? String(pickupAddress).trim() : null;
     }
 
+    if (defaultPointDeVente !== undefined) {
+      data.defaultPointDeVente = defaultPointDeVente
+        ? String(defaultPointDeVente).trim().toUpperCase()
+        : null;
+    }
+
     if (enableWave !== undefined) data.enableWave = Boolean(enableWave);
     if (enableOrangeMoney !== undefined) data.enableOrangeMoney = Boolean(enableOrangeMoney);
     if (enableCash !== undefined) data.enableCash = Boolean(enableCash);
@@ -593,6 +602,7 @@ async function updateCountrySettings(req, res) {
             data.closedOnSaturday !== undefined ? data.closedOnSaturday : false,
           supportPhone: data.supportPhone ?? null,
           pickupAddress: data.pickupAddress ?? null,
+          defaultPointDeVente: data.defaultPointDeVente ?? null,
           enableWave: data.enableWave !== undefined ? data.enableWave : true,
           enableOrangeMoney:
             data.enableOrangeMoney !== undefined ? data.enableOrangeMoney : true,
@@ -672,6 +682,7 @@ async function updateCountrySettings(req, res) {
         closedOnSaturday: true,
         supportPhone: true,
         pickupAddress: true,
+        defaultPointDeVente: true,
         enableWave: true,
         enableOrangeMoney: true,
         enableCash: true,

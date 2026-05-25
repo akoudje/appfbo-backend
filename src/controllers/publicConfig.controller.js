@@ -139,6 +139,7 @@ async function getStorefrontConfig(req, res) {
           closedOnSaturday: true,
           supportPhone: true,
           pickupAddress: true,
+          defaultPointDeVente: true,
           enableWave: true,
           enableOrangeMoney: true,
           enableCash: true,
@@ -194,6 +195,7 @@ async function getStorefrontConfig(req, res) {
       closedOnSaturday: settings?.closedOnSaturday ?? false,
       supportPhone: settings?.supportPhone ?? null,
       pickupAddress: settings?.pickupAddress ?? null,
+      defaultPointDeVente: settings?.defaultPointDeVente || null,
       payments: {
         wave: settings?.enableWave ?? true,
         orangeMoney: settings?.enableOrangeMoney ?? true,

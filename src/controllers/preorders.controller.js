@@ -36,6 +36,13 @@ const FBO_CHECK_RATE_LIMIT_WINDOW_MS = Number(process.env.FBO_CHECK_RATE_LIMIT_W
 const FBO_CHECK_RATE_LIMIT_MAX = Number(process.env.FBO_CHECK_RATE_LIMIT_MAX || 30);
 const fboCheckRateLimitBuckets = new Map();
 const DATA_PROTECTION_CONSENT_VERSION = "preorder-step1-v1";
+const DEFAULT_POINT_DE_VENTE_BY_COUNTRY = {
+  CIV: "ABIDJAN",
+  BFA: "OUAGADOUGOU",
+  TGO: "LOME",
+  BEN: "COTONOU",
+  NER: "NIAMEY",
+};
 
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -61,6 +68,14 @@ function mapSmsStatus(rawStatus) {
 
 function digitsOnly(v = "") {
   return String(v || "").replace(/\D/g, "");
+}
+
+function resolveDefaultPointDeVente(countryCode = "", settings = null) {
+  const configured = String(settings?.defaultPointDeVente || "").trim();
+  if (configured) return configured.toUpperCase();
+
+  const normalizedCode = String(countryCode || "").trim().toUpperCase();
+  return DEFAULT_POINT_DE_VENTE_BY_COUNTRY[normalizedCode] || normalizedCode || "ABIDJAN";
 }
 
 function isExplicitConsentAccepted(value) {
@@ -212,7 +227,6 @@ async function createDraft(req, res) {
       nomComplet,
       email,
       grade,
-      pointDeVente,
       paymentMode = null,
       deliveryMode = null,
       placedByFboNumero = "",
@@ -227,17 +241,15 @@ async function createDraft(req, res) {
     if (
       !isNonEmptyString(numeroFbo) ||
       !isNonEmptyString(nomComplet) ||
-      !isNonEmptyString(pointDeVente) ||
       !grade
     ) {
       return res.status(400).json({
-        error: "numeroFbo, nomComplet, grade et pointDeVente sont requis",
+        error: "numeroFbo, nomComplet et grade sont requis",
       });
     }
 
     const normalizedNumeroFbo = normalizeNumeroFbo(numeroFbo);
     const normalizedNomComplet = String(nomComplet).trim().toUpperCase();
-    const normalizedPointDeVente = String(pointDeVente).trim().toUpperCase();
     const normalizedGrade = String(grade || "").trim().toUpperCase();
     const consentAccepted = isExplicitConsentAccepted(personalDataConsentAccepted);
     const consentVersion =
@@ -304,8 +316,10 @@ async function createDraft(req, res) {
         enableEcobankPay: true,
         enableDelivery: true,
         enablePickup: true,
+        defaultPointDeVente: true,
       },
     });
+    const normalizedPointDeVente = resolveDefaultPointDeVente(countryCode, countrySettings);
 
     const normalizedDeliveryMode = resolveDeliveryModeForPayment(
       normalizedPaymentMode,

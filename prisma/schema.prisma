@@ -424,6 +424,7 @@ model CountrySettings {
   closedOnSaturday Boolean @default(false)
   supportPhone String?
   pickupAddress String? @db.Text
+  defaultPointDeVente String?
   enableWave Boolean @default(true)
   enableOrangeMoney Boolean @default(true)
   enableCash Boolean @default(true)
