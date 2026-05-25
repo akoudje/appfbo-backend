@@ -100,10 +100,7 @@ function enforceFboCheckRateLimit(req) {
 
 function sanitizeFboDirectoryPayload(payload) {
   if (!payload || payload.exists === false) return { exists: false };
-  return {
-    exists: true,
-    grade: typeof payload.grade === "string" ? payload.grade : null,
-  };
+  return { exists: true };
 }
 
 async function fetchFboDirectoryProfile(numeroFbo) {
