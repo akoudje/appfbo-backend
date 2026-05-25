@@ -35,6 +35,7 @@ const FBO_SERVICE_INTERNAL_TOKEN = String(
 const FBO_CHECK_RATE_LIMIT_WINDOW_MS = Number(process.env.FBO_CHECK_RATE_LIMIT_WINDOW_MS || 60000);
 const FBO_CHECK_RATE_LIMIT_MAX = Number(process.env.FBO_CHECK_RATE_LIMIT_MAX || 30);
 const fboCheckRateLimitBuckets = new Map();
+const DATA_PROTECTION_CONSENT_VERSION = "preorder-step1-v1";
 
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -60,6 +61,14 @@ function mapSmsStatus(rawStatus) {
 
 function digitsOnly(v = "") {
   return String(v || "").replace(/\D/g, "");
+}
+
+function isExplicitConsentAccepted(value) {
+  if (value === true) return true;
+  if (typeof value === "string") {
+    return ["true", "1", "yes", "oui"].includes(value.trim().toLowerCase());
+  }
+  return false;
 }
 
 function getRequestIp(req) {
@@ -214,6 +223,8 @@ async function createDraft(req, res) {
       placedByFboPhone = "",
       placedByFboEmail = "",
       placedByHomeCountryCode = "",
+      personalDataConsentAccepted = false,
+      personalDataConsentVersion = DATA_PROTECTION_CONSENT_VERSION,
     } = req.body || {};
 
     if (
@@ -231,8 +242,19 @@ async function createDraft(req, res) {
     const normalizedNomComplet = String(nomComplet).trim().toUpperCase();
     const normalizedPointDeVente = String(pointDeVente).trim().toUpperCase();
     const normalizedGrade = String(grade || "").trim().toUpperCase();
+    const consentAccepted = isExplicitConsentAccepted(personalDataConsentAccepted);
+    const consentVersion =
+      String(personalDataConsentVersion || DATA_PROTECTION_CONSENT_VERSION).trim() ||
+      DATA_PROTECTION_CONSENT_VERSION;
     const hasEmailField = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
     const normalizedEmail = normalizeEmail(email);
+
+    if (!consentAccepted) {
+      return res.status(400).json({
+        error: "Consentement au traitement des données personnelles requis",
+        code: "PERSONAL_DATA_CONSENT_REQUIRED",
+      });
+    }
 
     if (normalizedEmail === "__INVALID_EMAIL__") {
       return res.status(400).json({
@@ -383,6 +405,9 @@ async function createDraft(req, res) {
 
           preorderPaymentMode: normalizedPaymentMode,
           deliveryMode: normalizedDeliveryMode,
+          personalDataConsentAccepted: true,
+          personalDataConsentAcceptedAt: new Date(),
+          personalDataConsentVersion: consentVersion,
 
           status: "DRAFT",
           billingWorkStatus: "NONE",
@@ -410,6 +435,8 @@ async function createDraft(req, res) {
             preorderDateKey,
             countryId,
             countryCode,
+            personalDataConsentAccepted: true,
+            personalDataConsentVersion: consentVersion,
             placedByFboNumero:
               normalizedPlacedByFboNumero &&
               normalizedPlacedByFboNumero !== fbo.numeroFbo

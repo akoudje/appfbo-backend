@@ -697,6 +697,11 @@ model Preorder {
   // Livraison
   deliveryMode DeliveryMode?
 
+  // Protection des données personnelles
+  personalDataConsentAccepted  Boolean   @default(false)
+  personalDataConsentAcceptedAt DateTime?
+  personalDataConsentVersion   String?
+
   // Totaux
   totalCc            Decimal @default(0.000) @db.Decimal(12, 3)
   totalPoidsKg       Decimal @default(0.000) @db.Decimal(12, 3)
