@@ -247,6 +247,7 @@ async function createBankProofSubmission({
   declaredAmountFcfa,
   note,
   source = "CUSTOMER_PORTAL",
+  actorAdminId = null,
 }) {
   const now = new Date();
   const ext = path.extname(file.originalname || "").toLowerCase();
@@ -316,7 +317,9 @@ async function createBankProofSubmission({
             ? String(note).trim()
             : source === "PUBLIC_BANK_PROOF_LINK"
               ? "Preuve bancaire déposée via lien sécurisé"
-              : "Preuve bancaire déposée via portail client",
+              : source === "ADMIN_UPLOAD"
+                ? "Preuve bancaire ajoutée par un facturier"
+                : "Preuve bancaire déposée via portail client",
         manualPaymentReference: reference ? String(reference).trim() : null,
         manualPaymentReceivedAt: now,
       },
@@ -329,7 +332,9 @@ async function createBankProofSubmission({
         note:
           source === "PUBLIC_BANK_PROOF_LINK"
             ? "Preuve de paiement bancaire déposée via lien sécurisé."
-            : "Preuve de paiement bancaire déposée par le client.",
+            : source === "ADMIN_UPLOAD"
+              ? "Preuve de paiement bancaire ajoutée par un facturier."
+              : "Preuve de paiement bancaire déposée par le client.",
         meta: {
           source,
           proofId: created.id,
@@ -337,7 +342,7 @@ async function createBankProofSubmission({
           declaredAmountFcfa: amount,
           fileUrl,
         },
-        actorAdminId: null,
+        actorAdminId: actorAdminId || null,
       },
     });
 
@@ -873,6 +878,7 @@ async function submitPublicBankProofByOrderId(req, res) {
 
 module.exports = {
   uploadBankProofMiddleware,
+  createBankProofSubmission,
   submitMyBankProof,
   downloadMyBankProof,
   getPublicBankProofContext,

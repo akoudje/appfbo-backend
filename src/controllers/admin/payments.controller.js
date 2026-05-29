@@ -5,6 +5,10 @@ const {
   buildPaymentConfirmedSmsMessage,
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
+const {
+  uploadBankProofMiddleware,
+  createBankProofSubmission,
+} = require("../customerBankProof.controller");
 
 const ALLOWED = {
   DRAFT: ["CANCELLED"],
@@ -303,6 +307,73 @@ async function validateManualPayment(req, res) {
   }
 }
 
+async function uploadAdminBankProof(req, res) {
+  try {
+    const { id } = req.params;
+    const { reference, declaredAmountFcfa, note } = req.body || {};
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ message: "Fichier preuve requis" });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        status: true,
+        paymentStatus: true,
+        countryId: true,
+        fboId: true,
+        preorderPaymentMode: true,
+        totalFcfa: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const paymentMode = String(order.preorderPaymentMode || "").trim().toUpperCase();
+    if (!["BANK_TRANSFER", "ECOBANK_PAY"].includes(paymentMode)) {
+      return res.status(400).json({
+        message: "L'upload de preuve est réservé aux paiements par virement bancaire / Ecobank Pay.",
+      });
+    }
+
+    const status = String(order.status || "").toUpperCase();
+    const paymentStatus = String(order.paymentStatus || "").toUpperCase();
+    if (!["INVOICED", "PAYMENT_PENDING", "PAYMENT_PROOF_RECEIVED"].includes(status)) {
+      return res.status(400).json({
+        message: "La commande doit être facturée avant l'ajout d'une preuve bancaire.",
+      });
+    }
+
+    if (["PAID", "READY", "FULFILLED", "CANCELLED"].includes(status) || paymentStatus === "PAID") {
+      return res.status(400).json({
+        message: "La preuve ne peut plus être ajoutée car le paiement est déjà clôturé.",
+      });
+    }
+
+    const proof = await createBankProofSubmission({
+      order,
+      file,
+      reference,
+      declaredAmountFcfa,
+      note,
+      source: "ADMIN_UPLOAD",
+      actorAdminId: req.user?.id || null,
+    });
+
+    return res.json({ ok: true, proof });
+  } catch (e) {
+    console.error("uploadAdminBankProof error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (uploadAdminBankProof)" });
+  }
+}
+
 async function markCashPayment(req, res) {
   try {
     const { id } = req.params;
@@ -446,6 +517,8 @@ async function markCashPayment(req, res) {
 }
 
 module.exports = {
+  uploadBankProofMiddleware,
+  uploadAdminBankProof,
   markManualPaymentPending,
   validateManualPayment,
   markCashPayment,

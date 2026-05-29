@@ -6,6 +6,13 @@ const paymentsController = require("../../controllers/admin/payments.controller"
 const router = express.Router();
 
 router.post(
+  "/:id/bank-proof/upload",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  paymentsController.uploadBankProofMiddleware,
+  paymentsController.uploadAdminBankProof,
+);
+
+router.post(
   "/:id/proof",
   requirePermission(Permission.PAYMENT_VALIDATE),
   paymentsController.markManualPaymentPending,
