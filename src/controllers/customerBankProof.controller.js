@@ -264,9 +264,13 @@ async function createBankProofSubmission({
 
   let uploaded;
   try {
+    const resourceType =
+      String(file.mimetype || "").toLowerCase() === "application/pdf"
+        ? "raw"
+        : "image";
     uploaded = await uploadFile(tempFilePath, {
       folder: "appfbo/bank-proofs",
-      resource_type: "auto",
+      resource_type: resourceType,
       use_filename: true,
       unique_filename: true,
       filename_override: `${orderIdPart}-${stamp}${safeExt}`,

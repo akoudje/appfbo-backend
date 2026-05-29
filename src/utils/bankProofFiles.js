@@ -46,6 +46,21 @@ function isRemoteBankProofUrl(fileUrl = "") {
   return /^https?:\/\//i.test(String(fileUrl || "").trim());
 }
 
+function buildRemoteBankProofCandidates(raw = "", fileMimeType = "") {
+  const candidates = [raw];
+  const mime = String(fileMimeType || "").toLowerCase();
+
+  if (mime.includes("pdf") && raw.includes("/image/upload/")) {
+    candidates.push(raw.replace("/image/upload/", "/raw/upload/"));
+  }
+
+  if (!mime.includes("pdf") && raw.includes("/raw/upload/")) {
+    candidates.push(raw.replace("/raw/upload/", "/image/upload/"));
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
 async function streamBankProofFileToResponse({
   res,
   fileUrl,
@@ -76,11 +91,24 @@ async function streamBankProofFileToResponse({
     return false;
   }
 
-  const response = await axios.get(raw, {
-    responseType: "stream",
-    timeout: 15000,
-    maxRedirects: 5,
-  });
+  let response = null;
+  let lastError = null;
+  for (const candidateUrl of buildRemoteBankProofCandidates(raw, fileMimeType)) {
+    try {
+      response = await axios.get(candidateUrl, {
+        responseType: "stream",
+        timeout: 15000,
+        maxRedirects: 5,
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!response) {
+    throw lastError || new Error("Fichier preuve distant inaccessible");
+  }
 
   const remoteType = String(response?.headers?.["content-type"] || "").trim();
   const remoteLength = String(response?.headers?.["content-length"] || "").trim();
