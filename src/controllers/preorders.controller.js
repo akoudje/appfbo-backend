@@ -285,7 +285,9 @@ async function createDraft(req, res) {
   try {
     const {
       numeroFbo,
+      nomComplet,
       email,
+      grade,
       paymentMode = null,
       deliveryMode = null,
       placedByFboNumero = "",
@@ -309,21 +311,27 @@ async function createDraft(req, res) {
     const directoryProfile = normalizeFboDirectoryProfile(
       await fetchFboDirectoryProfile(normalizedNumeroFbo),
     );
+    const clientName = String(nomComplet || "").trim();
+    const clientGrade = normalizeGrade(grade);
 
-    if (!directoryProfile.exists) {
-      return res.status(404).json({
-        error: "Numéro FBO introuvable",
-      });
-    }
-
-    if (!directoryProfile.fullName || !directoryProfile.grade) {
+    if (directoryProfile.exists && (!directoryProfile.fullName || !directoryProfile.grade)) {
       return res.status(502).json({
         error: "Profil FBO incomplet dans le service FBO",
       });
     }
 
-    const normalizedNomComplet = directoryProfile.fullName.toUpperCase();
-    const normalizedGrade = directoryProfile.grade;
+    const normalizedNomComplet = (
+      directoryProfile.exists ? directoryProfile.fullName : clientName
+    ).toUpperCase();
+    const normalizedGrade = directoryProfile.exists
+      ? directoryProfile.grade
+      : clientGrade;
+
+    if (!normalizedNomComplet || !normalizedGrade) {
+      return res.status(400).json({
+        error: "Nom complet et grade sont requis pour continuer",
+      });
+    }
     const consentAccepted = isExplicitConsentAccepted(personalDataConsentAccepted);
     const consentVersion =
       String(personalDataConsentVersion || DATA_PROTECTION_CONSENT_VERSION).trim() ||
