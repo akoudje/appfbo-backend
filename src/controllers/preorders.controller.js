@@ -121,6 +121,23 @@ function sanitizeFboDirectoryPayload(payload) {
   };
 }
 
+function normalizeFboDirectoryProfile(payload) {
+  if (!payload || payload.exists === false) {
+    return { exists: false };
+  }
+
+  return {
+    exists: true,
+    fullName: String(
+      payload.full_name ||
+        payload.fullName ||
+        payload.nomComplet ||
+        "",
+    ).trim(),
+    grade: typeof payload.grade === "string" ? payload.grade.trim() : "",
+  };
+}
+
 async function fetchFboDirectoryProfile(numeroFbo) {
   if (!FBO_SERVICE_URL) {
     const err = new Error("Service FBO non configuré");
@@ -227,9 +244,7 @@ async function createDraft(req, res) {
   try {
     const {
       numeroFbo,
-      nomComplet,
       email,
-      grade,
       paymentMode = null,
       deliveryMode = null,
       placedByFboNumero = "",
@@ -242,18 +257,32 @@ async function createDraft(req, res) {
     } = req.body || {};
 
     if (
-      !isNonEmptyString(numeroFbo) ||
-      !isNonEmptyString(nomComplet) ||
-      !grade
+      !isNonEmptyString(numeroFbo)
     ) {
       return res.status(400).json({
-        error: "numeroFbo, nomComplet et grade sont requis",
+        error: "numeroFbo est requis",
       });
     }
 
     const normalizedNumeroFbo = normalizeNumeroFbo(numeroFbo);
-    const normalizedNomComplet = String(nomComplet).trim().toUpperCase();
-    const normalizedGrade = String(grade || "").trim().toUpperCase();
+    const directoryProfile = normalizeFboDirectoryProfile(
+      await fetchFboDirectoryProfile(normalizedNumeroFbo),
+    );
+
+    if (!directoryProfile.exists) {
+      return res.status(404).json({
+        error: "Numéro FBO introuvable",
+      });
+    }
+
+    if (!directoryProfile.fullName || !directoryProfile.grade) {
+      return res.status(502).json({
+        error: "Profil FBO incomplet dans le service FBO",
+      });
+    }
+
+    const normalizedNomComplet = directoryProfile.fullName.toUpperCase();
+    const normalizedGrade = directoryProfile.grade.toUpperCase();
     const consentAccepted = isExplicitConsentAccepted(personalDataConsentAccepted);
     const consentVersion =
       String(personalDataConsentVersion || DATA_PROTECTION_CONSENT_VERSION).trim() ||
@@ -473,6 +502,12 @@ async function createDraft(req, res) {
     if (e?.code === "P2002") {
       return res.status(409).json({
         error: "Conflit de numérotation détecté. Réessayez immédiatement.",
+      });
+    }
+
+    if (e?.statusCode) {
+      return res.status(e.statusCode).json({
+        error: e.message || "Service FBO indisponible",
       });
     }
 
