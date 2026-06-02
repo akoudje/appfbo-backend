@@ -28,6 +28,22 @@ function normalizePaymentMode(value) {
   return String(value || "").trim().toUpperCase();
 }
 
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatFboDigits(value) {
+  const digits = digitsOnly(value);
+  if (digits.length <= 3) return digits;
+  return digits.match(/.{1,3}/g).join("-");
+}
+
+function buildFboSearchTerms(value) {
+  const raw = String(value || "").trim();
+  const formatted = formatFboDigits(raw);
+  return Array.from(new Set([raw, formatted].filter(Boolean)));
+}
+
 function getPayerPhone(order) {
   const latestAttempt = order?.activePayment?.attempts?.[0];
   return (
@@ -233,20 +249,24 @@ function sumAmount(rows, amountField = "amountExpectedFcfa") {
 async function getWorkspace(req, res) {
   try {
     const { q, paymentMode, dateFrom, dateTo, journalScope = "my" } = req.query;
+    const qs = String(q || "").trim();
+    const fboSearchTerms = buildFboSearchTerms(qs);
     const searchConditions =
-      q && String(q).trim()
+      qs
         ? [
-            { fboNumero: { contains: String(q).trim(), mode: "insensitive" } },
-            { fboNomComplet: { contains: String(q).trim(), mode: "insensitive" } },
-            { factureReference: { contains: String(q).trim(), mode: "insensitive" } },
-            { paymentCollectionCode: { contains: String(q).trim(), mode: "insensitive" } },
-            { preorderNumber: { contains: String(q).trim(), mode: "insensitive" } },
-            { parcelNumber: { contains: String(q).trim(), mode: "insensitive" } },
+            ...fboSearchTerms.map((term) => ({
+              fboNumero: { contains: term, mode: "insensitive" },
+            })),
+            { fboNomComplet: { contains: qs, mode: "insensitive" } },
+            { factureReference: { contains: qs, mode: "insensitive" } },
+            { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
+            { preorderNumber: { contains: qs, mode: "insensitive" } },
+            { parcelNumber: { contains: qs, mode: "insensitive" } },
             {
               activePayment: {
                 attempts: {
                   some: {
-                    providerPayerPhone: { contains: String(q).trim(), mode: "insensitive" },
+                    providerPayerPhone: { contains: qs, mode: "insensitive" },
                   },
                 },
               },
@@ -254,7 +274,7 @@ async function getWorkspace(req, res) {
             {
               cashierTransactions: {
                 some: {
-                  receiptNumber: { contains: String(q).trim(), mode: "insensitive" },
+                  receiptNumber: { contains: qs, mode: "insensitive" },
                 },
               },
             },

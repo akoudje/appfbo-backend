@@ -36,6 +36,22 @@ function parseIntSafe(v, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatFboDigits(value) {
+  const digits = digitsOnly(value);
+  if (digits.length <= 3) return digits;
+  return digits.match(/.{1,3}/g).join("-");
+}
+
+function buildFboSearchTerms(value) {
+  const raw = String(value || "").trim();
+  const formatted = formatFboDigits(raw);
+  return Array.from(new Set([raw, formatted].filter(Boolean)));
+}
+
 function normalizeDateStart(d) {
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return null;
@@ -297,8 +313,11 @@ function buildOrdersListWhere(req, overrides = {}) {
 
   if (q && String(q).trim()) {
     const qs = String(q).trim();
+    const fboSearchTerms = buildFboSearchTerms(qs);
     where.OR = [
-      { fboNumero: { contains: qs, mode: "insensitive" } },
+      ...fboSearchTerms.map((term) => ({
+        fboNumero: { contains: term, mode: "insensitive" },
+      })),
       { fboNomComplet: { contains: qs, mode: "insensitive" } },
       { factureReference: { contains: qs, mode: "insensitive" } },
       { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
