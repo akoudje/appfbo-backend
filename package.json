@@ -23,7 +23,9 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",
-    "import:bfa-grade-prices": "node scripts/import-bfa-grade-prices.js",
+    "import:grade-prices": "node scripts/import-product-grade-prices.js",
+    "import:bfa-grade-prices": "node scripts/import-product-grade-prices.js --country BFA",
+    "import:civ-grade-prices": "node scripts/import-product-grade-prices.js --country CIV",
     "jobs:cancel-expired-preinvoiced": "node scripts/cancel-expired-preinvoiced.js",
     "jobs:backfill-country-notification-templates": "node scripts/backfill-country-notification-templates.js"
   },
