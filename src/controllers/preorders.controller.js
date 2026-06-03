@@ -772,7 +772,7 @@ async function setItems(req, res) {
     if (String(e.message) === "PRODUCT_GRADE_PRICE_MISSING") {
       return res.status(400).json({
         error:
-          "Un ou plusieurs produits n'ont pas encore de prix par grade pour le Burkina Faso.",
+          "Un ou plusieurs produits n'ont pas encore de prix par grade pour ce catalogue pays.",
       });
     }
     return res.status(500).json({ error: e.message || "Erreur setItems" });
@@ -817,7 +817,7 @@ async function getSummary(req, res) {
       return res.status(400).json({
         error:
           String(e.message) === "PRODUCT_GRADE_PRICE_MISSING"
-            ? "Un ou plusieurs produits n'ont pas encore de prix par grade pour le Burkina Faso."
+            ? "Un ou plusieurs produits n'ont pas encore de prix par grade pour ce catalogue pays."
             : "Un ou plusieurs produits du panier sont invalides.",
       });
     }
@@ -1144,7 +1144,7 @@ async function submit(req, res) {
     if (String(e.message) === "PRODUCT_GRADE_PRICE_MISSING") {
       return res.status(400).json({
         error:
-          "Un ou plusieurs produits n'ont pas encore de prix par grade pour le Burkina Faso.",
+          "Un ou plusieurs produits n'ont pas encore de prix par grade pour ce catalogue pays.",
       });
     }
     return res.status(500).json({ error: e.message || "Erreur submit" });
