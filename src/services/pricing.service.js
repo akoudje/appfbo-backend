@@ -4,6 +4,7 @@
 const prisma = require("../prisma");
 
 const DIRECT_GRADE_PRICE_COUNTRY_CODES = new Set(["BFA", "CIV"]);
+const STATE_STAMP_COUNTRY_CODES = new Set(["CIV"]);
 
 function round3(n) {
   return Math.round(Number(n || 0) * 1000) / 1000;
@@ -21,6 +22,23 @@ function computeDeliveryFeeFcfa({ deliveryMode, totalPoidsKg }) {
   if (w <= 3) return 2000;
   if (w <= 5) return 3000;
   return 5000;
+}
+
+function computeStateStampFcfa({ countryCode, taxableAmountFcfa }) {
+  const normalizedCountryCode = String(countryCode || "").trim().toUpperCase();
+  if (!STATE_STAMP_COUNTRY_CODES.has(normalizedCountryCode)) return 0;
+
+  const amount = Math.round(Number(taxableAmountFcfa || 0));
+  if (amount <= 5000) return 0;
+  if (amount <= 100000) return 100;
+  if (amount <= 500000) return 500;
+  if (amount <= 1000000) return 1000;
+  if (amount <= 5000000) return 2000;
+  return 5000;
+}
+
+function computePackagingFeeFcfa() {
+  return 0;
 }
 
 function applyDiscount(prixBaseFcfa, discountPercent) {
@@ -386,7 +404,16 @@ async function computePreorderTotals(preorderId, countryId) {
     totalPoidsKg: totalPoids,
   });
 
-  const totalFcfa = totalProduitsFcfa + fraisLivraisonFcfa;
+  const emballageFcfa = computePackagingFeeFcfa({
+    countryCode: preorder.country?.code,
+    totalProduitsFcfa,
+  });
+  const taxableAmountFcfa = totalProduitsFcfa + fraisLivraisonFcfa + emballageFcfa;
+  const timbreEtatFcfa = computeStateStampFcfa({
+    countryCode: preorder.country?.code,
+    taxableAmountFcfa,
+  });
+  const totalFcfa = taxableAmountFcfa + timbreEtatFcfa;
 
   return {
     preorder: {
@@ -400,6 +427,8 @@ async function computePreorderTotals(preorderId, countryId) {
       totalPoidsKg: round3(totalPoids),
       totalProduitsFcfa: toInt(totalProduitsFcfa),
       fraisLivraisonFcfa: toInt(fraisLivraisonFcfa),
+      timbreEtatFcfa: toInt(timbreEtatFcfa),
+      emballageFcfa: toInt(emballageFcfa),
       totalFcfa: toInt(totalFcfa),
     },
   };
@@ -481,7 +510,16 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
     totalPoidsKg: totalPoids,
   });
 
-  const totalFcfa = totalProduitsFcfa + fraisLivraisonFcfa;
+  const emballageFcfa = computePackagingFeeFcfa({
+    countryCode: preorder.country?.code,
+    totalProduitsFcfa,
+  });
+  const taxableAmountFcfa = totalProduitsFcfa + fraisLivraisonFcfa + emballageFcfa;
+  const timbreEtatFcfa = computeStateStampFcfa({
+    countryCode: preorder.country?.code,
+    taxableAmountFcfa,
+  });
+  const totalFcfa = taxableAmountFcfa + timbreEtatFcfa;
 
   return {
     preorder: {
@@ -495,6 +533,8 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
       totalPoidsKg: round3(totalPoids),
       totalProduitsFcfa: toInt(totalProduitsFcfa),
       fraisLivraisonFcfa: toInt(fraisLivraisonFcfa),
+      timbreEtatFcfa: toInt(timbreEtatFcfa),
+      emballageFcfa: toInt(emballageFcfa),
       totalFcfa: toInt(totalFcfa),
     },
   };
@@ -508,6 +548,8 @@ module.exports = {
   getPreorderPricingContext,
   getPreorderPricingContextForGrade,
   computeDeliveryFeeFcfa,
+  computeStateStampFcfa,
+  computePackagingFeeFcfa,
   computeLineFromProduct,
   applyDiscount,
   usesDirectGradePricing,
