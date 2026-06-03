@@ -3,7 +3,7 @@
 
 const prisma = require("../prisma");
 
-const DIRECT_GRADE_PRICE_COUNTRY_CODES = new Set(["BFA"]);
+const DIRECT_GRADE_PRICE_COUNTRY_CODES = new Set(["BFA", "CIV"]);
 
 function round3(n) {
   return Math.round(Number(n || 0) * 1000) / 1000;
