@@ -99,7 +99,7 @@ function parseMoney(raw) {
   if (!normalized) return null;
   const value = Number(normalized);
   if (!Number.isFinite(value) || value < 0) return null;
-  return Math.round(value);
+  return Math.round(value * 10000) / 10000;
 }
 
 function normalizeHeader(raw) {

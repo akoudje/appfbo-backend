@@ -632,7 +632,7 @@ model ProductGradePrice {
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
   grade Grade
-  prixFcfa Int
+  prixFcfa Decimal @db.Decimal(12, 4)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -970,7 +970,7 @@ model PreorderItem {
 
   prixCatalogueFcfa Int
   discountPercent   Decimal @default(0.00) @db.Decimal(5, 2)
-  prixUnitaireFcfa  Int
+  prixUnitaireFcfa  Decimal @db.Decimal(12, 4)
 
   ccUnitaire      Decimal @db.Decimal(10, 3)
   poidsUnitaireKg Decimal @db.Decimal(10, 3)

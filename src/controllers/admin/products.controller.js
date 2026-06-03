@@ -72,7 +72,7 @@ function parseGradePrices(input = {}) {
       errors.push(`${grade} invalide`);
       continue;
     }
-    result[grade] = Math.round(value);
+    result[grade] = Math.round(value * 10000) / 10000;
   }
 
   return { gradePrices: result, errors };

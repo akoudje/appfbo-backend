@@ -14,6 +14,25 @@ function toInt(n) {
   return Math.round(Number(n || 0));
 }
 
+function round4(n) {
+  return Math.round(Number(n || 0) * 10000) / 10000;
+}
+
+function roundHalfEven(n) {
+  const value = Number(n || 0);
+  if (!Number.isFinite(value)) return 0;
+  const sign = value < 0 ? -1 : 1;
+  const abs = Math.abs(value);
+  const floor = Math.floor(abs);
+  const fraction = abs - floor;
+
+  if (Math.abs(fraction - 0.5) < 1e-9) {
+    return sign * (floor % 2 === 0 ? floor : floor + 1);
+  }
+
+  return sign * Math.round(abs);
+}
+
 function computeDeliveryFeeFcfa({ deliveryMode, totalPoidsKg }) {
   if (deliveryMode !== "LIVRAISON") return 0;
 
@@ -221,11 +240,15 @@ function computeLineFromProduct(product, qty, discountPercent, countryId = null)
   const directGradePrice = Number(effectiveProduct.directGradePriceFcfa);
   const hasDirectGradePrice = Number.isFinite(directGradePrice) && directGradePrice >= 0;
   const prixUnitaireFcfa = hasDirectGradePrice
-    ? Math.round(directGradePrice)
+    ? round4(directGradePrice)
     : applyDiscount(prixCatalogueFcfa, discountPercent);
   const appliedDiscountPercent = hasDirectGradePrice ? 0 : discountPercent;
 
-  const lineTotalFcfa = prixUnitaireFcfa * safeQty;
+  const rawLineTotalFcfa = prixUnitaireFcfa * safeQty;
+  const lineTotalFcfa =
+    hasDirectGradePrice && safeQty === 1 && prixUnitaireFcfa % 1 !== 0
+      ? Math.ceil(prixUnitaireFcfa)
+      : roundHalfEven(rawLineTotalFcfa);
   const lineTotalCc = ccUnitaire * safeQty;
   const lineTotalPoids = poidsUnitaireKg * safeQty;
 
@@ -239,7 +262,7 @@ function computeLineFromProduct(product, qty, discountPercent, countryId = null)
     ccUnitaire: round3(ccUnitaire),
     poidsUnitaireKg: round3(poidsUnitaireKg),
 
-    lineTotalFcfa: toInt(lineTotalFcfa),
+    lineTotalFcfa,
     lineTotalCc: round3(lineTotalCc),
     lineTotalPoids: round3(lineTotalPoids),
   };
@@ -552,5 +575,6 @@ module.exports = {
   computePackagingFeeFcfa,
   computeLineFromProduct,
   applyDiscount,
+  roundHalfEven,
   usesDirectGradePricing,
 };
