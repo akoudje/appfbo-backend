@@ -16,7 +16,7 @@ const PAYMENT_MODE_LABELS = {
   BANK_TRANSFER: "Virement bancaire",
   ECOBANK_PAY: "Ecobank Pay",
   TPE_CARD: "TPE / Carte bancaire",
-  MANUAL: "Paiement manuel",
+  MANUAL: "Autre paiement manuel",
   UNKNOWN: "Non renseigné",
 };
 
@@ -27,7 +27,6 @@ const DECLARATION_PAYMENT_MODES = [
   "TPE_CARD",
   "BANK_TRANSFER",
   "ECOBANK_PAY",
-  "MANUAL",
 ];
 
 function normalizeDateKey(value) {
@@ -182,7 +181,14 @@ function serializeClosure(closure) {
       discrepancyFcfa: line.discrepancyFcfa,
       transactionCount: line.transactionCount,
       note: line.note || "",
-    })),
+    })).filter(
+      (line) =>
+        line.paymentMode !== "MANUAL" ||
+        line.expectedFcfa > 0 ||
+        line.declaredFcfa > 0 ||
+        line.transactionCount > 0 ||
+        String(line.note || "").trim(),
+    ),
   };
 }
 
