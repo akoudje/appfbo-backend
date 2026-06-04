@@ -20,6 +20,16 @@ const PAYMENT_MODE_LABELS = {
   UNKNOWN: "Non renseigné",
 };
 
+const DECLARATION_PAYMENT_MODES = [
+  "ESPECES",
+  "WAVE",
+  "ORANGE_MONEY",
+  "TPE_CARD",
+  "BANK_TRANSFER",
+  "ECOBANK_PAY",
+  "MANUAL",
+];
+
 function normalizeDateKey(value) {
   const raw = String(value || "").trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
@@ -74,6 +84,18 @@ function assertCanAccessClosure(req, closure) {
 function buildLineTotalsFromOrders(orders = []) {
   const map = new Map();
 
+  for (const paymentMode of DECLARATION_PAYMENT_MODES) {
+    map.set(paymentMode, {
+      paymentMode,
+      label: paymentModeLabel(paymentMode),
+      expectedFcfa: 0,
+      declaredFcfa: 0,
+      discrepancyFcfa: 0,
+      transactionCount: 0,
+      note: null,
+    });
+  }
+
   for (const order of orders) {
     const latestTx = order?.cashierTransactions?.[0] || null;
     const paymentMode = normalizePaymentMode(
@@ -100,7 +122,12 @@ function buildLineTotalsFromOrders(orders = []) {
     map.set(paymentMode, current);
   }
 
-  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+  return Array.from(map.values()).sort((a, b) => {
+    const ai = DECLARATION_PAYMENT_MODES.indexOf(a.paymentMode);
+    const bi = DECLARATION_PAYMENT_MODES.indexOf(b.paymentMode);
+    if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    return a.label.localeCompare(b.label);
+  });
 }
 
 function summarizeLines(lines = []) {
