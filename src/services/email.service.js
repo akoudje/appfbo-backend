@@ -12,6 +12,13 @@ try {
 
 let transporter = null;
 let cachedTransportConfigKey = null;
+let smtpBlockedUntil = 0;
+let smtpBlockedReason = null;
+
+const SMTP_AUTH_COOLDOWN_MS = Math.max(
+  5 * 60 * 1000,
+  Number.parseInt(process.env.SMTP_AUTH_COOLDOWN_SECONDS || "900", 10) * 1000,
+);
 
 function normalizeEmail(value = "") {
   const email = String(value || "").trim().toLowerCase();
@@ -75,6 +82,36 @@ function getTransportConfigKey(cfg) {
   ].join("|");
 }
 
+function isSmtpAuthFailure(error) {
+  const code = String(error?.code || "").toUpperCase();
+  const responseCode = Number(error?.responseCode || 0);
+  const message = String(error?.message || error?.response || "").toLowerCase();
+  return (
+    responseCode === 535 ||
+    code === "EAUTH" ||
+    message.includes("invalid login") ||
+    message.includes("failed login") ||
+    message.includes("too many failed login")
+  );
+}
+
+function getSmtpBlockedResult() {
+  if (!smtpBlockedUntil || Date.now() >= smtpBlockedUntil) return null;
+  const retryAt = new Date(smtpBlockedUntil).toISOString();
+  return {
+    accepted: false,
+    provider: "SMTP",
+    providerMessageId: null,
+    rawPayload: {
+      retryAt,
+      reason: smtpBlockedReason,
+    },
+    errorCode: "SMTP_AUTH_COOLDOWN",
+    errorMessage:
+      `Envoi email temporairement suspendu après échec d'authentification SMTP. Réessayez après ${retryAt}.`,
+  };
+}
+
 function ensureTransporter() {
   if (!smtpConfigured()) return null;
   if (!nodemailer) return null;
@@ -126,6 +163,9 @@ async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
 
   if (smtpConfigured() && nodemailer) {
     try {
+      const blocked = getSmtpBlockedResult();
+      if (blocked) return blocked;
+
       const mailer = ensureTransporter();
       if (!mailer) {
         throw new Error("SMTP_TRANSPORT_UNAVAILABLE");
@@ -158,6 +198,13 @@ async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
         errorMessage: null,
       };
     } catch (error) {
+      if (isSmtpAuthFailure(error)) {
+        smtpBlockedUntil = Date.now() + SMTP_AUTH_COOLDOWN_MS;
+        smtpBlockedReason = error?.message || error?.response || "SMTP authentication failed";
+        transporter = null;
+        cachedTransportConfigKey = null;
+      }
+
       return {
         accepted: false,
         provider: "SMTP",
