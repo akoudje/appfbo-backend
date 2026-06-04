@@ -115,6 +115,13 @@ enum OrderPaymentStatus {
   REFUNDED
 }
 
+enum CashClosureStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
 enum BankPaymentStatus {
   NOT_REQUIRED
   WAITING_PROOF
@@ -379,6 +386,7 @@ model Country {
   payments                Payment[]
   paymentProviderAccounts PaymentProviderAccount[]
   paymentProviderRules    PaymentProviderRule[]
+  cashClosures            CashClosure[]
   customerOtpChallenges   CustomerOtpChallenge[]
   bankPaymentProofs       BankPaymentProof[]
   stockMovements          StockMovement[]
@@ -514,6 +522,9 @@ model AdminUser {
   paymentTransactionLogs PaymentTransactionLog[]
   reviewedBankPaymentProofs BankPaymentProof[]
   cashierTransactions CashierTransaction[] @relation("CashierTransactionCashier")
+  cashClosuresAsCashier CashClosure[] @relation("CashClosureCashier")
+  cashClosuresSubmitted CashClosure[] @relation("CashClosureSubmittedBy")
+  cashClosuresReviewed CashClosure[] @relation("CashClosureReviewedBy")
   checkedPreparationItems PreparationChecklistItem[]
   createdPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyCreatedBy")
   resolvedPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyResolvedBy")
@@ -952,6 +963,66 @@ model CashierTransaction {
   @@index([cashierId, createdAt])
   @@index([paymentMode, createdAt])
   @@index([preparationLaunchedAt])
+}
+
+model CashClosure {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  cashierId String
+  cashier AdminUser @relation("CashClosureCashier", fields: [cashierId], references: [id], onDelete: Restrict)
+
+  submittedById String?
+  submittedBy AdminUser? @relation("CashClosureSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+
+  reviewedById String?
+  reviewedBy AdminUser? @relation("CashClosureReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  dateKey String
+  status CashClosureStatus @default(DRAFT)
+
+  totalExpectedFcfa Int @default(0)
+  totalDeclaredFcfa Int @default(0)
+  discrepancyFcfa Int @default(0)
+  transactionCount Int @default(0)
+
+  note String? @db.Text
+  reviewNote String? @db.Text
+  submittedAt DateTime?
+  reviewedAt DateTime?
+
+  lines CashClosureLine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, cashierId, dateKey])
+  @@index([countryId, dateKey])
+  @@index([cashierId, dateKey])
+  @@index([status, dateKey])
+}
+
+model CashClosureLine {
+  id String @id @default(cuid())
+
+  closureId String
+  closure CashClosure @relation(fields: [closureId], references: [id], onDelete: Cascade)
+
+  paymentMode String
+  label String
+  expectedFcfa Int @default(0)
+  declaredFcfa Int @default(0)
+  discrepancyFcfa Int @default(0)
+  transactionCount Int @default(0)
+  note String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([closureId, paymentMode])
+  @@index([paymentMode])
 }
 
 model PreorderItem {

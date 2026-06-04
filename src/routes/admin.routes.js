@@ -38,6 +38,7 @@ const statsRoutes = require("./admin/stats.routes");
 const settingsRoutes = require("./admin/settings.routes");
 const productsRoutes = require("./admin/products.routes");
 const cashierRoutes = require("./admin/cashier.routes");
+const cashClosuresRoutes = require("./admin/cashClosures.routes");
 const stockRoutes = require("./admin/stock.routes");
 const reportsRoutes = require("./admin/reports.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
@@ -120,6 +121,7 @@ router.use("/stats", statsRoutes);
 router.use("/reports", reportsRoutes);
 router.use("/products", productsRoutes);
 router.use("/cashier", cashierRoutes);
+router.use("/cash-closures", cashClosuresRoutes);
 router.use("/stock", stockRoutes);
 
 router.get(
