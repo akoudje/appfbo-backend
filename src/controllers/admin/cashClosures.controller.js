@@ -29,6 +29,17 @@ const DECLARATION_PAYMENT_MODES = [
   "ECOBANK_PAY",
 ];
 
+function isVisibleDeclarationLine(line) {
+  const mode = normalizePaymentMode(line?.paymentMode);
+  if (DECLARATION_PAYMENT_MODES.includes(mode)) return true;
+  return (
+    toAmount(line?.expectedFcfa) > 0 ||
+    toAmount(line?.declaredFcfa) > 0 ||
+    Number(line?.transactionCount || 0) > 0 ||
+    String(line?.note || "").trim().length > 0
+  );
+}
+
 function normalizeDateKey(value) {
   const raw = String(value || "").trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
@@ -172,23 +183,18 @@ function serializeClosure(closure) {
     cashier: serializeAdmin(closure.cashier),
     submittedBy: serializeAdmin(closure.submittedBy),
     reviewedBy: serializeAdmin(closure.reviewedBy),
-    lines: (closure.lines || []).map((line) => ({
-      id: line.id,
-      paymentMode: line.paymentMode,
-      label: line.label,
-      expectedFcfa: line.expectedFcfa,
-      declaredFcfa: line.declaredFcfa,
-      discrepancyFcfa: line.discrepancyFcfa,
-      transactionCount: line.transactionCount,
-      note: line.note || "",
-    })).filter(
-      (line) =>
-        line.paymentMode !== "MANUAL" ||
-        line.expectedFcfa > 0 ||
-        line.declaredFcfa > 0 ||
-        line.transactionCount > 0 ||
-        String(line.note || "").trim(),
-    ),
+    lines: (closure.lines || [])
+      .map((line) => ({
+        id: line.id,
+        paymentMode: line.paymentMode,
+        label: line.label,
+        expectedFcfa: line.expectedFcfa,
+        declaredFcfa: line.declaredFcfa,
+        discrepancyFcfa: line.discrepancyFcfa,
+        transactionCount: line.transactionCount,
+        note: line.note || "",
+      }))
+      .filter(isVisibleDeclarationLine),
   };
 }
 
@@ -277,6 +283,10 @@ async function syncClosureSnapshot(tx, closure, orders) {
 
   for (const existing of existingLines) {
     if (freshModes.has(existing.paymentMode)) continue;
+    if (!isVisibleDeclarationLine(existing)) {
+      await tx.cashClosureLine.delete({ where: { id: existing.id } });
+      continue;
+    }
     await tx.cashClosureLine.update({
       where: { id: existing.id },
       data: {
