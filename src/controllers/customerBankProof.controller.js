@@ -72,13 +72,29 @@ function uploadBankProofMiddleware(req, res, next) {
 function resolveCustomerPaymentWindow(order) {
   const paymentExpiryHours = getPaymentExpiryHours();
   const invoicedAt = order?.invoicedAt ? new Date(order.invoicedAt) : null;
+  const explicitPaymentExpiresAt = order?.paymentExpiresAt
+    ? new Date(order.paymentExpiresAt)
+    : null;
   const paymentExpiresAt =
-    invoicedAt && !Number.isNaN(invoicedAt.getTime())
+    explicitPaymentExpiresAt && !Number.isNaN(explicitPaymentExpiresAt.getTime())
+      ? explicitPaymentExpiresAt
+      : invoicedAt && !Number.isNaN(invoicedAt.getTime())
       ? new Date(invoicedAt.getTime() + paymentExpiryHours * 60 * 60 * 1000)
       : null;
+  const resolvedPaymentExpiryHours =
+    explicitPaymentExpiresAt &&
+    invoicedAt &&
+    !Number.isNaN(explicitPaymentExpiresAt.getTime()) &&
+    !Number.isNaN(invoicedAt.getTime()) &&
+    explicitPaymentExpiresAt.getTime() > invoicedAt.getTime()
+      ? Math.max(
+          1,
+          Math.ceil((explicitPaymentExpiresAt.getTime() - invoicedAt.getTime()) / (60 * 60 * 1000)),
+        )
+      : paymentExpiryHours;
 
   return {
-    paymentExpiryHours,
+    paymentExpiryHours: resolvedPaymentExpiryHours,
     paymentExpiresAt,
     isExpired:
       paymentExpiresAt instanceof Date && !Number.isNaN(paymentExpiresAt.getTime())
@@ -90,10 +106,26 @@ function resolveCustomerPaymentWindow(order) {
 function buildPublicBankProofContext(order) {
   const paymentExpiryHours = getPaymentExpiryHours();
   const invoicedAt = order?.invoicedAt ? new Date(order.invoicedAt) : null;
+  const explicitPaymentExpiresAt = order?.paymentExpiresAt
+    ? new Date(order.paymentExpiresAt)
+    : null;
   const paymentExpiresAt =
-    invoicedAt && !Number.isNaN(invoicedAt.getTime())
+    explicitPaymentExpiresAt && !Number.isNaN(explicitPaymentExpiresAt.getTime())
+      ? explicitPaymentExpiresAt.toISOString()
+      : invoicedAt && !Number.isNaN(invoicedAt.getTime())
       ? new Date(invoicedAt.getTime() + paymentExpiryHours * 60 * 60 * 1000).toISOString()
       : null;
+  const resolvedPaymentExpiryHours =
+    explicitPaymentExpiresAt &&
+    invoicedAt &&
+    !Number.isNaN(explicitPaymentExpiresAt.getTime()) &&
+    !Number.isNaN(invoicedAt.getTime()) &&
+    explicitPaymentExpiresAt.getTime() > invoicedAt.getTime()
+      ? Math.max(
+          1,
+          Math.ceil((explicitPaymentExpiresAt.getTime() - invoicedAt.getTime()) / (60 * 60 * 1000)),
+        )
+      : paymentExpiryHours;
 
   const latestProof = Array.isArray(order?.bankPaymentProofs)
     ? order.bankPaymentProofs[0] || null
@@ -115,7 +147,7 @@ function buildPublicBankProofContext(order) {
     bankPaymentStatus: order?.bankPaymentStatus || null,
     bankPaymentProofs: latestProof ? [latestProof] : [],
     latestBankProof: latestProof,
-    paymentExpiryHours,
+    paymentExpiryHours: resolvedPaymentExpiryHours,
     paymentExpiresAt,
     ecobankPay:
       String(order?.preorderPaymentMode || "").trim().toUpperCase() === "ECOBANK_PAY"
@@ -390,6 +422,7 @@ async function submitMyBankProof(req, res) {
         preorderPaymentMode: true,
         factureReference: true,
         invoicedAt: true,
+        paymentExpiresAt: true,
       },
     });
 
@@ -490,6 +523,7 @@ async function getPublicBankProofContext(req, res) {
         factureReference: true,
         paymentCollectionCode: true,
         invoicedAt: true,
+        paymentExpiresAt: true,
         bankPaymentStatus: true,
         country: {
           select: {
@@ -620,6 +654,7 @@ async function getPublicBankProofContextByOrderId(req, res) {
         factureReference: true,
         paymentCollectionCode: true,
         invoicedAt: true,
+        paymentExpiresAt: true,
         bankPaymentStatus: true,
         country: {
           select: {
@@ -756,6 +791,7 @@ async function submitPublicBankProof(req, res) {
         preorderPaymentMode: true,
         factureReference: true,
         invoicedAt: true,
+        paymentExpiresAt: true,
       },
     });
 
@@ -837,6 +873,7 @@ async function submitPublicBankProofByOrderId(req, res) {
         preorderPaymentMode: true,
         factureReference: true,
         invoicedAt: true,
+        paymentExpiresAt: true,
       },
     });
 

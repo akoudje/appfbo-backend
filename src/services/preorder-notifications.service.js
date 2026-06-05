@@ -587,6 +587,7 @@ function buildTemplateContext({
   const paymentFlow = resolvePaymentFlowKey(preorder, paymentLink);
   const bankProofUploadLink =
     paymentFlow === "BANK_TRANSFER" || paymentFlow === "ECOBANK_PAY" ? paymentLink : "";
+  const paymentExpiryHours = resolvePaymentExpiryHoursForPreorder(preorder);
 
   return {
     purpose: normalizePurposeKey(purpose),
@@ -602,10 +603,31 @@ function buildTemplateContext({
     bankProofUploadLink,
     paymentFlow,
     pickupCode,
-    paymentExpiryHours: String(getPaymentExpiryHours()),
+    paymentExpiryHours: String(paymentExpiryHours),
     supportPhone: supportPhone || "",
     pickupAddress: pickupAddress || "",
   };
+}
+
+function resolvePaymentExpiryHoursForPreorder(preorder) {
+  const defaultHours = getPaymentExpiryHours();
+  const invoicedAt = preorder?.invoicedAt ? new Date(preorder.invoicedAt) : null;
+  const paymentExpiresAt = preorder?.paymentExpiresAt
+    ? new Date(preorder.paymentExpiresAt)
+    : null;
+  if (
+    invoicedAt &&
+    paymentExpiresAt &&
+    !Number.isNaN(invoicedAt.getTime()) &&
+    !Number.isNaN(paymentExpiresAt.getTime()) &&
+    paymentExpiresAt.getTime() > invoicedAt.getTime()
+  ) {
+    return Math.max(
+      1,
+      Math.ceil((paymentExpiresAt.getTime() - invoicedAt.getTime()) / (60 * 60 * 1000)),
+    );
+  }
+  return defaultHours;
 }
 
 function buildSmsTemplateCandidates({ purpose, context }) {

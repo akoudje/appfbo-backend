@@ -23,14 +23,30 @@ function attachCustomerPaymentWindow(order) {
 
   const paymentExpiryHours = getPaymentExpiryHours();
   const invoicedAt = order.invoicedAt ? new Date(order.invoicedAt) : null;
+  const explicitPaymentExpiresAt = order.paymentExpiresAt
+    ? new Date(order.paymentExpiresAt)
+    : null;
   const paymentExpiresAt =
-    invoicedAt && !Number.isNaN(invoicedAt.getTime())
-      ? new Date(invoicedAt.getTime() + paymentExpiryHours * 60 * 60 * 1000).toISOString()
-      : null;
+    explicitPaymentExpiresAt && !Number.isNaN(explicitPaymentExpiresAt.getTime())
+      ? explicitPaymentExpiresAt.toISOString()
+      : invoicedAt && !Number.isNaN(invoicedAt.getTime())
+        ? new Date(invoicedAt.getTime() + paymentExpiryHours * 60 * 60 * 1000).toISOString()
+        : null;
+  const resolvedPaymentExpiryHours =
+    explicitPaymentExpiresAt &&
+    invoicedAt &&
+    !Number.isNaN(explicitPaymentExpiresAt.getTime()) &&
+    !Number.isNaN(invoicedAt.getTime()) &&
+    explicitPaymentExpiresAt.getTime() > invoicedAt.getTime()
+      ? Math.max(
+          1,
+          Math.ceil((explicitPaymentExpiresAt.getTime() - invoicedAt.getTime()) / (60 * 60 * 1000)),
+        )
+      : paymentExpiryHours;
 
   return {
     ...order,
-    paymentExpiryHours,
+    paymentExpiryHours: resolvedPaymentExpiryHours,
     paymentExpiresAt,
   };
 }
@@ -68,6 +84,7 @@ async function listMyOrders(req, res) {
         factureReference: true,
         paymentCollectionCode: true,
         invoicedAt: true,
+        paymentExpiresAt: true,
         parcelNumber: true,
         bankPaymentStatus: true,
         bankPaymentDueAt: true,

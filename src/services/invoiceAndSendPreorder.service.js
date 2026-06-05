@@ -297,9 +297,9 @@ function buildInvoiceMessage({
     normalizedMode.includes("BANK_TRANSFER") ||
     normalizedMode.includes("VIREMENT") ||
     normalizedMode.includes("BANK");
+  const expiryHours = resolvePaymentExpiryHours(preorder);
 
   if (isEcobankPayFlow) {
-    const expiryHours = getPaymentExpiryHours();
     if (normalizedLink) {
       return firstSmsCandidate([
         `Code ${collectionCode}. Montant ${amountFmt}F. Ecobank Pay puis depot preuve sous ${expiryHours}H: ${normalizedLink}`,
@@ -315,7 +315,6 @@ function buildInvoiceMessage({
   }
 
   if (isBankTransferFlow) {
-    const expiryHours = getPaymentExpiryHours();
     if (normalizedLink) {
       return firstSmsCandidate([
         `Code ${collectionCode}. Montant ${amountFmt}F. Virement puis depot preuve sous ${expiryHours}H: ${normalizedLink}`,
@@ -330,12 +329,54 @@ function buildInvoiceMessage({
     ]);
   }
 
-  const expiryHours = getPaymentExpiryHours();
   return firstSmsCandidate([
     `Code ${collectionCode}. Montant ${amountFmt}F. Rendez-vous a la caisse FLP pour regler sous ${expiryHours}H.`,
     `Code ${collectionCode}. ${amountFmt}F. Merci de regler a la caisse FLP sous ${expiryHours}H.`,
     `Code ${collectionCode}. Paiement attendu a la caisse FLP sous ${expiryHours}H.`,
   ]);
+}
+
+function normalizeFutureDate(value, now = new Date()) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  if (date.getTime() <= now.getTime()) return null;
+  return date;
+}
+
+function normalizePositiveMinutes(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return Math.max(1, Math.round(num));
+}
+
+function buildPaymentExpiresAt({ now, paymentExpiresAtInput, paymentWindowMinutesInput }) {
+  const explicit = normalizeFutureDate(paymentExpiresAtInput, now);
+  if (explicit) return explicit;
+  const minutes = normalizePositiveMinutes(paymentWindowMinutesInput);
+  if (!minutes) return null;
+  return new Date(now.getTime() + minutes * 60 * 1000);
+}
+
+function resolvePaymentExpiryHours(preorder) {
+  const defaultHours = getPaymentExpiryHours();
+  const invoicedAt = preorder?.invoicedAt ? new Date(preorder.invoicedAt) : null;
+  const paymentExpiresAt = preorder?.paymentExpiresAt
+    ? new Date(preorder.paymentExpiresAt)
+    : null;
+  if (
+    invoicedAt &&
+    paymentExpiresAt &&
+    !Number.isNaN(invoicedAt.getTime()) &&
+    !Number.isNaN(paymentExpiresAt.getTime()) &&
+    paymentExpiresAt.getTime() > invoicedAt.getTime()
+  ) {
+    return Math.max(
+      1,
+      Math.ceil((paymentExpiresAt.getTime() - invoicedAt.getTime()) / (60 * 60 * 1000)),
+    );
+  }
+  return defaultHours;
 }
 
 /**
@@ -352,12 +393,19 @@ async function invoiceAndSendPreorder({
   invoiceNote = "",
   billingGradeInput = "",
   invoiceAmountOverrideInput = "",
+  paymentExpiresAtInput = null,
+  paymentWindowMinutesInput = null,
 }) {
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
   }
 
   const now = new Date();
+  const paymentExpiresAt = buildPaymentExpiresAt({
+    now,
+    paymentExpiresAtInput,
+    paymentWindowMinutesInput,
+  });
 
   // 1) Charger la commande
   const existingPreorder = await prisma.preorder.findUnique({
@@ -474,6 +522,7 @@ async function invoiceAndSendPreorder({
         as400InvoiceTotalFcfa: effectiveInvoiceTotalFcfa || 0,
         billingAdjustmentReason: null,
         invoicedAt: now,
+        paymentExpiresAt,
         invoicedById: actorAdminId || existingPreorder.invoicedById || null,
         totalCc: String(Number(pricingSummary.totals.totalCc || 0).toFixed(3)),
         totalPoidsKg: String(
@@ -517,6 +566,7 @@ async function invoiceAndSendPreorder({
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
+        paymentExpiresAt: paymentExpiresAt ? paymentExpiresAt.toISOString() : null,
         actorName,
       },
       actorAdminId,
@@ -653,6 +703,9 @@ async function invoiceAndSendPreorder({
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
+        paymentExpiresAt: invoicedPreorder.paymentExpiresAt
+          ? new Date(invoicedPreorder.paymentExpiresAt).toISOString()
+          : null,
         messageId: notificationResult.messageId || null,
         messagePurpose,
         messageStatus: finalMessageStatus,

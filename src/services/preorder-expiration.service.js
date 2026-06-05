@@ -126,6 +126,12 @@ function buildInvoiceExpiryAt(invoicedAt, settings = null) {
   );
 }
 
+function resolveInvoiceExpiryAt(order, settings = null) {
+  const explicit = order?.paymentExpiresAt ? new Date(order.paymentExpiresAt) : null;
+  if (explicit && !Number.isNaN(explicit.getTime())) return explicit;
+  return buildInvoiceExpiryAt(order?.invoicedAt, settings);
+}
+
 function formatFcfa(value) {
   const num = Number(value || 0);
   if (!Number.isFinite(num)) return "0 FCFA";
@@ -257,7 +263,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     return { ok: false, reason: "BANK_PROOF_ALREADY_SUBMITTED", preorder: order };
   }
   const countrySettings = order.country?.settings || null;
-  const expiryAt = buildInvoiceExpiryAt(order.invoicedAt, countrySettings);
+  const expiryAt = resolveInvoiceExpiryAt(order, countrySettings);
   if (!expiryAt || now.getTime() < expiryAt.getTime()) {
     return { ok: false, reason: "PAYMENT_WINDOW_NOT_EXPIRED", preorder: order };
   }
@@ -349,7 +355,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     ) {
       return null;
     }
-    const currentExpiryAt = buildInvoiceExpiryAt(current.invoicedAt, countrySettings);
+    const currentExpiryAt = resolveInvoiceExpiryAt(current, countrySettings);
     if (!currentExpiryAt || now.getTime() < currentExpiryAt.getTime()) {
       return null;
     }
@@ -450,6 +456,9 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
           mode: "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW",
           expiryHours: getEffectiveExpiryHours(countrySettings),
           invoicedAt: current.invoicedAt ? new Date(current.invoicedAt).toISOString() : null,
+          paymentExpiresAt: current.paymentExpiresAt
+            ? new Date(current.paymentExpiresAt).toISOString()
+            : null,
           expiredAt: currentExpiryAt.toISOString(),
         },
         actorAdminId: null,
@@ -529,6 +538,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
       id: true,
       preorderNumber: true,
       invoicedAt: true,
+      paymentExpiresAt: true,
       totalFcfa: true,
       as400InvoiceTotalFcfa: true,
       preorderPaymentMode: true,
@@ -555,7 +565,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
   for (const candidate of candidates) {
     const countrySettings = candidate.country?.settings || null;
     const reminderAt = buildReminderCutoffAt(candidate.invoicedAt, countrySettings);
-    const expiryAt = buildInvoiceExpiryAt(candidate.invoicedAt, countrySettings);
+    const expiryAt = resolveInvoiceExpiryAt(candidate, countrySettings);
     if (!reminderAt || !expiryAt) continue;
     if (now.getTime() < reminderAt.getTime()) continue;
     if (now.getTime() >= expiryAt.getTime()) continue;
@@ -688,6 +698,7 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
       id: true,
       preorderNumber: true,
       invoicedAt: true,
+      paymentExpiresAt: true,
       status: true,
       paymentStatus: true,
       preorderPaymentMode: true,
@@ -709,10 +720,7 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
   });
 
   const dueCandidates = candidates.filter((candidate) => {
-    const expiryAt = buildInvoiceExpiryAt(
-      candidate.invoicedAt,
-      candidate.country?.settings || null,
-    );
+    const expiryAt = resolveInvoiceExpiryAt(candidate, candidate.country?.settings || null);
     return expiryAt && now.getTime() >= expiryAt.getTime();
   });
 

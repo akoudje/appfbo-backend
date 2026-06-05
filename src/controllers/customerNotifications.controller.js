@@ -231,6 +231,7 @@ async function loadScopedOrdersForCustomer({ fboId, numeroFbo }) {
       totalFcfa: true,
       paymentCollectionCode: true,
       invoicedAt: true,
+      paymentExpiresAt: true,
       paidAt: true,
       preparationLaunchedAt: true,
       preparedAt: true,

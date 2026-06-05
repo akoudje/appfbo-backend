@@ -746,6 +746,7 @@ model Preorder {
   billingAdjustmentReason String? @db.Text
   parcelNumber      String? @unique
   invoicedAt        DateTime?
+  paymentExpiresAt  DateTime?
   invoicedById      String?
   invoicedByAdmin   AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
 
@@ -848,6 +849,7 @@ model Preorder {
   @@index([fulfilledById])
   @@index([cancelledById])
   @@index([factureReference])
+  @@index([paymentExpiresAt])
   @@index([paymentCollectionCode])
   @@index([activePaymentId])
   @@index([bankPaymentStatus, bankPaymentDueAt])

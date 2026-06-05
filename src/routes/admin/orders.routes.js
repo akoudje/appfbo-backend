@@ -47,6 +47,12 @@ router.post(
 );
 
 router.post(
+  "/:id/relaunch-payment",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.relaunchPayment,
+);
+
+router.post(
   "/:id/billing/items/:itemId/replace",
   requirePermission(Permission.INVOICE_CREATE),
   ordersController.replaceBillingOrderItem,

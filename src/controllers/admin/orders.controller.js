@@ -52,6 +52,31 @@ function buildFboSearchTerms(value) {
   return Array.from(new Set([raw, formatted].filter(Boolean)));
 }
 
+function normalizeRelaunchPaymentWindowMinutes(body = {}) {
+  const rawMinutes =
+    body.durationMinutes ??
+    body.paymentWindowMinutes ??
+    body.minutes ??
+    null;
+  const rawHours =
+    body.durationHours ??
+    body.paymentWindowHours ??
+    body.hours ??
+    null;
+
+  const minutes = Number(rawMinutes);
+  if (Number.isFinite(minutes) && minutes > 0) {
+    return Math.min(30 * 24 * 60, Math.max(1, Math.round(minutes)));
+  }
+
+  const hours = Number(rawHours);
+  if (Number.isFinite(hours) && hours > 0) {
+    return Math.min(30 * 24 * 60, Math.max(1, Math.round(hours * 60)));
+  }
+
+  return 24 * 60;
+}
+
 function normalizeDateStart(d) {
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return null;
@@ -1117,6 +1142,212 @@ async function invoiceOrder(req, res) {
 
     return res.status(500).json({
       message: e.message || "Erreur serveur (invoiceOrder)",
+    });
+  }
+}
+
+async function relaunchPayment(req, res) {
+  const { id } = req.params;
+  const actorName = actorLabel(req);
+  const actorAdminId = req.user?.id || null;
+  const durationMinutes = normalizeRelaunchPaymentWindowMinutes(req.body || {});
+  const paymentExpiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
+  const note = String(req.body?.note || "").trim();
+
+  try {
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: true,
+        logs: {
+          orderBy: { createdAt: "desc" },
+          take: 20,
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const status = String(order.status || "").toUpperCase();
+    const paymentStatus = String(order.paymentStatus || "").toUpperCase();
+    if (status !== "CANCELLED" || paymentStatus === "PAID") {
+      return res.status(400).json({
+        message:
+          "Seule une commande annulée et non payée peut être relancée pour paiement.",
+      });
+    }
+
+    if (!Array.isArray(order.items) || order.items.length === 0) {
+      return res.status(400).json({
+        message:
+          "Commande incohérente : elle ne contient aucun article et ne peut pas être relancée.",
+      });
+    }
+
+    const autoCancelLog = order.logs.find(
+      (log) =>
+        String(log.action || "").toUpperCase() === "CANCEL" &&
+        String(log.meta?.mode || "").toUpperCase() ===
+          "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW",
+    );
+    const cancelReason = String(order.cancelReason || "").toLowerCase();
+    const isAutoExpiredCancel =
+      Boolean(autoCancelLog) ||
+      (cancelReason.includes("automatique") &&
+        cancelReason.includes("sans paiement"));
+
+    if (!isAutoExpiredCancel) {
+      return res.status(400).json({
+        message:
+          "Cette relance est réservée aux commandes annulées automatiquement après expiration du délai de paiement.",
+      });
+    }
+
+    if (!String(order.factureReference || "").trim()) {
+      return res.status(400).json({
+        message:
+          "Impossible de relancer cette commande : aucune référence AS400 n'est enregistrée.",
+      });
+    }
+
+    const previousSnapshot = {
+      status: order.status,
+      cancelledAt: order.cancelledAt,
+      cancelReason: order.cancelReason,
+      cancelledById: order.cancelledById,
+      billingWorkStatus: order.billingWorkStatus,
+      billingCompletedAt: order.billingCompletedAt,
+      activePaymentId: order.activePaymentId,
+      paidAt: order.paidAt,
+    };
+
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.updateMany({
+        where: {
+          preorderId: order.id,
+          status: {
+            notIn: ["SUCCEEDED", "REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED"],
+          },
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date(),
+        },
+      });
+
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "SUBMITTED",
+          paymentStatus: "UNPAID",
+          cancelledAt: null,
+          cancelReason: null,
+          cancelledById: null,
+          activePaymentId: null,
+          paidAt: null,
+          billingWorkStatus: "QUEUED",
+          billingQueueEnteredAt: new Date(),
+          billingCompletedAt: null,
+          billingLastActivityAt: new Date(),
+          paymentExpiresAt,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "PAYMENT_PENDING",
+        `Relance du paiement pour ${durationMinutes} minute(s).`,
+        {
+          mode: "ADMIN_RELAUNCH_PAYMENT_AFTER_AUTO_CANCEL",
+          durationMinutes,
+          paymentExpiresAt: paymentExpiresAt.toISOString(),
+          previousStatus: order.status,
+          note: note || null,
+        },
+        actorAdminId,
+      );
+    });
+
+    try {
+      const result = await invoiceAndSendPreorder({
+        req,
+        preorderId: order.id,
+        actorName,
+        actorAdminId,
+        invoiceRefInput: order.factureReference,
+        whatsappToInput: order.factureWhatsappTo || "",
+        notificationEmailInput: order.fboEmail,
+        invoiceNote: note || "Relance du délai de paiement.",
+        billingGradeInput: order.billingGrade || order.fboGrade,
+        invoiceAmountOverrideInput:
+          order.as400InvoiceTotalFcfa || order.totalFcfa || "",
+        paymentExpiresAtInput: paymentExpiresAt,
+      });
+
+      publishRealtimeEvent({
+        countryId: result?.preorder?.countryId || req.countryId,
+        eventKey: "cashier_collect_new",
+        orderId: result?.preorder?.id || id,
+        meta: {
+          status: result?.preorder?.status || "INVOICED",
+          paymentStatus: result?.preorder?.paymentStatus || null,
+          relaunched: true,
+          paymentExpiresAt: paymentExpiresAt.toISOString(),
+        },
+      });
+
+      return res.json({
+        ...result.preorder,
+        paymentExpiresAt,
+      });
+    } catch (error) {
+      await prisma.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: previousSnapshot.status,
+          cancelledAt: previousSnapshot.cancelledAt,
+          cancelReason: previousSnapshot.cancelReason,
+          cancelledById: previousSnapshot.cancelledById,
+          billingWorkStatus: previousSnapshot.billingWorkStatus,
+          billingCompletedAt: previousSnapshot.billingCompletedAt,
+          activePaymentId: previousSnapshot.activePaymentId,
+          paidAt: previousSnapshot.paidAt,
+          paymentExpiresAt: order.paymentExpiresAt || null,
+        },
+      });
+      throw error;
+    }
+  } catch (e) {
+    console.error("relaunchPayment error:", e);
+
+    if (e.message === "PREORDER_NOT_FOUND") {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (e.message === "PREORDER_NOT_INVOICEABLE") {
+      return res.status(400).json({
+        message: "Cette commande ne peut pas être relancée actuellement.",
+      });
+    }
+
+    if (e.message === "PREORDER_EMPTY_ITEMS") {
+      return res.status(400).json({
+        message:
+          "Commande incohérente : elle ne contient aucun article et ne peut pas être relancée.",
+      });
+    }
+
+    if (e.message === "INVALID_NOTIFICATION_EMAIL") {
+      return res.status(400).json({
+        message: "Adresse email de notification invalide.",
+      });
+    }
+
+    return res.status(500).json({
+      message: e.message || "Erreur serveur (relaunchPayment)",
     });
   }
 }
@@ -2875,6 +3106,7 @@ module.exports = {
   updateOrderStatus,
   getInvoicePreview,
   invoiceOrder,
+  relaunchPayment,
   replaceBillingOrderItem,
   updateNotificationContacts,
   resendInvoiceSms,
