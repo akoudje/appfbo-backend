@@ -66,15 +66,15 @@ function normalizeRelaunchPaymentWindowMinutes(body = {}) {
 
   const minutes = Number(rawMinutes);
   if (Number.isFinite(minutes) && minutes > 0) {
-    return Math.min(30 * 24 * 60, Math.max(1, Math.round(minutes)));
+    return Math.min(30, Math.max(10, Math.round(minutes)));
   }
 
   const hours = Number(rawHours);
   if (Number.isFinite(hours) && hours > 0) {
-    return Math.min(30 * 24 * 60, Math.max(1, Math.round(hours * 60)));
+    return Math.min(30, Math.max(10, Math.round(hours * 60)));
   }
 
-  return 24 * 60;
+  return 10;
 }
 
 function normalizeDateStart(d) {
