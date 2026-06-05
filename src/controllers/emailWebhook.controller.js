@@ -60,7 +60,7 @@ async function findOrderMessageByProviderMessageId(providerMessageId) {
   const recent = await prisma.orderMessage.findMany({
     where: {
       channel: "EMAIL",
-      provider: { in: ["SMTP", "EMAIL_SIMULATED"] },
+      provider: { in: ["MAILERSEND", "SMTP", "EMAIL_SIMULATED"] },
     },
     orderBy: { createdAt: "desc" },
     take: 200,

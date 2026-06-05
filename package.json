@@ -27,6 +27,8 @@
     "import:bfa-grade-prices": "node scripts/import-product-grade-prices.js --country BFA",
     "import:civ-grade-prices": "node scripts/import-product-grade-prices.js --country CIV",
     "check:smtp": "node scripts/check-smtp.js",
+    "check:mailersend": "node scripts/check-mailersend.js",
+    "audit:empty-submitted": "node scripts/audit-empty-submitted-orders.js",
     "jobs:cancel-expired-preinvoiced": "node scripts/cancel-expired-preinvoiced.js",
     "jobs:backfill-country-notification-templates": "node scripts/backfill-country-notification-templates.js"
   },

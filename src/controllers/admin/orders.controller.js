@@ -986,6 +986,13 @@ async function getInvoicePreview(req, res) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
 
+    if (e.message === "PREORDER_EMPTY_ITEMS") {
+      return res.status(400).json({
+        message:
+          "Commande incohérente : elle ne contient aucun article et ne peut pas être facturée.",
+      });
+    }
+
     if (e.message === "INVALID_FBO_GRADE") {
       return res.status(400).json({
         message: "Le grade de facturation est invalide.",
@@ -1068,6 +1075,13 @@ async function invoiceOrder(req, res) {
     if (e.message === "PREORDER_NOT_INVOICEABLE") {
       return res.status(400).json({
         message: "Cette commande ne peut pas être facturée actuellement.",
+      });
+    }
+
+    if (e.message === "PREORDER_EMPTY_ITEMS") {
+      return res.status(400).json({
+        message:
+          "Commande incohérente : elle ne contient aucun article et ne peut pas être facturée.",
       });
     }
 

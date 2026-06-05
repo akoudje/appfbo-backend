@@ -20,6 +20,42 @@ const SMTP_AUTH_COOLDOWN_MS = Math.max(
   Number.parseInt(process.env.SMTP_AUTH_COOLDOWN_SECONDS || "900", 10) * 1000,
 );
 
+function getMailerSendConfig() {
+  const apiKey = String(
+    process.env.MAILERSEND_API_KEY ||
+      process.env.MAILSENDER_API_KEY ||
+      process.env.MAILER_SEND_API_KEY ||
+      "",
+  ).trim();
+  const apiUrl = String(
+    process.env.MAILERSEND_API_URL || "https://api.mailersend.com/v1/email",
+  ).trim();
+  const fromEmail = normalizeEmail(
+    process.env.MAILERSEND_FROM_EMAIL ||
+      process.env.MAILSENDER_FROM_EMAIL ||
+      process.env.SMTP_FROM_EMAIL ||
+      "",
+  );
+  const fromName = String(
+    process.env.MAILERSEND_FROM_NAME ||
+      process.env.MAILSENDER_FROM_NAME ||
+      process.env.SMTP_FROM_NAME ||
+      "FOREVER",
+  ).trim();
+
+  return {
+    apiKey,
+    apiUrl,
+    fromEmail,
+    fromName,
+  };
+}
+
+function mailerSendConfigured() {
+  const cfg = getMailerSendConfig();
+  return Boolean(cfg.apiKey && cfg.apiUrl && cfg.fromEmail);
+}
+
 function normalizeEmail(value = "") {
   const email = String(value || "").trim().toLowerCase();
   if (!email) return null;
@@ -69,6 +105,117 @@ function getFromEnvelope() {
   if (!fromEmail) return null;
   if (!fromName) return fromEmail;
   return `${fromName} <${fromEmail}>`;
+}
+
+function buildMailerSendFrom(cfg) {
+  if (!cfg.fromName) return { email: cfg.fromEmail };
+  return { email: cfg.fromEmail, name: cfg.fromName };
+}
+
+async function sendWithMailerSend({ to, subject, body, html = null, metadata = {} }) {
+  const cfg = getMailerSendConfig();
+  if (!cfg.apiKey) {
+    return {
+      accepted: false,
+      provider: "MAILERSEND",
+      providerMessageId: null,
+      rawPayload: null,
+      errorCode: "MAILERSEND_API_KEY_MISSING",
+      errorMessage: "MAILERSEND_API_KEY est requis pour l'envoi MailerSend.",
+    };
+  }
+  if (!cfg.fromEmail) {
+    return {
+      accepted: false,
+      provider: "MAILERSEND",
+      providerMessageId: null,
+      rawPayload: null,
+      errorCode: "MAILERSEND_FROM_NOT_CONFIGURED",
+      errorMessage: "MAILERSEND_FROM_EMAIL ou SMTP_FROM_EMAIL est requis.",
+    };
+  }
+
+  try {
+    const payload = {
+      from: buildMailerSendFrom(cfg),
+      to: [{ email: to }],
+      subject: String(subject || "").trim() || "Notification commande FOREVER",
+      text: String(body || ""),
+      ...(html ? { html: String(html) } : {}),
+      personalization: [
+        {
+          email: to,
+          data: {
+            preorderId: String(metadata?.preorderId || ""),
+          },
+        },
+      ],
+    };
+
+    const response = await fetch(cfg.apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const responseText = await response.text();
+    let responseJson = null;
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseJson = null;
+    }
+    const providerMessageId =
+      response.headers.get("x-message-id") ||
+      response.headers.get("x-mailersend-message-id") ||
+      responseJson?.message_id ||
+      responseJson?.id ||
+      null;
+
+    if (!response.ok) {
+      return {
+        accepted: false,
+        provider: "MAILERSEND",
+        providerMessageId,
+        rawPayload: {
+          status: response.status,
+          body: responseJson || responseText || null,
+        },
+        errorCode: `MAILERSEND_${response.status}`,
+        errorMessage:
+          responseJson?.message ||
+          responseJson?.error ||
+          responseText ||
+          "Échec d'envoi MailerSend.",
+      };
+    }
+
+    return {
+      accepted: true,
+      provider: "MAILERSEND",
+      providerMessageId,
+      rawPayload: {
+        status: response.status,
+        body: responseJson || responseText || null,
+      },
+      errorCode: null,
+      errorMessage: null,
+    };
+  } catch (error) {
+    return {
+      accepted: false,
+      provider: "MAILERSEND",
+      providerMessageId: null,
+      rawPayload: {
+        name: error?.name || null,
+        cause: error?.cause?.message || null,
+      },
+      errorCode: error?.code || "MAILERSEND_SEND_FAILED",
+      errorMessage: error?.message || "Échec d'envoi MailerSend.",
+    };
+  }
 }
 
 function getTransportConfigKey(cfg) {
@@ -150,7 +297,7 @@ async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
   }
 
   const from = getFromEnvelope();
-  if (!from && !emailSimulateEnabled()) {
+  if (!from && !emailSimulateEnabled() && !mailerSendConfigured()) {
     return {
       accepted: false,
       provider: "SMTP",
@@ -159,6 +306,16 @@ async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
       errorCode: "SMTP_FROM_NOT_CONFIGURED",
       errorMessage: "SMTP_FROM_EMAIL est requis pour l'envoi réel.",
     };
+  }
+
+  if (mailerSendConfigured()) {
+    return sendWithMailerSend({
+      to: normalizedTo,
+      subject,
+      body,
+      html,
+      metadata,
+    });
   }
 
   if (smtpConfigured() && nodemailer) {

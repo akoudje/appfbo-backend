@@ -200,12 +200,19 @@ async function buildInvoicePreview({
       status: true,
       countryId: true,
       fboGrade: true,
+      totalFcfa: true,
       preorderPaymentMode: true,
+      paymentProvider: true,
+      _count: { select: { items: true } },
     },
   });
 
   if (!preorder) {
     throw new Error("PREORDER_NOT_FOUND");
+  }
+
+  if (Number(preorder?._count?.items || 0) <= 0) {
+    throw new Error("PREORDER_EMPTY_ITEMS");
   }
 
   const effectiveGrade = normalizeBillingGrade(
@@ -378,6 +385,10 @@ async function invoiceAndSendPreorder({
     throw new Error("PREORDER_NOT_INVOICEABLE");
   }
 
+  if (!Array.isArray(existingPreorder.items) || existingPreorder.items.length === 0) {
+    throw new Error("PREORDER_EMPTY_ITEMS");
+  }
+
   const invoiceRef = String(invoiceRefInput || "").trim();
   if (!invoiceRef) {
     throw new Error("INVOICE_REFERENCE_REQUIRED");
@@ -403,6 +414,9 @@ async function invoiceAndSendPreorder({
     existingPreorder.countryId,
     effectiveGrade,
   );
+  if (!Array.isArray(pricingSummary.items) || pricingSummary.items.length === 0) {
+    throw new Error("PREORDER_EMPTY_ITEMS");
+  }
   const invoiceAmountOverrideFcfa = normalizeInvoiceAmountOverride(
     invoiceAmountOverrideInput,
   );
