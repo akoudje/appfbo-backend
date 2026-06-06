@@ -808,6 +808,10 @@ model Preorder {
   packingNote      String? @db.Text
   pickupSecretCode String?
   pickupCodeVerifiedAt DateTime?
+  pickupRecipientType String?
+  pickupRecipientName String?
+  pickupRecipientPhone String?
+  pickupConfirmationNote String? @db.Text
   cancelReason     String? @db.Text
 
   stockDeductedAt DateTime?

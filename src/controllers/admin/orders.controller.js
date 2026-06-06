@@ -2659,6 +2659,10 @@ async function fulfillOrder(req, res) {
       pickupPointLabel,
       deliveryCarrier,
       fulfillmentMode,
+      pickupRecipientType,
+      pickupRecipientName,
+      pickupRecipientPhone,
+      pickupConfirmationNote,
     } = req.body || {};
 
     const order = await prisma.preorder.findFirst({
@@ -2685,6 +2689,14 @@ async function fulfillOrder(req, res) {
       String(fulfillmentMode || (isPickupOrder ? "PICKUP" : "DELIVERY"))
         .trim()
         .toUpperCase() || null;
+    const normalizedPickupRecipientType = String(
+      pickupRecipientType || (isPickupOrder ? "CUSTOMER" : "DELIVERY_AGENT"),
+    )
+      .trim()
+      .toUpperCase();
+    const normalizedPickupRecipientName = String(pickupRecipientName || "").trim();
+    const normalizedPickupRecipientPhone = String(pickupRecipientPhone || "").trim();
+    const normalizedPickupConfirmationNote = String(pickupConfirmationNote || "").trim();
     const actorName = actorLabel(req);
 
     if (isPickupOrder) {
@@ -2698,6 +2710,13 @@ async function fulfillOrder(req, res) {
       if (normalizedPickupCode !== String(order.pickupSecretCode || "").trim()) {
         return res.status(400).json({
           message: "Le code secret présenté ne correspond pas à ce colis.",
+        });
+      }
+
+      if (!normalizedPickupRecipientName) {
+        return res.status(400).json({
+          message:
+            "Le nom de la personne qui récupère le colis est obligatoire.",
         });
       }
     }
@@ -2725,6 +2744,18 @@ async function fulfillOrder(req, res) {
           pickupCodeVerifiedById: isPickupOrder
             ? order.pickupCodeVerifiedById || req.user?.id || null
             : order.pickupCodeVerifiedById,
+          pickupRecipientType: isPickupOrder
+            ? normalizedPickupRecipientType
+            : order.pickupRecipientType,
+          pickupRecipientName: isPickupOrder
+            ? normalizedPickupRecipientName
+            : order.pickupRecipientName,
+          pickupRecipientPhone: isPickupOrder
+            ? normalizedPickupRecipientPhone || null
+            : order.pickupRecipientPhone,
+          pickupConfirmationNote: isPickupOrder
+            ? normalizedPickupConfirmationNote || null
+            : order.pickupConfirmationNote,
           fulfilledById: order.fulfilledById || req.user?.id || null,
         },
       });
@@ -2740,6 +2771,12 @@ async function fulfillOrder(req, res) {
           deliveryTracking: saved.deliveryTracking,
           parcelNumber: order.parcelNumber,
           pickupCodeVerified: isPickupOrder,
+          pickupRecipientType: isPickupOrder ? normalizedPickupRecipientType : null,
+          pickupRecipientName: isPickupOrder ? normalizedPickupRecipientName : null,
+          pickupRecipientPhone: isPickupOrder ? normalizedPickupRecipientPhone || null : null,
+          pickupConfirmationNote: isPickupOrder
+            ? normalizedPickupConfirmationNote || null
+            : null,
           fulfillmentMode: normalizedFulfillmentMode,
           pickupPointLabel: pickupPointLabel
             ? String(pickupPointLabel).trim()
@@ -2785,8 +2822,17 @@ async function fulfillOrder(req, res) {
 async function regularizeFulfillmentNoNotification(req, res) {
   try {
     const { id } = req.params;
-    const { note, fulfillmentMode, pickupPointLabel, deliveryCarrier, deliveryTracking } =
-      req.body || {};
+    const {
+      note,
+      fulfillmentMode,
+      pickupPointLabel,
+      deliveryCarrier,
+      deliveryTracking,
+      pickupRecipientType,
+      pickupRecipientName,
+      pickupRecipientPhone,
+      pickupConfirmationNote,
+    } = req.body || {};
 
     if (!canRegularizeFulfillment(req.user?.role)) {
       return res.status(403).json({
@@ -2846,6 +2892,23 @@ async function regularizeFulfillmentNoNotification(req, res) {
       )
         .trim()
         .toUpperCase() || null;
+    const isPickupOrder = order.deliveryMode === "RETRAIT_SITE_FLP";
+    const normalizedPickupRecipientType = String(
+      pickupRecipientType ||
+        order.pickupRecipientType ||
+        (isPickupOrder ? "CUSTOMER" : ""),
+    )
+      .trim()
+      .toUpperCase();
+    const normalizedPickupRecipientName = String(
+      pickupRecipientName || order.pickupRecipientName || "",
+    ).trim();
+    const normalizedPickupRecipientPhone = String(
+      pickupRecipientPhone || order.pickupRecipientPhone || "",
+    ).trim();
+    const normalizedPickupConfirmationNote = String(
+      pickupConfirmationNote || order.pickupConfirmationNote || "",
+    ).trim();
     const regularizationNote =
       String(note || "").trim() ||
       "Régularisation admin : commande déjà livrée physiquement, clôturée sans notification.";
@@ -2936,6 +2999,14 @@ async function regularizeFulfillmentNoNotification(req, res) {
           deliveryCarrier: deliveryCarrier
             ? String(deliveryCarrier).trim()
             : order.deliveryCarrier,
+          pickupRecipientType:
+            normalizedPickupRecipientType || order.pickupRecipientType,
+          pickupRecipientName:
+            normalizedPickupRecipientName || order.pickupRecipientName,
+          pickupRecipientPhone:
+            normalizedPickupRecipientPhone || order.pickupRecipientPhone,
+          pickupConfirmationNote:
+            normalizedPickupConfirmationNote || order.pickupConfirmationNote,
           internalNote: regularizationNote,
         },
       });
@@ -2954,6 +3025,9 @@ async function regularizeFulfillmentNoNotification(req, res) {
           reason: "PHYSICAL_DELIVERY_REGULARIZATION",
           parcelNumber,
           fulfillmentMode: normalizedFulfillmentMode,
+          pickupRecipientType: normalizedPickupRecipientType || null,
+          pickupRecipientName: normalizedPickupRecipientName || null,
+          pickupRecipientPhone: normalizedPickupRecipientPhone || null,
         },
         req.user?.id || null,
       );
