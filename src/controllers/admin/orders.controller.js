@@ -2694,7 +2694,9 @@ async function fulfillOrder(req, res) {
     )
       .trim()
       .toUpperCase();
-    const normalizedPickupRecipientName = String(pickupRecipientName || "").trim();
+    const normalizedPickupRecipientName = String(
+      pickupRecipientName || order.pickupRecipientName || order.fboNomComplet || "",
+    ).trim();
     const normalizedPickupRecipientPhone = String(pickupRecipientPhone || "").trim();
     const normalizedPickupConfirmationNote = String(pickupConfirmationNote || "").trim();
     const actorName = actorLabel(req);
@@ -2901,7 +2903,7 @@ async function regularizeFulfillmentNoNotification(req, res) {
       .trim()
       .toUpperCase();
     const normalizedPickupRecipientName = String(
-      pickupRecipientName || order.pickupRecipientName || "",
+      pickupRecipientName || order.pickupRecipientName || order.fboNomComplet || "",
     ).trim();
     const normalizedPickupRecipientPhone = String(
       pickupRecipientPhone || order.pickupRecipientPhone || "",
