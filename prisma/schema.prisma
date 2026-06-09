@@ -211,6 +211,28 @@ enum BillingPriority {
   URGENT
 }
 
+enum TicketEventStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  CANCELLED
+}
+
+enum TicketOrderStatus {
+  DRAFT
+  PENDING_PAYMENT
+  PAID
+  CANCELLED
+  EXPIRED
+}
+
+enum TicketStatus {
+  RESERVED
+  ACTIVE
+  USED
+  CANCELLED
+}
+
 enum ProductCategory {
   NON_CLASSE
   BUVABLE
@@ -393,6 +415,9 @@ model Country {
   paymentLinkResendRequests PaymentLinkResendRequest[]
   pickupCodeResendRequests PickupCodeResendRequest[]
   mobilePushTokens MobilePushToken[]
+  ticketEvents TicketEvent[]
+  ticketOrders TicketOrder[]
+  tickets Ticket[]
 }
 
 model MobilePushToken {
@@ -528,6 +553,9 @@ model AdminUser {
   checkedPreparationItems PreparationChecklistItem[]
   createdPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyCreatedBy")
   resolvedPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyResolvedBy")
+  createdTicketEvents TicketEvent[] @relation("TicketEventCreatedBy")
+  updatedTicketEvents TicketEvent[] @relation("TicketEventUpdatedBy")
+  checkedInTickets Ticket[] @relation("TicketCheckedInBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
   auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
 
@@ -1457,4 +1485,136 @@ model PaymentRefund {
   updatedAt DateTime @updatedAt
 
   @@index([paymentId])
+}
+
+model TicketEvent {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  slug String
+  title String
+  subtitle String?
+  description String? @db.Text
+  venueName String?
+  venueAddress String? @db.Text
+  startsAt DateTime
+  endsAt DateTime?
+  posterUrl String?
+  status TicketEventStatus @default(DRAFT)
+  capacity Int?
+  salesOpenAt DateTime?
+  salesCloseAt DateTime?
+
+  createdById String?
+  createdBy AdminUser? @relation("TicketEventCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  updatedById String?
+  updatedBy AdminUser? @relation("TicketEventUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  ticketTypes TicketType[]
+  ticketOrders TicketOrder[]
+  tickets Ticket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, slug])
+  @@index([countryId, status, startsAt])
+  @@index([startsAt])
+}
+
+model TicketType {
+  id String @id @default(cuid())
+
+  eventId String
+  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  label String
+  description String? @db.Text
+  priceFcfa Int
+  capacity Int?
+  maxPerOrder Int @default(10)
+  active Boolean @default(true)
+  sortOrder Int @default(0)
+
+  tickets Ticket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([eventId, active, sortOrder])
+}
+
+model TicketOrder {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  eventId String
+  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  orderNumber String @unique
+  status TicketOrderStatus @default(DRAFT)
+
+  buyerFullName String
+  buyerPhone String
+  buyerEmail String?
+  buyerFboNumber String?
+  buyerFboName String?
+
+  totalFcfa Int @default(0)
+  paymentMethod String?
+  paymentProvider String?
+  paymentReference String?
+  paymentStatus PaymentStatus @default(INITIATED)
+  paidAt DateTime?
+  expiresAt DateTime?
+  note String? @db.Text
+
+  tickets Ticket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, status, createdAt])
+  @@index([eventId, status, createdAt])
+  @@index([buyerPhone])
+  @@index([buyerFboNumber])
+}
+
+model Ticket {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  eventId String
+  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  ticketTypeId String
+  ticketType TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+
+  orderId String
+  order TicketOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  ticketCode String @unique
+  qrToken String @unique
+  holderFullName String
+  holderPhone String?
+  holderEmail String?
+  status TicketStatus @default(RESERVED)
+  checkedInAt DateTime?
+  checkedInById String?
+  checkedInBy AdminUser? @relation("TicketCheckedInBy", fields: [checkedInById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, status])
+  @@index([eventId, status])
+  @@index([orderId])
+  @@index([ticketTypeId])
 }
