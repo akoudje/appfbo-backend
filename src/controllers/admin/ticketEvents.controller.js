@@ -1,4 +1,23 @@
+const multer = require("multer");
 const prisma = require("../../prisma");
+const { uploadBuffer } = require("../../services/cloudinary");
+
+const MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024;
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_FILE_SIZE },
+  fileFilter: (_req, file, cb) => {
+    const ok = ALLOWED_UPLOAD_MIME_TYPES.has(String(file.mimetype || "").toLowerCase());
+    cb(ok ? null : new Error("Format image non supporté (png/jpg/webp/gif)"), ok);
+  },
+});
 
 function normalizeSlug(value) {
   return String(value || "")
@@ -20,6 +39,16 @@ function parsePositiveInt(value, fallback = null) {
   if (value === null || value === undefined || value === "") return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function uploadPosterMiddleware(req, res, next) {
+  upload.single("file")(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ message: "Le fichier dépasse 5 MB." });
+    }
+    return res.status(400).json({ message: err.message || "Upload invalide" });
+  });
 }
 
 function includeEventDetails() {
@@ -219,6 +248,37 @@ async function upsertTicketType(req, res) {
   }
 }
 
+async function uploadPoster(req, res) {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ message: "Fichier requis" });
+
+    const slug = normalizeSlug(req.body?.slug || "event-poster") || "event-poster";
+    const uploadResult = await uploadBuffer(file.buffer, {
+      folder: `appfbo/ticket-events/${req.countryId}`,
+      resource_type: "image",
+      use_filename: true,
+      unique_filename: true,
+      filename_override: `${slug}-${Date.now()}`,
+    });
+
+    const url = uploadResult?.secure_url || uploadResult?.url || null;
+    if (!url) throw new Error("UPLOAD_TICKET_EVENT_POSTER_FAILED");
+
+    return res.status(201).json({
+      ok: true,
+      url,
+      width: uploadResult?.width || null,
+      height: uploadResult?.height || null,
+      bytes: uploadResult?.bytes || file.size || null,
+      format: uploadResult?.format || null,
+    });
+  } catch (error) {
+    console.error("ticketEvents.uploadPoster error:", error);
+    return res.status(500).json({ message: "Erreur serveur (uploadPoster)" });
+  }
+}
+
 async function listOrders(req, res) {
   try {
     const { eventId, status, q } = req.query;
@@ -411,6 +471,8 @@ module.exports = {
   getEvent,
   upsertEvent,
   upsertTicketType,
+  uploadPosterMiddleware,
+  uploadPoster,
   listOrders,
   markOrderPaid,
   cancelOrder,

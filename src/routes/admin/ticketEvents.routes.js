@@ -42,6 +42,13 @@ router.post(
 );
 
 router.post(
+  "/assets",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.uploadPosterMiddleware,
+  ticketEventsController.uploadPoster,
+);
+
+router.post(
   "/check-in",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.checkInTicket,
