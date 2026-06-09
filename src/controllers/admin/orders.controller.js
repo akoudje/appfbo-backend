@@ -52,6 +52,28 @@ function buildFboSearchTerms(value) {
   return Array.from(new Set([raw, formatted].filter(Boolean)));
 }
 
+function getBillingQueueOrderStatusFilter(billingWorkStatus) {
+  const normalized = String(billingWorkStatus || "").trim().toUpperCase();
+  if (
+    [
+      "QUEUED",
+      "RELEASED",
+      "ASSIGNED",
+      "IN_PROGRESS",
+      "WAITING_CUSTOMER_DATA",
+    ].includes(normalized)
+  ) {
+    return "SUBMITTED";
+  }
+  if (normalized === "WAITING_PAYMENT") {
+    return { in: ["INVOICED", "PAYMENT_PENDING"] };
+  }
+  if (normalized === "ESCALATED") {
+    return { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] };
+  }
+  return { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] };
+}
+
 function normalizeRelaunchPaymentWindowMinutes(body = {}) {
   const rawMinutes =
     body.durationMinutes ??
@@ -278,6 +300,7 @@ function buildOrdersListWhere(req, overrides = {}) {
   const where = scopeWhere(req);
   const includeDrafts = String(req.query.includeDrafts) === "true";
   const includeCancelled = String(req.query.includeCancelled) === "true";
+  const billingQueueScope = String(req.query.billingQueueScope) === "true";
 
   if (!status && !overrides.status) {
     const excludedStatuses = [];
@@ -297,6 +320,9 @@ function buildOrdersListWhere(req, overrides = {}) {
     where.preorderPaymentMode = String(preorderPaymentMode).trim().toUpperCase();
   }
   if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
+  if (billingQueueScope && !status && !overrides.status) {
+    where.status = getBillingQueueOrderStatusFilter(billingWorkStatus);
+  }
   if (billingPriority) {
     where.billingPriority = String(billingPriority).trim().toUpperCase();
   }

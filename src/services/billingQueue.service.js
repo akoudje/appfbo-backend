@@ -277,7 +277,7 @@ async function releaseExpiredAssignments({ countryId }) {
       assignedInvoicerId: { not: null },
       billingWorkStatus: { in: ["ASSIGNED", "IN_PROGRESS"] },
       billingLastActivityAt: { lt: cutoff },
-      status: { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] },
+      status: "SUBMITTED",
     },
     select: {
       id: true,
@@ -296,7 +296,7 @@ async function releaseExpiredAssignments({ countryId }) {
           assignedInvoicerId: row.assignedInvoicerId,
           billingWorkStatus: { in: ["ASSIGNED", "IN_PROGRESS"] },
           billingLastActivityAt: { lt: cutoff },
-          status: { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] },
+          status: "SUBMITTED",
         },
         data: {
           assignedInvoicerId: null,
@@ -460,7 +460,7 @@ async function releaseBillingWork({ preorderId, userId, countryId, reason }) {
   if (!allowed) throw new Error("NOT_ALLOWED_TO_RELEASE");
 
   if (
-    !["ASSIGNED", "IN_PROGRESS", "WAITING_CUSTOMER_DATA", "WAITING_PAYMENT"].includes(
+    !["ASSIGNED", "IN_PROGRESS", "WAITING_CUSTOMER_DATA"].includes(
       preorder.billingWorkStatus,
     )
   ) {
