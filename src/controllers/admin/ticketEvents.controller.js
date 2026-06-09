@@ -289,6 +289,80 @@ async function markOrderPaid(req, res) {
   }
 }
 
+async function cancelOrder(req, res) {
+  try {
+    const order = await prisma.ticketOrder.findFirst({
+      where: { id: req.params.orderId, countryId: req.countryId },
+      include: { tickets: true },
+    });
+    if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
+    if (order.status === "PAID") {
+      return res.status(400).json({ message: "Une commande payée ne peut pas être annulée ici." });
+    }
+
+    const { note } = req.body || {};
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.ticket.updateMany({
+        where: { orderId: order.id, status: "RESERVED" },
+        data: { status: "CANCELLED" },
+      });
+      return tx.ticketOrder.update({
+        where: { id: order.id },
+        data: {
+          status: "CANCELLED",
+          paymentStatus: "CANCELLED",
+          note: note ? String(note).trim() : order.note,
+        },
+        include: {
+          event: true,
+          tickets: { include: { ticketType: true } },
+        },
+      });
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    console.error("ticketEvents.cancelOrder error:", error);
+    return res.status(500).json({ message: "Erreur serveur (cancelOrder)" });
+  }
+}
+
+async function expireOrders(req, res) {
+  try {
+    const { eventId } = req.body || {};
+    const where = {
+      countryId: req.countryId,
+      status: "PENDING_PAYMENT",
+      expiresAt: { lt: new Date() },
+    };
+    if (eventId) where.eventId = String(eventId);
+
+    const orders = await prisma.ticketOrder.findMany({
+      where,
+      select: { id: true },
+      take: 500,
+    });
+    const orderIds = orders.map((order) => order.id);
+    if (!orderIds.length) return res.json({ expired: 0 });
+
+    await prisma.$transaction([
+      prisma.ticket.updateMany({
+        where: { orderId: { in: orderIds }, status: "RESERVED" },
+        data: { status: "CANCELLED" },
+      }),
+      prisma.ticketOrder.updateMany({
+        where: { id: { in: orderIds } },
+        data: { status: "EXPIRED", paymentStatus: "EXPIRED" },
+      }),
+    ]);
+
+    return res.json({ expired: orderIds.length });
+  } catch (error) {
+    console.error("ticketEvents.expireOrders error:", error);
+    return res.status(500).json({ message: "Erreur serveur (expireOrders)" });
+  }
+}
+
 async function checkInTicket(req, res) {
   try {
     const { tokenOrCode } = req.body || {};
@@ -339,5 +413,7 @@ module.exports = {
   upsertTicketType,
   listOrders,
   markOrderPaid,
+  cancelOrder,
+  expireOrders,
   checkInTicket,
 };

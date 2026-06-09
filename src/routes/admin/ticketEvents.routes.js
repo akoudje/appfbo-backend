@@ -24,9 +24,21 @@ router.get(
 );
 
 router.post(
+  "/orders/expire",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.expireOrders,
+);
+
+router.post(
   "/orders/:orderId/paid",
   requirePermission(Permission.PAYMENT_VALIDATE),
   ticketEventsController.markOrderPaid,
+);
+
+router.post(
+  "/orders/:orderId/cancel",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.cancelOrder,
 );
 
 router.post(
