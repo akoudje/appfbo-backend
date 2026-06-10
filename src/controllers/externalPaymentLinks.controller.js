@@ -71,8 +71,12 @@ async function initiateWave(req, res) {
     return res.json(result);
   } catch (error) {
     console.error("externalPaymentLinks.initiateWave error:", error);
+    const message =
+      error?.details?.code === "request-validation-error"
+        ? "Paiement Wave indisponible pour ce lien. Merci de contacter l'équipe Forever."
+        : error.message || "Erreur serveur (initiateWave)";
     return res.status(error.statusCode || 500).json({
-      message: error.message || "Erreur serveur (initiateWave)",
+      message,
     });
   }
 }

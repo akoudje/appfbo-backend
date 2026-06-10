@@ -1,7 +1,6 @@
 const prisma = require("../prisma");
 const paymentOrchestrator = require("../payments/payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper");
-const { normalizeForCountry } = require("../utils/phone");
 
 function publicExternalPaymentUrl(token, req = null) {
   const configured = String(
@@ -51,7 +50,7 @@ function extractProviderMetadata(response = {}) {
   };
 }
 
-async function initiateExternalWavePayment({ req, token, payerPhone }) {
+async function initiateExternalWavePayment({ req, token }) {
   const link = await prisma.externalPaymentLink.findFirst({
     where: { token: String(token || "").trim(), countryId: req.countryId },
     include: { country: true },
@@ -77,24 +76,12 @@ async function initiateExternalWavePayment({ req, token, payerPhone }) {
   }
 
   const urls = buildWaveUrls(link, req);
-  const payerMobile = payerPhone || link.customerPhone || "";
-  const normalizedPayerMobile = payerMobile
-    ? normalizeForCountry(payerMobile, link.country?.code || req.country?.code || "CIV")
-    : null;
-
-  if (payerMobile && !normalizedPayerMobile) {
-    const err = new Error("Numéro Wave invalide");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const clientReference = `EXT_${link.id}`;
+  const clientReference = link.id;
   const providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
     amountFcfa: link.amountFcfa,
     successUrl: urls.successUrl,
     errorUrl: urls.errorUrl,
     clientReference,
-    restrictPayerMobile: normalizedPayerMobile || undefined,
   });
   const metadata = extractProviderMetadata(providerResponse);
 
@@ -107,7 +94,7 @@ async function initiateExternalWavePayment({ req, token, payerPhone }) {
       providerTransactionId: metadata.providerTransactionId,
       providerCheckoutUrl: providerResponse.checkoutUrl || null,
       providerLaunchUrl: providerResponse.providerLaunchUrl || providerResponse.checkoutUrl || null,
-      providerPayerPhone: metadata.providerPayerPhone || payerPhone || null,
+      providerPayerPhone: metadata.providerPayerPhone || null,
       providerStatusLabel:
         metadata.providerStatusLabel ||
         providerResponse.paymentStatus ||
