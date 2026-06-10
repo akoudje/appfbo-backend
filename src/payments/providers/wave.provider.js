@@ -212,6 +212,20 @@ class WaveProvider extends BasePaymentProvider {
         requestBody: body || null,
         responseBody: data,
       });
+      this.logger.error?.(
+        "[wave] api request failed raw",
+        JSON.stringify(
+          {
+            path,
+            method,
+            status: response.status,
+            requestBody: body || null,
+            responseBody: data,
+          },
+          null,
+          2,
+        ),
+      );
       const err = new Error(
         data?.message ||
           data?.error ||

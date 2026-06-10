@@ -38,7 +38,8 @@ function publicUrl(req, token) {
       process.env.FRONTEND_URL ||
       "",
   ).trim();
-  const base = configured || `${req.protocol}://${req.get("host")}`;
+  const rawBase = configured || `${req.protocol}://${req.get("host")}`;
+  const base = /^https?:\/\//i.test(rawBase) ? rawBase : `https://${rawBase}`;
   return `${base.replace(/\/+$/, "")}/external-payment/${encodeURIComponent(token)}`;
 }
 

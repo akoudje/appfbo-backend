@@ -9,7 +9,8 @@ function publicExternalPaymentUrl(token, req = null) {
       process.env.FRONTEND_URL ||
       "",
   ).trim();
-  const base = configured || (req ? `${req.protocol}://${req.get("host")}` : "");
+  const rawBase = configured || (req ? `${req.protocol}://${req.get("host")}` : "");
+  const base = /^https?:\/\//i.test(rawBase) ? rawBase : `https://${rawBase}`;
   return `${base.replace(/\/+$/, "")}/external-payment/${encodeURIComponent(token)}`;
 }
 
