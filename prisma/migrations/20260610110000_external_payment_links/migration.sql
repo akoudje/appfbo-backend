@@ -17,6 +17,15 @@ CREATE TABLE "ExternalPaymentLink" (
     "currencyCode" VARCHAR(3) NOT NULL DEFAULT 'XOF',
     "paymentMethod" "PreorderPaymentMode",
     "status" "ExternalPaymentLinkStatus" NOT NULL DEFAULT 'ACTIVE',
+    "provider" "PaymentProvider" NOT NULL DEFAULT 'WAVE',
+    "providerStatus" "PaymentStatus" NOT NULL DEFAULT 'INITIATED',
+    "providerSessionId" TEXT,
+    "providerTransactionId" TEXT,
+    "providerCheckoutUrl" TEXT,
+    "providerLaunchUrl" TEXT,
+    "providerPayerPhone" TEXT,
+    "providerStatusLabel" TEXT,
+    "providerPayloadJson" JSONB,
     "title" TEXT,
     "description" TEXT,
     "instructions" TEXT,
@@ -47,6 +56,12 @@ CREATE INDEX "ExternalPaymentLink_externalReference_idx" ON "ExternalPaymentLink
 
 -- CreateIndex
 CREATE INDEX "ExternalPaymentLink_invoiceReference_idx" ON "ExternalPaymentLink"("invoiceReference");
+
+-- CreateIndex
+CREATE INDEX "ExternalPaymentLink_provider_providerSessionId_idx" ON "ExternalPaymentLink"("provider", "providerSessionId");
+
+-- CreateIndex
+CREATE INDEX "ExternalPaymentLink_provider_providerTransactionId_idx" ON "ExternalPaymentLink"("provider", "providerTransactionId");
 
 -- CreateIndex
 CREATE INDEX "ExternalPaymentLink_customerPhone_idx" ON "ExternalPaymentLink"("customerPhone");

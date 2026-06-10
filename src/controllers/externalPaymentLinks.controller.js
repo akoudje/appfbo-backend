@@ -1,4 +1,5 @@
 const prisma = require("../prisma");
+const externalWavePaymentService = require("../services/external-wave-payment.service");
 
 function isExpired(link) {
   return link?.expiresAt && new Date(link.expiresAt).getTime() < Date.now();
@@ -41,6 +42,9 @@ async function getPublicLink(req, res) {
       currencyCode: link.currencyCode,
       paymentMethod: link.paymentMethod,
       status: effectiveStatus,
+      provider: link.provider,
+      providerStatus: link.providerStatus,
+      checkoutUrl: link.providerCheckoutUrl || link.providerLaunchUrl,
       title: link.title,
       description: link.description,
       instructions: link.instructions,
@@ -53,6 +57,42 @@ async function getPublicLink(req, res) {
   }
 }
 
+async function initiateWave(req, res) {
+  try {
+    const { token } = req.params;
+    const { payerPhone } = req.body || {};
+    const result = await externalWavePaymentService.initiateExternalWavePayment({
+      req,
+      token,
+      payerPhone,
+    });
+    return res.json(result);
+  } catch (error) {
+    console.error("externalPaymentLinks.initiateWave error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Erreur serveur (initiateWave)",
+    });
+  }
+}
+
+async function syncWave(req, res) {
+  try {
+    const { token } = req.params;
+    const result = await externalWavePaymentService.syncExternalWavePaymentStatus({
+      req,
+      token,
+    });
+    return res.json(result);
+  } catch (error) {
+    console.error("externalPaymentLinks.syncWave error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Erreur serveur (syncWave)",
+    });
+  }
+}
+
 module.exports = {
   getPublicLink,
+  initiateWave,
+  syncWave,
 };

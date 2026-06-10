@@ -2,13 +2,6 @@ const crypto = require("crypto");
 const prisma = require("../../prisma");
 
 const ALLOWED_STATUSES = new Set(["DRAFT", "ACTIVE", "PAID", "CANCELLED", "EXPIRED"]);
-const ALLOWED_PAYMENT_METHODS = new Set([
-  "ESPECES",
-  "WAVE",
-  "ORANGE_MONEY",
-  "BANK_TRANSFER",
-  "ECOBANK_PAY",
-]);
 
 function generateToken() {
   return crypto.randomBytes(24).toString("base64url");
@@ -105,10 +98,7 @@ async function createLink(req, res) {
     if (!customerName) return res.status(400).json({ message: "Nom client obligatoire." });
     if (!amountFcfa) return res.status(400).json({ message: "Montant invalide." });
 
-    const paymentMethod = normalizeOptionalText(body.paymentMethod);
-    if (paymentMethod && !ALLOWED_PAYMENT_METHODS.has(paymentMethod)) {
-      return res.status(400).json({ message: "Mode de paiement invalide." });
-    }
+    const paymentMethod = "WAVE";
 
     const reference = normalizeOptionalText(body.reference) || (await nextReference(req.countryId));
     const status = normalizeOptionalText(body.status) || "ACTIVE";
@@ -127,6 +117,7 @@ async function createLink(req, res) {
         customerFboNumber: normalizeOptionalText(body.customerFboNumber),
         amountFcfa,
         paymentMethod,
+        provider: "WAVE",
         status,
         title: normalizeOptionalText(body.title),
         description: normalizeOptionalText(body.description),

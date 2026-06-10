@@ -15,6 +15,9 @@ const {
 const {
   addPaymentTransactionLogTx,
 } = require("./payment-transaction-log.helper");
+const {
+  syncExternalWaveLinkFromSession,
+} = require("../services/external-wave-payment.service");
 
 function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
@@ -2496,6 +2499,53 @@ async function handleWaveWebhook({ req }) {
         },
       });
     } else {
+      const externalClientReference = String(
+        parsed.body?.data?.client_reference ||
+          parsed.body?.client_reference ||
+          parsed.body?.checkout_session?.client_reference ||
+          "",
+      ).trim();
+      const externalLinkId = externalClientReference.startsWith("EXT:")
+        ? externalClientReference.slice(4)
+        : "";
+      const externalLink = externalLinkId
+        ? await prisma.externalPaymentLink.findUnique({ where: { id: externalLinkId } })
+        : null;
+
+      if (externalLink) {
+        await syncExternalWaveLinkFromSession({
+          link: externalLink,
+          providerStatusRaw: parsed.body?.data || parsed.body?.checkout_session || parsed.body || {},
+        });
+
+        await addPaymentTransactionLogTx(prisma, {
+          preorderId: null,
+          provider: "WAVE",
+          eventType: "WEBHOOK_EXTERNAL_LINK_PROCESSED",
+          source: "WEBHOOK",
+          providerStatus: parsed.eventType || null,
+          providerSessionId:
+            parsed.body?.data?.id ||
+            parsed.body?.id ||
+            parsed.body?.checkout_session?.id ||
+            null,
+          providerTransactionId:
+            parsed.body?.data?.transaction_id ||
+            parsed.body?.transaction_id ||
+            parsed.body?.checkout_session?.transaction_id ||
+            null,
+          amountFcfa: externalLink.amountFcfa,
+          currencyCode: externalLink.currencyCode,
+          note: "Webhook Wave traité pour lien de paiement externe",
+          payloadJson: {
+            providerEventId: parsed.providerEventId || null,
+            syntheticEventId,
+            eventType: parsed.eventType || null,
+            externalPaymentLinkId: externalLink.id,
+            externalReference: externalLink.reference,
+          },
+        });
+      } else {
       console.info("[payments][wave] webhook ignored (preorder unresolved)", {
         providerEventId: parsed.providerEventId || null,
         syntheticEventId,
@@ -2532,6 +2582,7 @@ async function handleWaveWebhook({ req }) {
           preorderHint: webhookPreorderHint,
         },
       });
+      }
     }
 
     await prisma.paymentWebhookEvent.update({

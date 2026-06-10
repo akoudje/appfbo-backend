@@ -1259,6 +1259,15 @@ model ExternalPaymentLink {
   currencyCode String @default("XOF") @db.VarChar(3)
   paymentMethod PreorderPaymentMode?
   status ExternalPaymentLinkStatus @default(ACTIVE)
+  provider PaymentProvider @default(WAVE)
+  providerStatus PaymentStatus @default(INITIATED)
+  providerSessionId String?
+  providerTransactionId String?
+  providerCheckoutUrl String? @db.Text
+  providerLaunchUrl String? @db.Text
+  providerPayerPhone String?
+  providerStatusLabel String?
+  providerPayloadJson Json?
 
   title String?
   description String? @db.Text
@@ -1283,6 +1292,8 @@ model ExternalPaymentLink {
   @@index([countryId, status, createdAt])
   @@index([externalReference])
   @@index([invoiceReference])
+  @@index([provider, providerSessionId])
+  @@index([provider, providerTransactionId])
   @@index([customerPhone])
   @@index([customerFboNumber])
 }
