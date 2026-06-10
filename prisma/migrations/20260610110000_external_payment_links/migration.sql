@@ -13,6 +13,8 @@ CREATE TABLE "ExternalPaymentLink" (
     "customerPhone" TEXT,
     "customerEmail" TEXT,
     "customerFboNumber" TEXT,
+    "baseAmountFcfa" INTEGER,
+    "serviceFeeFcfa" INTEGER NOT NULL DEFAULT 0,
     "amountFcfa" INTEGER NOT NULL,
     "currencyCode" VARCHAR(3) NOT NULL DEFAULT 'XOF',
     "paymentMethod" "PreorderPaymentMode",

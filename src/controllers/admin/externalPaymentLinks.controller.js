@@ -22,6 +22,10 @@ function normalizeAmount(value) {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
+function computeWaveFee(baseAmountFcfa) {
+  return Math.ceil(Number(baseAmountFcfa || 0) * 0.01);
+}
+
 function parseDate(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -93,10 +97,17 @@ async function listLinks(req, res) {
 async function createLink(req, res) {
   try {
     const body = req.body || {};
-    const customerName = normalizeText(body.customerName);
-    const amountFcfa = normalizeAmount(body.amountFcfa);
-    if (!customerName) return res.status(400).json({ message: "Nom client obligatoire." });
-    if (!amountFcfa) return res.status(400).json({ message: "Montant invalide." });
+    const invoiceReference = normalizeOptionalText(body.invoiceReference);
+    const customerPhone = normalizeOptionalText(body.customerPhone);
+    const baseAmountFcfa = normalizeAmount(
+      body.baseAmountFcfa ?? body.amountWithoutFeesFcfa ?? body.amountFcfa,
+    );
+    if (!invoiceReference) return res.status(400).json({ message: "Référence facture obligatoire." });
+    if (!customerPhone) return res.status(400).json({ message: "Numéro de téléphone obligatoire." });
+    if (!baseAmountFcfa) return res.status(400).json({ message: "Montant sans frais invalide." });
+    const serviceFeeFcfa = computeWaveFee(baseAmountFcfa);
+    const amountFcfa = baseAmountFcfa + serviceFeeFcfa;
+    const customerName = normalizeText(body.customerName, customerPhone);
 
     const paymentMethod = "WAVE";
 
@@ -110,11 +121,13 @@ async function createLink(req, res) {
         token: generateToken(),
         reference,
         externalReference: normalizeOptionalText(body.externalReference),
-        invoiceReference: normalizeOptionalText(body.invoiceReference),
+        invoiceReference,
         customerName,
-        customerPhone: normalizeOptionalText(body.customerPhone),
+        customerPhone,
         customerEmail: normalizeOptionalText(body.customerEmail)?.toLowerCase() || null,
         customerFboNumber: normalizeOptionalText(body.customerFboNumber),
+        baseAmountFcfa,
+        serviceFeeFcfa,
         amountFcfa,
         paymentMethod,
         provider: "WAVE",

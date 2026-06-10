@@ -1255,6 +1255,8 @@ model ExternalPaymentLink {
   customerEmail String?
   customerFboNumber String?
 
+  baseAmountFcfa Int?
+  serviceFeeFcfa Int @default(0)
   amountFcfa Int
   currencyCode String @default("XOF") @db.VarChar(3)
   paymentMethod PreorderPaymentMode?

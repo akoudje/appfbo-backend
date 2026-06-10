@@ -38,6 +38,8 @@ async function getPublicLink(req, res) {
       customerPhone: link.customerPhone,
       customerEmail: link.customerEmail,
       customerFboNumber: link.customerFboNumber,
+      baseAmountFcfa: link.baseAmountFcfa,
+      serviceFeeFcfa: link.serviceFeeFcfa,
       amountFcfa: link.amountFcfa,
       currencyCode: link.currencyCode,
       paymentMethod: link.paymentMethod,
