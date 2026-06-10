@@ -17,6 +17,12 @@ router.post(
   controller.createLink,
 );
 
+router.post(
+  "/:id/resend-sms",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  controller.resendSms,
+);
+
 router.patch(
   "/:id/status",
   requirePermission(Permission.PAYMENT_VALIDATE),

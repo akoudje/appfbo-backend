@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const prisma = require("../../prisma");
+const { sendSms } = require("../../services/sms.service");
 
 const ALLOWED_STATUSES = new Set(["DRAFT", "ACTIVE", "PAID", "CANCELLED", "EXPIRED"]);
 
@@ -26,6 +27,10 @@ function computeWaveFee(baseAmountFcfa) {
   return Math.ceil(Number(baseAmountFcfa || 0) * 0.01);
 }
 
+function formatAmount(value) {
+  return `${Number(value || 0).toLocaleString("fr-FR")} FCFA`;
+}
+
 function publicUrl(req, token) {
   const configured = String(
     process.env.PUBLIC_APP_URL ||
@@ -35,6 +40,63 @@ function publicUrl(req, token) {
   ).trim();
   const base = configured || `${req.protocol}://${req.get("host")}`;
   return `${base.replace(/\/+$/, "")}/external-payment/${encodeURIComponent(token)}`;
+}
+
+function buildSmsMessage(link, req) {
+  const invoice = link.invoiceReference ? `Facture ${link.invoiceReference}` : "Paiement Forever";
+  return `FOREVER: ${invoice}. Montant ${formatAmount(link.amountFcfa)}. Payez via Wave: ${publicUrl(req, link.token)}`;
+}
+
+async function sendExternalLinkSms({ link, req, phoneOverride = null }) {
+  const to = normalizeOptionalText(phoneOverride) || link.customerPhone;
+  if (!to) {
+    return {
+      accepted: false,
+      provider: "ORANGE",
+      errorCode: "PHONE_REQUIRED",
+      errorMessage: "Numéro de téléphone obligatoire pour l'envoi SMS.",
+      link,
+    };
+  }
+
+  const result = await sendSms({
+    to,
+    message: buildSmsMessage(link, req),
+    callbackData: `external-link-${link.id}`,
+    countryCode: req.country?.code || "CIV",
+  });
+
+  const updated = await prisma.externalPaymentLink.update({
+    where: { id: link.id },
+    data: {
+      smsTo: to,
+      smsStatus: result?.accepted ? "SENT" : "FAILED",
+      smsProvider: result?.provider || "ORANGE",
+      smsProviderMessageId: result?.providerMessageId || null,
+      smsLastError: result?.accepted
+        ? null
+        : result?.errorMessage || result?.errorCode || "Échec envoi SMS",
+      smsLastSentAt: result?.accepted ? new Date() : null,
+      smsSendCount: { increment: 1 },
+      updatedById: req.user?.id || null,
+    },
+    include: {
+      createdBy: { select: { id: true, fullName: true, email: true } },
+      updatedBy: { select: { id: true, fullName: true, email: true } },
+    },
+  });
+
+  return { ...result, link: updated };
+}
+
+function serializeSmsResult(result) {
+  if (!result) return null;
+  return {
+    accepted: Boolean(result.accepted),
+    provider: result.provider || null,
+    errorCode: result.errorCode || null,
+    errorMessage: result.errorMessage || null,
+  };
 }
 
 function serialize(link, req) {
@@ -143,7 +205,12 @@ async function createLink(req, res) {
         updatedBy: { select: { id: true, fullName: true, email: true } },
       },
     });
-    return res.status(201).json(serialize(link, req));
+
+    const smsResult = await sendExternalLinkSms({ link, req });
+    return res.status(201).json({
+      ...serialize(smsResult.link || link, req),
+      smsResult: serializeSmsResult(smsResult),
+    });
   } catch (error) {
     if (error?.code === "P2002") {
       return res.status(409).json({ message: "Cette référence existe déjà." });
@@ -163,6 +230,36 @@ async function createLink(req, res) {
     }
     console.error("externalPaymentLinks.createLink error:", error);
     return res.status(500).json({ message: "Erreur serveur (createLink)" });
+  }
+}
+
+async function resendSms(req, res) {
+  try {
+    const existing = await prisma.externalPaymentLink.findFirst({
+      where: { id: req.params.id, countryId: req.countryId },
+      include: {
+        createdBy: { select: { id: true, fullName: true, email: true } },
+        updatedBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+    if (!existing) return res.status(404).json({ message: "Lien externe introuvable." });
+    if (existing.status !== "ACTIVE") {
+      return res.status(400).json({ message: "Seuls les liens actifs peuvent être renvoyés par SMS." });
+    }
+
+    const smsResult = await sendExternalLinkSms({
+      link: existing,
+      req,
+      phoneOverride: req.body?.phone,
+    });
+
+    return res.json({
+      ...serialize(smsResult.link || existing, req),
+      smsResult: serializeSmsResult(smsResult),
+    });
+  } catch (error) {
+    console.error("externalPaymentLinks.resendSms error:", error);
+    return res.status(500).json({ message: "Erreur serveur (resendSms)" });
   }
 }
 
@@ -201,5 +298,6 @@ async function updateStatus(req, res) {
 module.exports = {
   listLinks,
   createLink,
+  resendSms,
   updateStatus,
 };

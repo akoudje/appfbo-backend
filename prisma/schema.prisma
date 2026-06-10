@@ -1281,6 +1281,14 @@ model ExternalPaymentLink {
   clickedAt DateTime?
   clickCount Int @default(0)
 
+  smsTo String?
+  smsStatus String?
+  smsProvider String?
+  smsProviderMessageId String? @db.Text
+  smsLastError String? @db.Text
+  smsLastSentAt DateTime?
+  smsSendCount Int @default(0)
+
   createdById String?
   createdBy AdminUser? @relation("ExternalPaymentLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
