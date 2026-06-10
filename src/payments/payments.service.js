@@ -2507,7 +2507,9 @@ async function handleWaveWebhook({ req }) {
       ).trim();
       const externalLinkId = externalClientReference.startsWith("EXT:")
         ? externalClientReference.slice(4)
-        : "";
+        : externalClientReference.startsWith("EXT_")
+          ? externalClientReference.slice(4)
+          : "";
       const externalLink = externalLinkId
         ? await prisma.externalPaymentLink.findUnique({ where: { id: externalLinkId } })
         : null;

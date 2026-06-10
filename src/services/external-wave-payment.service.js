@@ -1,6 +1,7 @@
 const prisma = require("../prisma");
 const paymentOrchestrator = require("../payments/payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper");
+const { normalizeForCountry } = require("../utils/phone");
 
 function publicExternalPaymentUrl(token, req = null) {
   const configured = String(
@@ -76,13 +77,24 @@ async function initiateExternalWavePayment({ req, token, payerPhone }) {
   }
 
   const urls = buildWaveUrls(link, req);
-  const clientReference = `EXT:${link.id}`;
+  const payerMobile = payerPhone || link.customerPhone || "";
+  const normalizedPayerMobile = payerMobile
+    ? normalizeForCountry(payerMobile, link.country?.code || req.country?.code || "CIV")
+    : null;
+
+  if (payerMobile && !normalizedPayerMobile) {
+    const err = new Error("Numéro Wave invalide");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const clientReference = `EXT_${link.id}`;
   const providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
     amountFcfa: link.amountFcfa,
     successUrl: urls.successUrl,
     errorUrl: urls.errorUrl,
     clientReference,
-    restrictPayerMobile: payerPhone || link.customerPhone || undefined,
+    restrictPayerMobile: normalizedPayerMobile || undefined,
   });
   const metadata = extractProviderMetadata(providerResponse);
 
