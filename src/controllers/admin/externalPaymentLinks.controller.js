@@ -149,6 +149,19 @@ async function createLink(req, res) {
     if (error?.code === "P2002") {
       return res.status(409).json({ message: "Cette référence existe déjà." });
     }
+    if (
+      error?.code === "P2022" ||
+      /column .*does not exist/i.test(String(error?.message || ""))
+    ) {
+      console.error("externalPaymentLinks.createLink migration error:", {
+        code: error?.code,
+        message: error?.message,
+      });
+      return res.status(500).json({
+        message:
+          "La base de données n'est pas à jour pour les liens Wave externes. Exécutez les migrations Prisma.",
+      });
+    }
     console.error("externalPaymentLinks.createLink error:", error);
     return res.status(500).json({ message: "Erreur serveur (createLink)" });
   }
