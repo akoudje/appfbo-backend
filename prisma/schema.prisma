@@ -96,6 +96,14 @@ enum PaymentStatus {
   PARTIALLY_REFUNDED
 }
 
+enum ExternalPaymentLinkStatus {
+  DRAFT
+  ACTIVE
+  PAID
+  CANCELLED
+  EXPIRED
+}
+
 enum PaymentAttemptStatus {
   CREATED
   PROVIDER_SESSION_CREATED
@@ -418,6 +426,7 @@ model Country {
   ticketEvents TicketEvent[]
   ticketOrders TicketOrder[]
   tickets Ticket[]
+  externalPaymentLinks ExternalPaymentLink[]
 }
 
 model MobilePushToken {
@@ -556,6 +565,8 @@ model AdminUser {
   createdTicketEvents TicketEvent[] @relation("TicketEventCreatedBy")
   updatedTicketEvents TicketEvent[] @relation("TicketEventUpdatedBy")
   checkedInTickets Ticket[] @relation("TicketCheckedInBy")
+  createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
+  updatedExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkUpdatedBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
   auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
 
@@ -1226,6 +1237,54 @@ model PaymentLinkResendRequest {
   @@index([countryId, status, createdAt])
   @@index([preorderId, createdAt])
   @@index([fboNumero, createdAt])
+}
+
+model ExternalPaymentLink {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  token String @unique
+  reference String
+  externalReference String?
+  invoiceReference String?
+
+  customerName String
+  customerPhone String?
+  customerEmail String?
+  customerFboNumber String?
+
+  amountFcfa Int
+  currencyCode String @default("XOF") @db.VarChar(3)
+  paymentMethod PreorderPaymentMode?
+  status ExternalPaymentLinkStatus @default(ACTIVE)
+
+  title String?
+  description String? @db.Text
+  instructions String? @db.Text
+
+  paidAt DateTime?
+  cancelledAt DateTime?
+  expiresAt DateTime?
+  clickedAt DateTime?
+  clickCount Int @default(0)
+
+  createdById String?
+  createdBy AdminUser? @relation("ExternalPaymentLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  updatedById String?
+  updatedBy AdminUser? @relation("ExternalPaymentLinkUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, reference])
+  @@index([countryId, status, createdAt])
+  @@index([externalReference])
+  @@index([invoiceReference])
+  @@index([customerPhone])
+  @@index([customerFboNumber])
 }
 
 model PickupCodeResendRequest {

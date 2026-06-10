@@ -42,6 +42,7 @@ const cashClosuresRoutes = require("./admin/cashClosures.routes");
 const stockRoutes = require("./admin/stock.routes");
 const reportsRoutes = require("./admin/reports.routes");
 const ticketEventsRoutes = require("./admin/ticketEvents.routes");
+const externalPaymentLinksRoutes = require("./admin/externalPaymentLinks.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 const eventsController = require("../controllers/admin/events.controller");
 const paymentLinkResendRequestsController = require("../controllers/paymentLinkResendRequests.controller");
@@ -53,6 +54,7 @@ router.use(resolveCountry, requireAuth, requireCountryScope);
 
 router.use("/orders", ordersRoutes);
 router.use("/orders", paymentsRoutes);
+router.use("/external-payment-links", externalPaymentLinksRoutes);
 router.get(
   "/events/stream",
   requirePermission(Permission.PREORDER_READ),
