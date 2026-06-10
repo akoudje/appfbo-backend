@@ -26,14 +26,13 @@ function computeWaveFee(baseAmountFcfa) {
   return Math.ceil(Number(baseAmountFcfa || 0) * 0.01);
 }
 
-function parseDate(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
 function publicUrl(req, token) {
-  const configured = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || "").trim();
+  const configured = String(
+    process.env.PUBLIC_APP_URL ||
+      process.env.APP_PUBLIC_BASE_URL ||
+      process.env.FRONTEND_URL ||
+      "",
+  ).trim();
   const base = configured || `${req.protocol}://${req.get("host")}`;
   return `${base.replace(/\/+$/, "")}/external-payment/${encodeURIComponent(token)}`;
 }
@@ -135,7 +134,7 @@ async function createLink(req, res) {
         title: normalizeOptionalText(body.title),
         description: normalizeOptionalText(body.description),
         instructions: normalizeOptionalText(body.instructions),
-        expiresAt: parseDate(body.expiresAt),
+        expiresAt: null,
         createdById: req.user?.id || null,
         updatedById: req.user?.id || null,
       },

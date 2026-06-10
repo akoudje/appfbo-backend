@@ -3,7 +3,12 @@ const paymentOrchestrator = require("../payments/payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper");
 
 function publicExternalPaymentUrl(token, req = null) {
-  const configured = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || "").trim();
+  const configured = String(
+    process.env.PUBLIC_APP_URL ||
+      process.env.APP_PUBLIC_BASE_URL ||
+      process.env.FRONTEND_URL ||
+      "",
+  ).trim();
   const base = configured || (req ? `${req.protocol}://${req.get("host")}` : "");
   return `${base.replace(/\/+$/, "")}/external-payment/${encodeURIComponent(token)}`;
 }
