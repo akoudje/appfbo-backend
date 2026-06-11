@@ -1,8 +1,141 @@
 const prisma = require("../prisma");
+const crypto = require("crypto");
 const externalWavePaymentService = require("../services/external-wave-payment.service");
+
+function generateToken() {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+function normalizeOptionalText(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function normalizeAmount(value) {
+  const amount = Number.parseInt(value, 10);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function computeWaveFee(baseAmountFcfa) {
+  return Math.ceil(Number(baseAmountFcfa || 0) * 0.01);
+}
+
+function publicUrl(req, token) {
+  const configured = String(
+    process.env.PUBLIC_APP_URL ||
+      process.env.APP_PUBLIC_BASE_URL ||
+      process.env.FRONTEND_URL ||
+      "",
+  ).trim();
+  const rawBase = configured || `${req.protocol}://${req.get("host")}`;
+  const base = /^https?:\/\//i.test(rawBase) ? rawBase : `https://${rawBase}`;
+  return `${base.replace(/\/+$/, "")}/external-payment/${encodeURIComponent(token)}`;
+}
+
+function qrAccessTokens() {
+  return String(
+    process.env.EXTERNAL_PAYMENT_QR_ACCESS_TOKEN ||
+      process.env.EXTERNAL_PAYMENT_QR_ACCESS_TOKENS ||
+      "",
+  )
+    .split(",")
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function hasQrAccess(req) {
+  const configured = qrAccessTokens();
+  if (!configured.length) return false;
+  const provided =
+    normalizeOptionalText(req.body?.accessToken) ||
+    normalizeOptionalText(req.query?.access) ||
+    normalizeOptionalText(req.header("X-External-Payment-Access"));
+  return Boolean(provided && configured.includes(provided));
+}
+
+async function nextReference(countryId) {
+  const today = new Date();
+  const ymd = today.toISOString().slice(0, 10).replace(/-/g, "");
+  const prefix = `QR-${ymd}`;
+  const count = await prisma.externalPaymentLink.count({
+    where: {
+      countryId,
+      reference: { startsWith: prefix },
+    },
+  });
+  return `${prefix}-${String(count + 1).padStart(4, "0")}`;
+}
 
 function isExpired(link) {
   return link?.expiresAt && new Date(link.expiresAt).getTime() < Date.now();
+}
+
+async function createQrLink(req, res) {
+  try {
+    if (!hasQrAccess(req)) {
+      return res.status(403).json({ message: "Accès non autorisé." });
+    }
+
+    const invoiceReference = normalizeOptionalText(req.body?.invoiceReference);
+    const baseAmountFcfa = normalizeAmount(
+      req.body?.baseAmountFcfa ?? req.body?.amountWithoutFeesFcfa ?? req.body?.amountFcfa,
+    );
+    const customerPhone = normalizeOptionalText(req.body?.customerPhone);
+    const customerEmail = normalizeOptionalText(req.body?.customerEmail);
+    const customerName = normalizeOptionalText(req.body?.customerName) || "Client hors précommande";
+
+    if (!invoiceReference) {
+      return res.status(400).json({ message: "Référence facture obligatoire." });
+    }
+    if (!baseAmountFcfa) {
+      return res.status(400).json({ message: "Montant sans frais invalide." });
+    }
+
+    const serviceFeeFcfa = computeWaveFee(baseAmountFcfa);
+    const amountFcfa = baseAmountFcfa + serviceFeeFcfa;
+
+    const link = await prisma.externalPaymentLink.create({
+      data: {
+        countryId: req.countryId,
+        token: generateToken(),
+        reference: await nextReference(req.countryId),
+        invoiceReference,
+        source: "QR_FORM",
+        customerName,
+        customerPhone,
+        customerEmail: customerEmail?.toLowerCase() || null,
+        baseAmountFcfa,
+        serviceFeeFcfa,
+        amountFcfa,
+        paymentMethod: "WAVE",
+        provider: "WAVE",
+        status: "ACTIVE",
+        title: "Paiement commande Forever",
+      },
+    });
+
+    return res.status(201).json({
+      id: link.id,
+      reference: link.reference,
+      invoiceReference: link.invoiceReference,
+      customerPhone: link.customerPhone,
+      customerEmail: link.customerEmail,
+      baseAmountFcfa: link.baseAmountFcfa,
+      serviceFeeFcfa: link.serviceFeeFcfa,
+      amountFcfa: link.amountFcfa,
+      status: link.status,
+      publicUrl: publicUrl(req, link.token),
+    });
+  } catch (error) {
+    if (error?.code === "P2022" || /column .*does not exist/i.test(String(error?.message || ""))) {
+      return res.status(500).json({
+        message:
+          "La base de données n'est pas à jour pour les liens QR. Exécutez les migrations Prisma.",
+      });
+    }
+    console.error("externalPaymentLinks.createQrLink error:", error);
+    return res.status(500).json({ message: "Erreur serveur (createQrLink)" });
+  }
 }
 
 async function getPublicLink(req, res) {
@@ -102,6 +235,7 @@ async function syncWave(req, res) {
 }
 
 module.exports = {
+  createQrLink,
   getPublicLink,
   initiateWave,
   syncWave,

@@ -1249,6 +1249,7 @@ model ExternalPaymentLink {
   reference String
   externalReference String?
   invoiceReference String?
+  source String @default("ADMIN")
 
   customerName String
   customerPhone String?
@@ -1302,6 +1303,7 @@ model ExternalPaymentLink {
   @@index([countryId, status, createdAt])
   @@index([externalReference])
   @@index([invoiceReference])
+  @@index([source])
   @@index([provider, providerSessionId])
   @@index([provider, providerTransactionId])
   @@index([customerPhone])

@@ -6,6 +6,7 @@ const router = express.Router();
 
 router.use(resolveCountry);
 
+router.post("/qr/create", controller.createQrLink);
 router.get("/:token", controller.getPublicLink);
 router.post("/:token/wave/initiate", controller.initiateWave);
 router.post("/:token/wave/sync", controller.syncWave);
