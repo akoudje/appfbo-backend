@@ -44,6 +44,46 @@ function publicUrl(req, token) {
   return `${base.replace(/\/+$/, "")}/external-payment/${encodeURIComponent(token)}`;
 }
 
+function publicBaseUrl(req) {
+  const configured = String(
+    process.env.PUBLIC_APP_URL ||
+      process.env.APP_PUBLIC_BASE_URL ||
+      process.env.FRONTEND_URL ||
+      "",
+  ).trim();
+  const rawBase = configured || `${req.protocol}://${req.get("host")}`;
+  const base = /^https?:\/\//i.test(rawBase) ? rawBase : `https://${rawBase}`;
+  return base.replace(/\/+$/, "");
+}
+
+function qrAccessToken() {
+  return String(
+    process.env.EXTERNAL_PAYMENT_QR_ACCESS_TOKEN ||
+      process.env.EXTERNAL_PAYMENT_QR_ACCESS_TOKENS ||
+      "",
+  )
+    .split(",")
+    .map((token) => token.trim())
+    .filter(Boolean)[0] || "";
+}
+
+async function getQrConfig(req, res) {
+  try {
+    const token = qrAccessToken();
+    if (!token) {
+      return res.status(500).json({
+        message: "EXTERNAL_PAYMENT_QR_ACCESS_TOKEN n'est pas configuré.",
+      });
+    }
+    const countryCode = req.country?.code || "CIV";
+    const url = `${publicBaseUrl(req)}/pay/wave?countryCode=${encodeURIComponent(countryCode)}&access=${encodeURIComponent(token)}`;
+    return res.json({ url, countryCode });
+  } catch (error) {
+    console.error("externalPaymentLinks.getQrConfig error:", error);
+    return res.status(500).json({ message: "Erreur serveur (getQrConfig)" });
+  }
+}
+
 function buildSmsMessage(link, req) {
   const invoice = link.invoiceReference ? `Facture ${link.invoiceReference}` : "Paiement Forever";
   return `FOREVER: ${invoice}. Montant ${formatAmount(link.amountFcfa)}. Payez via Wave: ${publicUrl(req, link.token)}`;
@@ -324,6 +364,7 @@ async function updateStatus(req, res) {
 }
 
 module.exports = {
+  getQrConfig,
   listLinks,
   createLink,
   resendSms,

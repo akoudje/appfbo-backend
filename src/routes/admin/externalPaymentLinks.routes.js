@@ -11,6 +11,12 @@ router.get(
   controller.listLinks,
 );
 
+router.get(
+  "/qr-config",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  controller.getQrConfig,
+);
+
 router.post(
   "/",
   requirePermission(Permission.PAYMENT_VALIDATE),
