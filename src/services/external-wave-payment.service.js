@@ -169,8 +169,30 @@ async function syncExternalWavePaymentStatus({ req, token }) {
   return { ok: true, link: updated };
 }
 
+async function syncExternalWavePaymentLink(link) {
+  if (!link) {
+    const err = new Error("Lien de paiement introuvable");
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!link.providerSessionId) {
+    return { ok: true, link };
+  }
+
+  const providerStatus = await paymentOrchestrator.getCheckoutSession("WAVE", {
+    providerSessionId: link.providerSessionId,
+  });
+  const updated = await syncExternalWaveLinkFromSession({
+    link,
+    providerStatusRaw: providerStatus.raw || {},
+  });
+
+  return { ok: true, link: updated };
+}
+
 module.exports = {
   initiateExternalWavePayment,
   syncExternalWavePaymentStatus,
+  syncExternalWavePaymentLink,
   syncExternalWaveLinkFromSession,
 };

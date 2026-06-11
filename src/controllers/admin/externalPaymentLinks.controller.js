@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const prisma = require("../../prisma");
 const { sendSms } = require("../../services/sms.service");
+const externalWavePaymentService = require("../../services/external-wave-payment.service");
 
 const ALLOWED_STATUSES = new Set(["DRAFT", "ACTIVE", "PAID", "CANCELLED", "EXPIRED"]);
 
@@ -264,6 +265,30 @@ async function resendSms(req, res) {
   }
 }
 
+async function syncWave(req, res) {
+  try {
+    const existing = await prisma.externalPaymentLink.findFirst({
+      where: { id: req.params.id, countryId: req.countryId },
+      include: {
+        createdBy: { select: { id: true, fullName: true, email: true } },
+        updatedBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+    if (!existing) return res.status(404).json({ message: "Lien externe introuvable." });
+    if (!existing.providerSessionId) {
+      return res.status(400).json({ message: "Aucune session Wave n'est associée à ce lien." });
+    }
+
+    const result = await externalWavePaymentService.syncExternalWavePaymentLink(existing);
+    return res.json(serialize(result.link || existing, req));
+  } catch (error) {
+    console.error("externalPaymentLinks.syncWave error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Erreur serveur (syncWave)",
+    });
+  }
+}
+
 async function updateStatus(req, res) {
   try {
     const status = normalizeOptionalText(req.body?.status);
@@ -300,5 +325,6 @@ module.exports = {
   listLinks,
   createLink,
   resendSms,
+  syncWave,
   updateStatus,
 };

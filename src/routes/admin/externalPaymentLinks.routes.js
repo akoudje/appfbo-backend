@@ -23,6 +23,12 @@ router.post(
   controller.resendSms,
 );
 
+router.post(
+  "/:id/sync-wave",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  controller.syncWave,
+);
+
 router.patch(
   "/:id/status",
   requirePermission(Permission.PAYMENT_VALIDATE),
