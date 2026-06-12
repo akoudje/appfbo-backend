@@ -1179,6 +1179,9 @@ async function relaunchPayment(req, res) {
   const durationMinutes = normalizeRelaunchPaymentWindowMinutes(req.body || {});
   const paymentExpiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
   const note = String(req.body?.note || "").trim();
+  const switchToCash =
+    req.body?.switchToCash === true ||
+    String(req.body?.paymentMode || "").trim().toUpperCase() === "ESPECES";
 
   try {
     const order = await prisma.preorder.findFirst({
@@ -1238,11 +1241,21 @@ async function relaunchPayment(req, res) {
       });
     }
 
+    if (switchToCash && !isGlobalAdminRole(req.user?.role)) {
+      return res.status(403).json({
+        message:
+          "Seuls les administrateurs globaux peuvent relancer une commande en mode caisse.",
+      });
+    }
+
     const previousSnapshot = {
       status: order.status,
       cancelledAt: order.cancelledAt,
       cancelReason: order.cancelReason,
       cancelledById: order.cancelledById,
+      preorderPaymentMode: order.preorderPaymentMode,
+      paymentProvider: order.paymentProvider,
+      paymentStatus: order.paymentStatus,
       billingWorkStatus: order.billingWorkStatus,
       billingCompletedAt: order.billingCompletedAt,
       activePaymentId: order.activePaymentId,
@@ -1273,6 +1286,12 @@ async function relaunchPayment(req, res) {
           cancelledById: null,
           activePaymentId: null,
           paidAt: null,
+          ...(switchToCash
+            ? {
+                preorderPaymentMode: "ESPECES",
+                paymentProvider: "MANUAL",
+              }
+            : {}),
           billingWorkStatus: "QUEUED",
           billingQueueEnteredAt: new Date(),
           billingCompletedAt: null,
@@ -1290,7 +1309,12 @@ async function relaunchPayment(req, res) {
           mode: "ADMIN_RELAUNCH_PAYMENT_AFTER_AUTO_CANCEL",
           durationMinutes,
           paymentExpiresAt: paymentExpiresAt.toISOString(),
+          switchToCash,
           previousStatus: order.status,
+          previousPreorderPaymentMode: order.preorderPaymentMode || null,
+          previousPaymentProvider: order.paymentProvider || null,
+          nextPreorderPaymentMode: switchToCash ? "ESPECES" : order.preorderPaymentMode || null,
+          nextPaymentProvider: switchToCash ? "MANUAL" : order.paymentProvider || null,
           note: note || null,
         },
         actorAdminId,
@@ -1337,6 +1361,9 @@ async function relaunchPayment(req, res) {
           cancelledAt: previousSnapshot.cancelledAt,
           cancelReason: previousSnapshot.cancelReason,
           cancelledById: previousSnapshot.cancelledById,
+          preorderPaymentMode: previousSnapshot.preorderPaymentMode,
+          paymentProvider: previousSnapshot.paymentProvider,
+          paymentStatus: previousSnapshot.paymentStatus,
           billingWorkStatus: previousSnapshot.billingWorkStatus,
           billingCompletedAt: previousSnapshot.billingCompletedAt,
           activePaymentId: previousSnapshot.activePaymentId,
