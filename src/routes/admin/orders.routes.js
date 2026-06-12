@@ -46,6 +46,12 @@ router.post(
   ordersController.invoiceOrder,
 );
 
+router.patch(
+  "/:id/as400-invoice",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.correctAs400Invoice,
+);
+
 router.post(
   "/:id/relaunch-payment",
   requirePermission(Permission.INVOICE_CREATE),

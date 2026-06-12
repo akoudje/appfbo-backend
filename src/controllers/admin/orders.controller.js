@@ -196,6 +196,90 @@ function isGlobalAdminRole(role) {
   );
 }
 
+function normalizeInvoiceReference(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeInvoiceAmountInput(value) {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return null;
+  }
+  const amount = Number(
+    String(value)
+      .trim()
+      .replace(/\s+/g, "")
+      .replace(",", "."),
+  );
+  if (!Number.isFinite(amount) || amount <= 0) {
+    const err = new Error("INVALID_INVOICE_AMOUNT");
+    err.statusCode = 400;
+    throw err;
+  }
+  return Math.round(amount);
+}
+
+function isOrderPaidOrClosed(order = {}) {
+  const status = String(order.status || "").toUpperCase();
+  const paymentStatus = String(order.paymentStatus || "").toUpperCase();
+  const activePaymentStatus = String(order.activePayment?.status || "").toUpperCase();
+  return (
+    paymentStatus === "PAID" ||
+    activePaymentStatus === "SUCCEEDED" ||
+    activePaymentStatus === "PAID" ||
+    Boolean(order.paidAt) ||
+    ["PAID", "READY", "FULFILLED"].includes(status)
+  );
+}
+
+function serializeAs400Duplicate(order) {
+  if (!order) return null;
+  return {
+    id: order.id,
+    preorderNumber: order.preorderNumber || null,
+    fboNumero: order.fboNumero || null,
+    fboNomComplet: order.fboNomComplet || null,
+    status: order.status || null,
+    paymentStatus: order.paymentStatus || null,
+    factureReference: order.factureReference || null,
+    as400InvoiceTotalFcfa: order.as400InvoiceTotalFcfa || null,
+    invoicedAt: order.invoicedAt || null,
+  };
+}
+
+async function findAs400ReferenceDuplicate(req, reference, currentOrderId) {
+  const normalized = normalizeInvoiceReference(reference);
+  if (!normalized) return null;
+
+  const duplicate = await prisma.preorder.findFirst({
+    where: scopeWhere(req, {
+      factureReference: { equals: normalized, mode: "insensitive" },
+      id: { not: currentOrderId },
+    }),
+    orderBy: [{ invoicedAt: "desc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      preorderNumber: true,
+      fboNumero: true,
+      fboNomComplet: true,
+      status: true,
+      paymentStatus: true,
+      factureReference: true,
+      as400InvoiceTotalFcfa: true,
+      invoicedAt: true,
+    },
+  });
+
+  return serializeAs400Duplicate(duplicate);
+}
+
+function shouldConfirmAs400Duplicate(body = {}) {
+  return (
+    body.confirmDuplicateAs400Reference === true ||
+    body.confirmDuplicate === true ||
+    String(body.confirmDuplicateAs400Reference || "").toLowerCase() === "true"
+  );
+}
+
 function canRegularizeFulfillment(role) {
   const normalized = String(role || "").trim().toUpperCase();
   return (
@@ -1023,7 +1107,7 @@ async function updateOrderStatus(req, res) {
 async function getInvoicePreview(req, res) {
   try {
     const { id } = req.params;
-    const { fboGrade, invoiceAmountFcfa } = req.query || {};
+    const { fboGrade, invoiceAmountFcfa, factureReference } = req.query || {};
 
     const result = await buildInvoicePreview({
       preorderId: id,
@@ -1031,7 +1115,16 @@ async function getInvoicePreview(req, res) {
       invoiceAmountOverrideInput: invoiceAmountFcfa,
     });
 
-    return res.json(result);
+    const as400Duplicate = await findAs400ReferenceDuplicate(
+      req,
+      factureReference,
+      id,
+    );
+
+    return res.json({
+      ...result,
+      as400ReferenceDuplicate: as400Duplicate,
+    });
   } catch (e) {
     if (e.message === "PREORDER_NOT_FOUND") {
       return res.status(404).json({ message: "Commande introuvable" });
@@ -1086,18 +1179,33 @@ async function invoiceOrder(req, res) {
       note,
       fboGrade,
       invoiceAmountFcfa,
+      confirmDuplicateAs400Reference,
     } =
       req.body || {};
 
     const actorName = actorLabel(req);
     const actorAdminId = req.user?.id || null;
+    const normalizedInvoiceRef = normalizeInvoiceReference(factureReference);
+    const duplicate = await findAs400ReferenceDuplicate(
+      req,
+      normalizedInvoiceRef,
+      id,
+    );
+    if (duplicate && !shouldConfirmAs400Duplicate({ confirmDuplicateAs400Reference })) {
+      return res.status(409).json({
+        code: "AS400_REFERENCE_DUPLICATE",
+        message:
+          "Cette référence AS400 est déjà utilisée sur une autre commande. Vérifiez avant de confirmer la facturation.",
+        duplicate,
+      });
+    }
 
     const result = await invoiceAndSendPreorder({
       req,
       preorderId: id,
       actorName,
       actorAdminId,
-      invoiceRefInput: factureReference,
+      invoiceRefInput: normalizedInvoiceRef,
       whatsappToInput: whatsappTo,
       notificationEmailInput: notificationEmail,
       invoiceNote: note,
@@ -1169,6 +1277,175 @@ async function invoiceOrder(req, res) {
     return res.status(500).json({
       message: e.message || "Erreur serveur (invoiceOrder)",
     });
+  }
+}
+
+async function correctAs400Invoice(req, res) {
+  const { id } = req.params;
+  const actorAdminId = req.user?.id || null;
+
+  try {
+    const {
+      factureReference,
+      invoiceAmountFcfa,
+      note,
+      confirmDuplicateAs400Reference,
+    } = req.body || {};
+    const normalizedInvoiceRef = normalizeInvoiceReference(factureReference);
+    const normalizedAmountFcfa = normalizeInvoiceAmountInput(invoiceAmountFcfa);
+
+    if (!normalizedInvoiceRef) {
+      return res.status(400).json({
+        message: "La référence AS400 est obligatoire pour corriger la facture.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        activePayment: {
+          select: {
+            id: true,
+            status: true,
+            amountExpectedFcfa: true,
+            cancelledAt: true,
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (!order.factureReference && !order.invoicedAt) {
+      return res.status(400).json({
+        message:
+          "Cette commande n'a pas encore été facturée. Utilisez l'action de facturation normale.",
+      });
+    }
+
+    if (isOrderPaidOrClosed(order)) {
+      return res.status(400).json({
+        message:
+          "Impossible de corriger la facture AS400 : la commande est déjà payée, prête ou clôturée.",
+      });
+    }
+
+    const duplicate = await findAs400ReferenceDuplicate(
+      req,
+      normalizedInvoiceRef,
+      id,
+    );
+    if (duplicate && !shouldConfirmAs400Duplicate({ confirmDuplicateAs400Reference })) {
+      return res.status(409).json({
+        code: "AS400_REFERENCE_DUPLICATE",
+        message:
+          "Cette référence AS400 est déjà utilisée sur une autre commande. Confirmez uniquement si c'est volontaire.",
+        duplicate,
+      });
+    }
+
+    const now = new Date();
+    const paymentPricing = computePaymentPricing({
+      preorderPaymentMode: order.preorderPaymentMode,
+      paymentMode: order.paymentMode,
+      paymentProvider: order.paymentProvider,
+      orderTotalFcfa: normalizedAmountFcfa,
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.updateMany({
+        where: {
+          preorderId: order.id,
+          status: {
+            notIn: ["SUCCEEDED", "REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED"],
+          },
+        },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: now,
+        },
+      });
+
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          factureReference: normalizedInvoiceRef,
+          as400InvoiceTotalFcfa: normalizedAmountFcfa,
+          totalFcfa: normalizedAmountFcfa,
+          activePaymentId: null,
+          paymentStatus: "UNPAID",
+          status:
+            String(order.status || "").toUpperCase() === "PAYMENT_PENDING"
+              ? "INVOICED"
+              : order.status,
+          billingLastActivityAt: now,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "INVOICE",
+        "Correction de la référence ou du montant AS400.",
+        {
+          mode: "AS400_INVOICE_CORRECTION",
+          previousFactureReference: order.factureReference || null,
+          nextFactureReference: normalizedInvoiceRef,
+          previousAs400InvoiceTotalFcfa: order.as400InvoiceTotalFcfa || null,
+          nextAs400InvoiceTotalFcfa: normalizedAmountFcfa,
+          previousTotalFcfa: order.totalFcfa || null,
+          nextTotalFcfa: normalizedAmountFcfa,
+          previousActivePaymentId: order.activePaymentId || null,
+          previousActivePaymentAmountExpectedFcfa:
+            order.activePayment?.amountExpectedFcfa || null,
+          nextAmountToPayFcfa: paymentPricing.amountToPayFcfa,
+          paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
+          note: String(note || "").trim() || null,
+        },
+        actorAdminId,
+      );
+    });
+
+    const updated = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        fbo: true,
+        country: true,
+        items: {
+          include: { product: true },
+          orderBy: { createdAt: "asc" },
+        },
+        activePayment: {
+          include: {
+            attempts: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    return res.json({
+      ok: true,
+      message:
+        "Facture AS400 corrigée. Les paiements non finalisés liés à l'ancien montant ont été annulés.",
+      order: updated,
+    });
+  } catch (e) {
+    console.error("correctAs400Invoice error:", e);
+
+    if (e.message === "INVALID_INVOICE_AMOUNT") {
+      return res.status(400).json({
+        message: "Le montant AS400 est invalide.",
+      });
+    }
+
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (correctAs400Invoice)" });
   }
 }
 
@@ -3235,6 +3512,7 @@ module.exports = {
   updateOrderStatus,
   getInvoicePreview,
   invoiceOrder,
+  correctAs400Invoice,
   relaunchPayment,
   replaceBillingOrderItem,
   updateNotificationContacts,
