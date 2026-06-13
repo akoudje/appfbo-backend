@@ -152,7 +152,15 @@ function formatAdmin(admin) {
 
 function paymentModeLabel(value) {
   const mode = String(value || "").trim().toUpperCase();
-  return mode || "NON_RENSEIGNE";
+  const labels = {
+    ESPECES: "Espèces",
+    WAVE: "Wave",
+    ORANGE_MONEY: "Orange Money",
+    BANK_TRANSFER: "Virement bancaire",
+    ECOBANK_PAY: "Ecobank Pay",
+    PI_SPI: "PI SPI",
+  };
+  return labels[mode] || mode || "Non renseigné";
 }
 
 function normalizeFilterId(value) {
