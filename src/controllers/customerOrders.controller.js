@@ -233,6 +233,7 @@ async function reorderMyOrder(req, res) {
                 enableCash: true,
                 enableBankTransfer: true,
                 enableEcobankPay: true,
+                enablePiSpi: true,
                 enableDelivery: true,
                 enablePickup: true,
               },

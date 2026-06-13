@@ -648,7 +648,7 @@ function buildSmsTemplateCandidates({ purpose, context }) {
     return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
   }
   if (flow === "PI_SPI") {
-    return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
+    return ["INVOICE_PI_SPI", "INVOICE_BANK_TRANSFER", "INVOICE"];
   }
   if (flow === "BANK_TRANSFER") {
     return ["INVOICE_BANK_TRANSFER", "INVOICE"];
@@ -668,7 +668,7 @@ function buildEmailTemplateCandidates({ purpose, context }) {
     return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
   }
   if (purposeKey === "INVOICE" && flow === "PI_SPI") {
-    return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
+    return ["INVOICE_PI_SPI", "INVOICE_BANK_TRANSFER", "INVOICE"];
   }
 
   if (purposeKey === "INVOICE" && flow === "BANK_TRANSFER") {

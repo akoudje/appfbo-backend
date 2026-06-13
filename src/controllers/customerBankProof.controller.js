@@ -150,7 +150,7 @@ function buildPublicBankProofContext(order) {
     paymentExpiryHours: resolvedPaymentExpiryHours,
     paymentExpiresAt,
     ecobankPay:
-      ["ECOBANK_PAY", "PI_SPI"].includes(String(order?.preorderPaymentMode || "").trim().toUpperCase())
+      String(order?.preorderPaymentMode || "").trim().toUpperCase() === "ECOBANK_PAY"
         ? {
             merchantName: order?.country?.settings?.ecobankPayMerchantName || null,
             merchantId: order?.country?.settings?.ecobankPayMerchantId || null,
@@ -158,6 +158,15 @@ function buildPublicBankProofContext(order) {
             terminalId: order?.country?.settings?.ecobankPayTerminalId || null,
             qrImageUrl: order?.country?.settings?.ecobankPayQrImageUrl || null,
             instructions: order?.country?.settings?.ecobankPayInstructions || null,
+          }
+        : null,
+    piSpi:
+      String(order?.preorderPaymentMode || "").trim().toUpperCase() === "PI_SPI"
+        ? {
+            alias: order?.country?.settings?.piSpiAlias || null,
+            merchantName: order?.country?.settings?.piSpiMerchantName || null,
+            qrImageUrl: order?.country?.settings?.piSpiQrImageUrl || null,
+            instructions: order?.country?.settings?.piSpiInstructions || null,
           }
         : null,
   };
@@ -537,6 +546,10 @@ async function getPublicBankProofContext(req, res) {
                 ecobankPayTerminalId: true,
                 ecobankPayQrImageUrl: true,
                 ecobankPayInstructions: true,
+                piSpiAlias: true,
+                piSpiMerchantName: true,
+                piSpiQrImageUrl: true,
+                piSpiInstructions: true,
               },
             },
           },
@@ -668,6 +681,10 @@ async function getPublicBankProofContextByOrderId(req, res) {
                 ecobankPayTerminalId: true,
                 ecobankPayQrImageUrl: true,
                 ecobankPayInstructions: true,
+                piSpiAlias: true,
+                piSpiMerchantName: true,
+                piSpiQrImageUrl: true,
+                piSpiInstructions: true,
               },
             },
           },

@@ -33,7 +33,7 @@ function isPaymentModeEnabled(settings = {}, mode) {
   if (normalized === "ORANGE_MONEY") return settings?.enableOrangeMoney !== false;
   if (normalized === "BANK_TRANSFER") return settings?.enableBankTransfer !== false;
   if (normalized === "ECOBANK_PAY") return settings?.enableEcobankPay === true;
-  if (normalized === "PI_SPI") return settings?.enableEcobankPay === true;
+  if (normalized === "PI_SPI") return settings?.enablePiSpi === true;
 
   return false;
 }

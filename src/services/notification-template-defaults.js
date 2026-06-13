@@ -20,6 +20,8 @@ function buildDefaultNotificationTemplates() {
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Effectuez le virement puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
       INVOICE_ECOBANK_PAY:
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Scannez le QR Ecobank Pay puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
+      INVOICE_PI_SPI:
+        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Scannez le QR PI SPI puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
       INVOICE_CASH:
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Passez a la caisse FLP sous ${expiryHours}H. Passe ce delai, la commande sera annulee.`,
       PAYMENT_CONFIRMED:
@@ -105,6 +107,26 @@ function buildDefaultNotificationTemplates() {
           "Equipe FOREVER",
         ].join("\n"),
       },
+      INVOICE_PI_SPI: {
+        subject: "FOREVER CI - Dépôt de preuve PI SPI ({{preorderNumber}})",
+        body: [
+          "Bonjour {{customerName}},",
+          "",
+          "Votre précommande {{preorderNumber}} est prête pour paiement via PI SPI.",
+          "Code encaissement: {{paymentCollectionCode}}",
+          "Montant à payer: {{totalFcfaLabel}}",
+          "Lien sécurisé de dépôt de preuve: {{bankProofUploadLink}}",
+          "Cette préfacture reste payable pendant {{paymentExpiryHours}}h maximum après émission.",
+          "",
+          "Étapes recommandées:",
+          "1. Scannez le QR code PI SPI et vérifiez le bénéficiaire.",
+          "2. Payez le montant exact.",
+          "3. Ouvrez le lien sécurisé et joignez votre justificatif de paiement.",
+          "",
+          "Merci de votre confiance.",
+          "Equipe FOREVER",
+        ].join("\n"),
+      },
       REMINDER_BANK_TRANSFER: {
         subject: "FOREVER CI - Rappel dépôt preuve bancaire ({{preorderNumber}})",
         body: [
@@ -166,6 +188,10 @@ function mergeNotificationTemplates(baseTemplates = {}, overrideTemplates = {}) 
       INVOICE_ECOBANK_PAY: {
         ...(baseTemplates?.email?.INVOICE_ECOBANK_PAY || {}),
         ...(overrideTemplates?.email?.INVOICE_ECOBANK_PAY || {}),
+      },
+      INVOICE_PI_SPI: {
+        ...(baseTemplates?.email?.INVOICE_PI_SPI || {}),
+        ...(overrideTemplates?.email?.INVOICE_PI_SPI || {}),
       },
       REMINDER_BANK_TRANSFER: {
         ...(baseTemplates?.email?.REMINDER_BANK_TRANSFER || {}),

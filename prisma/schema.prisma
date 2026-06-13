@@ -479,6 +479,11 @@ model CountrySettings {
   ecobankPayTerminalId String?
   ecobankPayQrImageUrl String?
   ecobankPayInstructions String? @db.Text
+  enablePiSpi Boolean @default(false)
+  piSpiAlias String?
+  piSpiMerchantName String?
+  piSpiQrImageUrl String?
+  piSpiInstructions String? @db.Text
   enableDelivery Boolean @default(true)
   enablePickup Boolean @default(true)
   bankAccountLabel String?

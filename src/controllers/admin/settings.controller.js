@@ -160,6 +160,11 @@ async function getCountrySettings(req, res) {
         ecobankPayTerminalId: true,
         ecobankPayQrImageUrl: true,
         ecobankPayInstructions: true,
+        enablePiSpi: true,
+        piSpiAlias: true,
+        piSpiMerchantName: true,
+        piSpiQrImageUrl: true,
+        piSpiInstructions: true,
         enableDelivery: true,
         enablePickup: true,
         bankAccountLabel: true,
@@ -217,6 +222,11 @@ async function getCountrySettings(req, res) {
         ecobankPayTerminalId: null,
         ecobankPayQrImageUrl: null,
         ecobankPayInstructions: null,
+        enablePiSpi: false,
+        piSpiAlias: null,
+        piSpiMerchantName: null,
+        piSpiQrImageUrl: null,
+        piSpiInstructions: null,
         enableDelivery: true,
         enablePickup: true,
         bankAccountLabel: null,
@@ -294,6 +304,11 @@ async function updateCountrySettings(req, res) {
       ecobankPayTerminalId,
       ecobankPayQrImageUrl,
       ecobankPayInstructions,
+      enablePiSpi,
+      piSpiAlias,
+      piSpiMerchantName,
+      piSpiQrImageUrl,
+      piSpiInstructions,
       enableDelivery,
       enablePickup,
       bankAccountLabel,
@@ -487,6 +502,7 @@ async function updateCountrySettings(req, res) {
     if (enableCash !== undefined) data.enableCash = Boolean(enableCash);
     if (enableBankTransfer !== undefined) data.enableBankTransfer = Boolean(enableBankTransfer);
     if (enableEcobankPay !== undefined) data.enableEcobankPay = Boolean(enableEcobankPay);
+    if (enablePiSpi !== undefined) data.enablePiSpi = Boolean(enablePiSpi);
     if (enableDelivery !== undefined) data.enableDelivery = Boolean(enableDelivery);
     if (enablePickup !== undefined) data.enablePickup = Boolean(enablePickup);
 
@@ -507,6 +523,18 @@ async function updateCountrySettings(req, res) {
     }
     if (ecobankPayInstructions !== undefined) {
       data.ecobankPayInstructions = ecobankPayInstructions ? String(ecobankPayInstructions).trim() : null;
+    }
+    if (piSpiAlias !== undefined) {
+      data.piSpiAlias = piSpiAlias ? String(piSpiAlias).trim() : null;
+    }
+    if (piSpiMerchantName !== undefined) {
+      data.piSpiMerchantName = piSpiMerchantName ? String(piSpiMerchantName).trim() : null;
+    }
+    if (piSpiQrImageUrl !== undefined) {
+      data.piSpiQrImageUrl = piSpiQrImageUrl ? String(piSpiQrImageUrl).trim() : null;
+    }
+    if (piSpiInstructions !== undefined) {
+      data.piSpiInstructions = piSpiInstructions ? String(piSpiInstructions).trim() : null;
     }
 
     if (bankAccountLabel !== undefined) {
@@ -617,6 +645,12 @@ async function updateCountrySettings(req, res) {
           ecobankPayTerminalId: data.ecobankPayTerminalId ?? null,
           ecobankPayQrImageUrl: data.ecobankPayQrImageUrl ?? null,
           ecobankPayInstructions: data.ecobankPayInstructions ?? null,
+          enablePiSpi:
+            data.enablePiSpi !== undefined ? data.enablePiSpi : false,
+          piSpiAlias: data.piSpiAlias ?? null,
+          piSpiMerchantName: data.piSpiMerchantName ?? null,
+          piSpiQrImageUrl: data.piSpiQrImageUrl ?? null,
+          piSpiInstructions: data.piSpiInstructions ?? null,
           enableDelivery:
             data.enableDelivery !== undefined ? data.enableDelivery : true,
           enablePickup: data.enablePickup !== undefined ? data.enablePickup : true,
@@ -694,6 +728,11 @@ async function updateCountrySettings(req, res) {
         ecobankPayTerminalId: true,
         ecobankPayQrImageUrl: true,
         ecobankPayInstructions: true,
+        enablePiSpi: true,
+        piSpiAlias: true,
+        piSpiMerchantName: true,
+        piSpiQrImageUrl: true,
+        piSpiInstructions: true,
         enableDelivery: true,
         enablePickup: true,
         bankAccountLabel: true,
