@@ -117,12 +117,14 @@ function buildPaymentWhatsAppMessage({
       "Merci de vous présenter au bureau pour effectuer le règlement en espèces."
     );
     lines.push("Votre commande sera préparée après validation du paiement.");
-  } else if (normalizedMode === "BANK_TRANSFER" || normalizedMode === "ECOBANK_PAY") {
+  } else if (normalizedMode === "BANK_TRANSFER" || normalizedMode === "ECOBANK_PAY" || normalizedMode === "PI_SPI") {
     lines.push("");
     lines.push(
-      normalizedMode === "ECOBANK_PAY"
-        ? "Merci d'effectuer votre paiement Ecobank Pay selon les instructions reçues."
-        : "Merci d'effectuer votre virement/versement bancaire selon les instructions reçues."
+      normalizedMode === "PI_SPI"
+        ? "Merci d'effectuer votre paiement PI SPI selon les instructions reçues."
+        : normalizedMode === "ECOBANK_PAY"
+          ? "Merci d'effectuer votre paiement Ecobank Pay selon les instructions reçues."
+          : "Merci d'effectuer votre virement/versement bancaire selon les instructions reçues."
     );
     lines.push(
       "Déposez ensuite la preuve de paiement depuis votre espace client sécurisé."

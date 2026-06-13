@@ -174,8 +174,11 @@ async function getStorefrontConfig(req, res) {
       }),
     ]);
 
+    const countryCode = req.country?.code || null;
+    const isCiv = String(countryCode || "").trim().toUpperCase() === "CIV";
+
     return res.json({
-      countryCode: req.country?.code || null,
+      countryCode,
       minCartFcfa: settings?.minCartFcfa ?? 100,
       maxQtyPerProduct: settings?.maxQtyPerProduct ?? 10,
       preorderSubmissionEnabled: settings?.preorderSubmissionEnabled ?? true,
@@ -202,6 +205,13 @@ async function getStorefrontConfig(req, res) {
         cash: settings?.enableCash ?? true,
         bankTransfer: settings?.enableBankTransfer ?? true,
         ecobankPay: settings?.enableEcobankPay ?? false,
+        piSpi: isCiv ? settings?.enableEcobankPay ?? false : false,
+      },
+      piSpi: {
+        alias: settings?.ecobankPayMerchantId || null,
+        merchantName: settings?.ecobankPayMerchantName || null,
+        qrImageUrl: settings?.ecobankPayQrImageUrl || null,
+        instructions: settings?.ecobankPayInstructions || null,
       },
       ecobankPay: {
         merchantName: settings?.ecobankPayMerchantName || null,

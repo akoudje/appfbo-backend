@@ -235,7 +235,11 @@ function buildDefaultEmailBodyByPurpose({
   )
     .trim()
     .toUpperCase();
-  const isEcobankPayFlow = paymentMode === "ECOBANK_PAY" || paymentMode.includes("ECOBANK");
+  const isEcobankPayFlow =
+    paymentMode === "ECOBANK_PAY" ||
+    paymentMode === "PI_SPI" ||
+    paymentMode.includes("ECOBANK") ||
+    paymentMode.includes("SPI");
   const isBankTransferFlow =
     isEcobankPayFlow ||
     paymentMode === "BANK_TRANSFER" ||
@@ -483,6 +487,7 @@ function resolvePaymentFlowKey(preorder = {}, paymentLink = "") {
     .trim()
     .toUpperCase();
   const hasPaymentLink = Boolean(String(paymentLink || "").trim());
+  const isPiSpi = mode === "PI_SPI" || mode.includes("SPI");
   const isEcobankPay = mode === "ECOBANK_PAY" || mode.includes("ECOBANK");
   const isBankTransfer =
     !isEcobankPay &&
@@ -492,6 +497,7 @@ function resolvePaymentFlowKey(preorder = {}, paymentLink = "") {
       mode.includes("BANK"));
   const isCash = mode.includes("ESPE") || mode === "MANUAL" || mode === "CASH";
 
+  if (isPiSpi) return "PI_SPI";
   if (isEcobankPay) return "ECOBANK_PAY";
   if (isBankTransfer) return "BANK_TRANSFER";
   if (hasPaymentLink || mode.includes("WAVE")) return "WAVE";
@@ -586,7 +592,7 @@ function buildTemplateContext({
   const pickupCode = preorder?.pickupSecretCode || "-";
   const paymentFlow = resolvePaymentFlowKey(preorder, paymentLink);
   const bankProofUploadLink =
-    paymentFlow === "BANK_TRANSFER" || paymentFlow === "ECOBANK_PAY" ? paymentLink : "";
+    ["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"].includes(paymentFlow) ? paymentLink : "";
   const paymentExpiryHours = resolvePaymentExpiryHoursForPreorder(preorder);
 
   return {
@@ -641,6 +647,9 @@ function buildSmsTemplateCandidates({ purpose, context }) {
   if (flow === "ECOBANK_PAY") {
     return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
   }
+  if (flow === "PI_SPI") {
+    return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
+  }
   if (flow === "BANK_TRANSFER") {
     return ["INVOICE_BANK_TRANSFER", "INVOICE"];
   }
@@ -658,12 +667,15 @@ function buildEmailTemplateCandidates({ purpose, context }) {
   if (purposeKey === "INVOICE" && flow === "ECOBANK_PAY") {
     return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
   }
+  if (purposeKey === "INVOICE" && flow === "PI_SPI") {
+    return ["INVOICE_ECOBANK_PAY", "INVOICE_BANK_TRANSFER", "INVOICE"];
+  }
 
   if (purposeKey === "INVOICE" && flow === "BANK_TRANSFER") {
     return ["INVOICE_BANK_TRANSFER", "INVOICE"];
   }
 
-  if (purposeKey === "REMINDER" && (flow === "ECOBANK_PAY" || flow === "BANK_TRANSFER")) {
+  if (purposeKey === "REMINDER" && (flow === "ECOBANK_PAY" || flow === "PI_SPI" || flow === "BANK_TRANSFER")) {
     return ["REMINDER_BANK_TRANSFER", "REMINDER"];
   }
 
@@ -682,7 +694,7 @@ function ensureEmailBodyIncludesActionLink({ purpose, context, emailBody }) {
 
   const flow = String(context?.paymentFlow || "").toUpperCase();
   const label =
-    flow === "BANK_TRANSFER" || flow === "ECOBANK_PAY"
+    flow === "BANK_TRANSFER" || flow === "ECOBANK_PAY" || flow === "PI_SPI"
       ? "Lien sécurisé de dépôt de preuve"
       : "Lien de paiement sécurisé";
 

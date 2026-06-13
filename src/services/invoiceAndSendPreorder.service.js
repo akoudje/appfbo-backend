@@ -290,6 +290,7 @@ function buildInvoiceMessage({
     .trim()
     .toUpperCase();
   const isCashFlow = normalizedMode.includes("ESPE") || normalizedMode === "MANUAL";
+  const isPiSpiFlow = normalizedMode === "PI_SPI" || normalizedMode.includes("SPI");
   const isEcobankPayFlow = normalizedMode === "ECOBANK_PAY" || normalizedMode.includes("ECOBANK");
   const isBankTransferFlow =
     isEcobankPayFlow ||
@@ -298,6 +299,21 @@ function buildInvoiceMessage({
     normalizedMode.includes("VIREMENT") ||
     normalizedMode.includes("BANK");
   const expiryHours = resolvePaymentExpiryHours(preorder);
+
+  if (isPiSpiFlow) {
+    if (normalizedLink) {
+      return firstSmsCandidate([
+        `Code ${collectionCode}. Montant ${amountFmt}F. PI SPI puis depot preuve sous ${expiryHours}H: ${normalizedLink}`,
+        `Code ${collectionCode}. ${amountFmt}F. Deposez votre preuve PI SPI ici sous ${expiryHours}H: ${normalizedLink}`,
+        `Code ${collectionCode}. Lien depot preuve PI SPI: ${normalizedLink}`,
+      ]);
+    }
+    return firstSmsCandidate([
+      `Code ${collectionCode}. Montant ${amountFmt}F. Payez via PI SPI sous ${expiryHours}H. Consultez votre email ou l'espace client.`,
+      `Code ${collectionCode}. ${amountFmt}F. Instructions PI SPI envoyees. Paiement sous ${expiryHours}H.`,
+      `Code ${collectionCode}. Voir espace client pour PI SPI. Delai ${expiryHours}H.`,
+    ]);
+  }
 
   if (isEcobankPayFlow) {
     if (normalizedLink) {
@@ -595,8 +611,10 @@ async function invoiceAndSendPreorder({
   const isBankTransferPreorder =
     normalizedPaymentMode === "BANK_TRANSFER" ||
     normalizedPaymentMode === "ECOBANK_PAY" ||
+    normalizedPaymentMode === "PI_SPI" ||
     normalizedPaymentMode.includes("BANK_TRANSFER") ||
     normalizedPaymentMode.includes("ECOBANK") ||
+    normalizedPaymentMode.includes("SPI") ||
     normalizedPaymentMode.includes("VIREMENT") ||
     normalizedPaymentMode.includes("BANK");
 

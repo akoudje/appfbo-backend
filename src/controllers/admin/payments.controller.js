@@ -335,9 +335,9 @@ async function uploadAdminBankProof(req, res) {
     }
 
     const paymentMode = String(order.preorderPaymentMode || "").trim().toUpperCase();
-    if (!["BANK_TRANSFER", "ECOBANK_PAY"].includes(paymentMode)) {
+    if (!["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"].includes(paymentMode)) {
       return res.status(400).json({
-        message: "L'upload de preuve est réservé aux paiements par virement bancaire / Ecobank Pay.",
+        message: "L'upload de preuve est réservé aux paiements par virement bancaire / Ecobank Pay / PI SPI.",
       });
     }
 

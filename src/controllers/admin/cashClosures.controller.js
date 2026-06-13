@@ -15,6 +15,7 @@ const PAYMENT_MODE_LABELS = {
   ORANGE_MONEY: "Orange Money",
   BANK_TRANSFER: "Virement bancaire",
   ECOBANK_PAY: "Ecobank Pay",
+  PI_SPI: "PI SPI",
   TPE_CARD: "TPE / Carte bancaire",
   MANUAL: "Autre paiement manuel",
   UNKNOWN: "Non renseigné",
@@ -27,6 +28,7 @@ const DECLARATION_PAYMENT_MODES = [
   "TPE_CARD",
   "BANK_TRANSFER",
   "ECOBANK_PAY",
+  "PI_SPI",
 ];
 
 function isVisibleDeclarationLine(line) {

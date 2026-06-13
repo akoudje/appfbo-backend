@@ -4,6 +4,7 @@ const PICKUP_ONLY_PAYMENT_MODES = new Set([
   "ORANGE_MONEY",
   "BANK_TRANSFER",
   "ECOBANK_PAY",
+  "PI_SPI",
 ]);
 
 const PAYMENT_MODE_LABELS = {
@@ -12,6 +13,7 @@ const PAYMENT_MODE_LABELS = {
   ORANGE_MONEY: "Orange Money",
   BANK_TRANSFER: "Virement bancaire",
   ECOBANK_PAY: "Ecobank Pay",
+  PI_SPI: "PI SPI",
 };
 
 function normalizeOption(value) {
@@ -31,6 +33,7 @@ function isPaymentModeEnabled(settings = {}, mode) {
   if (normalized === "ORANGE_MONEY") return settings?.enableOrangeMoney !== false;
   if (normalized === "BANK_TRANSFER") return settings?.enableBankTransfer !== false;
   if (normalized === "ECOBANK_PAY") return settings?.enableEcobankPay === true;
+  if (normalized === "PI_SPI") return settings?.enableEcobankPay === true;
 
   return false;
 }

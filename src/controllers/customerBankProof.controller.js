@@ -17,7 +17,7 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 
 const BANK_PROOF_TMP_DIR = path.join(os.tmpdir(), "appfbo-bank-proofs");
-const PROOF_PAYMENT_MODES = new Set(["BANK_TRANSFER", "ECOBANK_PAY"]);
+const PROOF_PAYMENT_MODES = new Set(["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"]);
 
 function isProofPaymentMode(mode) {
   return PROOF_PAYMENT_MODES.has(String(mode || "").trim().toUpperCase());
@@ -150,7 +150,7 @@ function buildPublicBankProofContext(order) {
     paymentExpiryHours: resolvedPaymentExpiryHours,
     paymentExpiresAt,
     ecobankPay:
-      String(order?.preorderPaymentMode || "").trim().toUpperCase() === "ECOBANK_PAY"
+      ["ECOBANK_PAY", "PI_SPI"].includes(String(order?.preorderPaymentMode || "").trim().toUpperCase())
         ? {
             merchantName: order?.country?.settings?.ecobankPayMerchantName || null,
             merchantId: order?.country?.settings?.ecobankPayMerchantId || null,

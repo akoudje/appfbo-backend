@@ -2393,9 +2393,11 @@ async function switchWaveToManualPayment(req, res) {
       paymentMode === "BANK_TRANSFER" || provider === "BANK_TRANSFER";
     const isEcobankPay =
       paymentMode === "ECOBANK_PAY" || provider === "ECOBANK_PAY";
-    if (!isWave && !isBankTransfer && !isEcobankPay) {
+    const isPiSpi =
+      paymentMode === "PI_SPI" || provider === "PI_SPI";
+    if (!isWave && !isBankTransfer && !isEcobankPay && !isPiSpi) {
       return res.status(400).json({
-        message: "Seules les commandes Wave, virement bancaire ou Ecobank Pay peuvent être basculées en paiement à la caisse.",
+        message: "Seules les commandes Wave, virement bancaire, Ecobank Pay ou PI SPI peuvent être basculées en paiement à la caisse.",
       });
     }
 
@@ -2405,7 +2407,7 @@ async function switchWaveToManualPayment(req, res) {
       });
     }
 
-    const sourceLabel = isEcobankPay ? "Ecobank Pay" : isBankTransfer ? "virement bancaire" : "Wave";
+    const sourceLabel = isPiSpi ? "PI SPI" : isEcobankPay ? "Ecobank Pay" : isBankTransfer ? "virement bancaire" : "Wave";
 
     const now = new Date();
     await prisma.$transaction(async (tx) => {

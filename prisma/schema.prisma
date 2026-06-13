@@ -82,6 +82,7 @@ enum PreorderPaymentMode {
   ORANGE_MONEY
   BANK_TRANSFER
   ECOBANK_PAY
+  PI_SPI
 }
 
 enum PaymentStatus {

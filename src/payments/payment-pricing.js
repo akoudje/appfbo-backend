@@ -3,6 +3,7 @@ const MOBILE_MONEY_SERVICE_FEE_RATES = {
   ORANGE_MONEY: 0,
   BANK_TRANSFER: 0,
   ECOBANK_PAY: 0,
+  PI_SPI: 0,
 };
 
 function normalizePaymentMode(value) {
@@ -36,6 +37,10 @@ function resolveServiceFeeRatePercent(mode) {
 
   if (normalized === "ECOBANK_PAY" || normalized.includes("ECOBANK")) {
     return MOBILE_MONEY_SERVICE_FEE_RATES.ECOBANK_PAY;
+  }
+
+  if (normalized === "PI_SPI" || normalized.includes("SPI")) {
+    return MOBILE_MONEY_SERVICE_FEE_RATES.PI_SPI;
   }
 
   if (normalized === "BANK_TRANSFER" || normalized.includes("BANK")) {
