@@ -54,6 +54,9 @@ function buildFboSearchTerms(value) {
 
 function getBillingQueueOrderStatusFilter(billingWorkStatus) {
   const normalized = String(billingWorkStatus || "").trim().toUpperCase();
+  if (!normalized) {
+    return "SUBMITTED";
+  }
   if (
     [
       "QUEUED",
@@ -566,6 +569,9 @@ async function listOrders(req, res) {
           billingQueueEnteredAt: true,
           assignedAt: true,
           billingSlaDeadlineAt: true,
+          billingCompletedAt: true,
+          invoicedAt: true,
+          submittedAt: true,
           createdAt: true,
           updatedAt: true,
           preorderNumber: true,
