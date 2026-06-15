@@ -35,6 +35,12 @@ router.post(
   controller.syncWave,
 );
 
+router.post(
+  "/:id/attach-order",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  controller.attachToOrder,
+);
+
 router.patch(
   "/:id/status",
   requirePermission(Permission.PAYMENT_VALIDATE),

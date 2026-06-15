@@ -363,6 +363,213 @@ async function updateStatus(req, res) {
   }
 }
 
+async function attachToOrder(req, res) {
+  try {
+    const preorderNumber = normalizeOptionalText(req.body?.preorderNumber);
+    if (!preorderNumber) {
+      return res.status(400).json({ message: "Numéro de commande requis." });
+    }
+
+    const link = await prisma.externalPaymentLink.findFirst({
+      where: { id: req.params.id, countryId: req.countryId },
+    });
+    if (!link) return res.status(404).json({ message: "Lien externe introuvable." });
+
+    if (link.status !== "PAID") {
+      return res.status(400).json({
+        message: "Seul un lien externe payé peut être rattaché à une commande.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: {
+        countryId: req.countryId,
+        preorderNumber,
+      },
+      select: {
+        id: true,
+        countryId: true,
+        preorderNumber: true,
+        status: true,
+        paymentStatus: true,
+        preorderPaymentMode: true,
+        paymentProvider: true,
+        totalFcfa: true,
+        factureReference: true,
+        billingCompletedAt: true,
+      },
+    });
+    if (!order) return res.status(404).json({ message: "Commande introuvable." });
+
+    const orderStatus = String(order.status || "").toUpperCase();
+    const orderPaymentStatus = String(order.paymentStatus || "").toUpperCase();
+    if (orderPaymentStatus === "PAID" || ["PAID", "READY", "FULFILLED"].includes(orderStatus)) {
+      return res.status(400).json({
+        message: "Cette commande est déjà soldée.",
+      });
+    }
+
+    if (orderStatus === "CANCELLED") {
+      return res.status(400).json({
+        message: "Impossible de rattacher un paiement à une commande annulée.",
+      });
+    }
+
+    const existingPayment = await prisma.payment.findFirst({
+      where: {
+        provider: "WAVE",
+        OR: [
+          ...(link.providerTransactionId
+            ? [{ providerTxnId: link.providerTransactionId }]
+            : []),
+          { clientReference: `external:${link.id}` },
+        ],
+      },
+      select: { id: true, preorderId: true },
+    });
+
+    if (existingPayment && existingPayment.preorderId !== order.id) {
+      return res.status(409).json({
+        message: "Cette transaction Wave est déjà rattachée à une autre commande.",
+      });
+    }
+
+    const paidAt = link.paidAt || new Date();
+    const amountPaidFcfa = Number(link.amountFcfa || 0);
+    const now = new Date();
+
+    const result = await prisma.$transaction(async (tx) => {
+      let paymentId = existingPayment?.id || null;
+      let attemptId = null;
+
+      if (!paymentId) {
+        const payment = await tx.payment.create({
+          data: {
+            preorderId: order.id,
+            countryId: order.countryId,
+            provider: "WAVE",
+            methodType: "MOBILE_MONEY",
+            status: "SUCCEEDED",
+            amountExpectedFcfa: amountPaidFcfa,
+            amountPaidFcfa,
+            currencyCode: link.currencyCode || "XOF",
+            providerReference: link.providerSessionId || link.reference,
+            providerTxnId: link.providerTransactionId || null,
+            clientReference: `external:${link.id}`,
+            initiatedAt: link.createdAt || now,
+            paidAt,
+          },
+        });
+        paymentId = payment.id;
+
+        const attempt = await tx.paymentAttempt.create({
+          data: {
+            paymentId,
+            provider: "WAVE",
+            status: "SUCCEEDED",
+            providerSessionId: link.providerSessionId || null,
+            providerTransactionId: link.providerTransactionId || null,
+            providerPayerPhone: link.providerPayerPhone || link.customerPhone || null,
+            providerStatusLabel: link.providerStatusLabel || null,
+            checkoutUrl: link.providerCheckoutUrl || null,
+            providerLaunchUrl: link.providerLaunchUrl || null,
+            requestPayloadJson: {
+              source: "EXTERNAL_PAYMENT_LINK_ATTACH",
+              externalPaymentLinkId: link.id,
+              externalPaymentReference: link.reference,
+              externalInvoiceReference: link.invoiceReference,
+            },
+            responsePayloadJson: link.providerPayloadJson || null,
+            normalizedPayloadJson: {
+              externalPaymentLinkId: link.id,
+              reference: link.reference,
+              providerSessionId: link.providerSessionId || null,
+              providerTransactionId: link.providerTransactionId || null,
+              amountPaidFcfa,
+              paidAt,
+            },
+            completedAt: paidAt,
+          },
+        });
+        attemptId = attempt.id;
+
+        await tx.payment.update({
+          where: { id: paymentId },
+          data: { lastAttemptId: attemptId },
+        });
+      }
+
+      const updatedOrder = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "PAID",
+          paymentStatus: "PAID",
+          preorderPaymentMode: "WAVE",
+          paymentProvider: "WAVE",
+          paidAt,
+          activePaymentId: paymentId,
+          billingWorkStatus: "COMPLETED",
+          billingCompletedAt: order.billingCompletedAt || now,
+          billingLastActivityAt: now,
+        },
+      });
+
+      await tx.preorderLog.create({
+        data: {
+          preorderId: order.id,
+          action: "PAYMENT_CONFIRMED",
+          note: `Paiement externe ${link.reference} rattaché à la commande`,
+          actorAdminId: req.user?.id || null,
+          meta: {
+            source: "EXTERNAL_PAYMENT_LINK_ATTACH",
+            externalPaymentLinkId: link.id,
+            externalPaymentReference: link.reference,
+            externalInvoiceReference: link.invoiceReference,
+            externalPublicUrl: publicUrl(req, link.token),
+            providerSessionId: link.providerSessionId || null,
+            providerTransactionId: link.providerTransactionId || null,
+            amountPaidFcfa,
+            orderTotalFcfa: Number(order.totalFcfa || 0),
+            previousPreorderPaymentMode: order.preorderPaymentMode || null,
+            previousPaymentProvider: order.paymentProvider || null,
+            paymentId,
+            paymentAttemptId: attemptId,
+          },
+        },
+      });
+
+      await tx.externalPaymentLink.update({
+        where: { id: link.id },
+        data: {
+          updatedById: req.user?.id || null,
+          description: [
+            link.description,
+            `Rattaché à la commande ${order.preorderNumber} le ${now.toISOString()}.`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      });
+
+      return { order: updatedOrder, paymentId, paymentAttemptId: attemptId };
+    });
+
+    return res.json({
+      ok: true,
+      message: `Paiement ${link.reference} rattaché à ${order.preorderNumber}.`,
+      link: serialize({ ...link, status: "PAID" }, req),
+      order: result.order,
+      paymentId: result.paymentId,
+      paymentAttemptId: result.paymentAttemptId,
+    });
+  } catch (error) {
+    console.error("externalPaymentLinks.attachToOrder error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Erreur serveur (attachToOrder)",
+    });
+  }
+}
+
 module.exports = {
   getQrConfig,
   listLinks,
@@ -370,4 +577,5 @@ module.exports = {
   resendSms,
   syncWave,
   updateStatus,
+  attachToOrder,
 };
