@@ -83,6 +83,12 @@ router.post(
 );
 
 router.post(
+  "/:id/switch-payment-to-wave",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.switchManualToWavePayment,
+);
+
+router.post(
   "/:id/resend-confirmation-sms",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.resendConfirmationSms,

@@ -30,6 +30,7 @@ const {
   streamBankProofFileToResponse,
 } = require("../../utils/bankProofFiles");
 const { computePaymentPricing } = require("../../payments/payment-pricing");
+const paymentsService = require("../../payments/payments.service");
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
@@ -2499,6 +2500,202 @@ async function switchWaveToManualPayment(req, res) {
   }
 }
 
+async function switchManualToWavePayment(req, res) {
+  try {
+    const { id } = req.params;
+    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone);
+
+    if (!isGlobalAdminRole(req.user?.role)) {
+      return res.status(403).json({
+        message: "Seuls les administrateurs globaux peuvent changer ce mode de paiement.",
+      });
+    }
+
+    if (phoneOverride === "__INVALID_PHONE__") {
+      return res.status(400).json({
+        message: "Numéro Wave invalide.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        countryId: true,
+        status: true,
+        paymentStatus: true,
+        preorderNumber: true,
+        factureReference: true,
+        paymentCollectionCode: true,
+        totalFcfa: true,
+        preorderPaymentMode: true,
+        paymentProvider: true,
+        factureWhatsappTo: true,
+        fboEmail: true,
+        country: { select: { code: true } },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const normalizedStatus = String(order.status || "").toUpperCase();
+    const paymentStatus = String(order.paymentStatus || "").toUpperCase();
+    const paymentMode = String(order.preorderPaymentMode || "").toUpperCase();
+    const provider = String(order.paymentProvider || "").toUpperCase();
+    const isManual =
+      paymentMode === "ESPECES" ||
+      paymentMode === "CASH" ||
+      provider === "MANUAL" ||
+      provider === "CASH";
+
+    if (!isManual) {
+      return res.status(400).json({
+        message: "Seules les commandes en paiement caisse peuvent être basculées vers Wave.",
+      });
+    }
+
+    if (paymentStatus === "PAID" || ["PAID", "READY", "FULFILLED", "CANCELLED"].includes(normalizedStatus)) {
+      return res.status(400).json({
+        message: "Impossible de changer le mode de paiement sur une commande déjà soldée ou clôturée.",
+      });
+    }
+
+    if (!["INVOICED", "PAYMENT_PENDING"].includes(normalizedStatus)) {
+      return res.status(400).json({
+        message: "La commande doit être préfacturée avant de générer un lien Wave.",
+      });
+    }
+
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          preorderPaymentMode: "WAVE",
+          paymentProvider: "WAVE",
+          paymentStatus: "UNPAID",
+          factureWhatsappTo:
+            phoneOverride !== undefined
+              ? String(phoneOverride || "").trim()
+              : order.factureWhatsappTo,
+          billingLastActivityAt: now,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "WAIT_CUSTOMER_DATA",
+        "Bascule du mode de paiement caisse vers Wave",
+        {
+          fromPreorderPaymentMode: order.preorderPaymentMode || null,
+          toPreorderPaymentMode: "WAVE",
+          fromPaymentProvider: order.paymentProvider || null,
+          toPaymentProvider: "WAVE",
+          status: order.status || null,
+        },
+        req.user?.id || null,
+      );
+    });
+
+    const waveResult = await paymentsService.initiateWavePayment({
+      req,
+      preorderId: order.id,
+      restrictPayerMobile:
+        phoneOverride !== undefined ? String(phoneOverride || "").trim() : undefined,
+    });
+
+    const paymentLink = paymentsService.buildShortWavePaymentUrl(
+      order.id,
+      order.country?.code || "CIV",
+      order.paymentCollectionCode || "",
+    );
+    const amountToPayFcfa = Number(
+      waveResult?.payment?.amountExpectedFcfa ||
+        resolveOrderAmountToPayFcfa({
+          ...order,
+          preorderPaymentMode: "WAVE",
+          paymentProvider: "WAVE",
+          activePayment: waveResult?.payment || null,
+        }),
+    );
+    const message = buildInvoiceMessage({
+      preorder: {
+        ...order,
+        preorderPaymentMode: "WAVE",
+        paymentProvider: "WAVE",
+      },
+      invoiceRef: order.factureReference || order.preorderNumber || "-",
+      paymentLink,
+      amountToPayFcfa,
+    });
+    const destination =
+      phoneOverride !== undefined
+        ? String(phoneOverride || "").trim()
+        : String(order.factureWhatsappTo || "").trim();
+
+    await prisma.$transaction(async (tx) => {
+      await tx.orderMessage.create({
+        data: {
+          preorderId: order.id,
+          channel: "SMS",
+          purpose: "PAYMENT_LINK",
+          status: "DRAFT",
+          toPhone: destination || null,
+          body: message,
+          paymentLinkTarget: paymentLink,
+          paymentLinkTracked: paymentLink,
+          createdBy: req.user?.id || null,
+        },
+      });
+
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          whatsappMessage: message,
+          factureWhatsappTo: destination || order.factureWhatsappTo || null,
+        },
+      });
+    });
+
+    const updated = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        activePayment: {
+          include: {
+            attempts: { orderBy: { createdAt: "desc" } },
+            refunds: { orderBy: { createdAt: "desc" } },
+          },
+        },
+        payments: {
+          include: {
+            attempts: { orderBy: { createdAt: "desc" } },
+            refunds: { orderBy: { createdAt: "desc" } },
+          },
+          orderBy: { createdAt: "desc" },
+        },
+      },
+    });
+
+    return res.json({
+      ok: true,
+      message: "Mode de paiement basculé vers Wave. Lien de paiement généré.",
+      order: updated,
+      payment: waveResult?.payment || null,
+      paymentAttempt: waveResult?.paymentAttempt || null,
+      checkoutUrl: waveResult?.checkoutUrl || null,
+      paymentLink,
+    });
+  } catch (e) {
+    console.error("switchManualToWavePayment error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (switchManualToWavePayment)" });
+  }
+}
+
 async function prepareOrder(req, res) {
   try {
     const { id } = req.params;
@@ -3527,6 +3724,7 @@ module.exports = {
   resendInvoiceSms,
   resendConfirmationSms,
   switchWaveToManualPayment,
+  switchManualToWavePayment,
   updatePreparationChecklistItem,
   bulkUpdatePreparationChecklist,
   createPreparationAnomaly,
