@@ -1,0 +1,3 @@
+ALTER TABLE "AdminUser"
+ADD COLUMN IF NOT EXISTS "permissionAllow" JSONB,
+ADD COLUMN IF NOT EXISTS "permissionDeny" JSONB;

@@ -4,7 +4,12 @@
 // Il permet d'analyser les informations utilisateur à partir d'en-têtes personnalisés à des fins de test ou d'intégration, et peut être utilisé dans les routes pour protéger les ressources en fonction des rôles et des autorisations des utilisateurs.
 
 const jwt = require("jsonwebtoken");
-const { AdminRole, hasPermission } = require("../auth/permissions");
+const prisma = require("../prisma");
+const {
+  AdminRole,
+  getEffectivePermissions,
+  normalizePermissionList,
+} = require("../auth/permissions");
 
 function parseJsonHeader(raw) {
   if (!raw) return null;
@@ -120,16 +125,14 @@ function requireRole(...roles) {
 }
 
 function requirePermission(permission) {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const user = req.user;
     if (!user?.role) return res.status(401).json({ message: "Unauthorized" });
 
-    const allowedByRole = hasPermission(user.role, permission);
-    const allowedByUserList = Array.isArray(user.permissions)
-      ? user.permissions.includes(permission)
-      : false;
+    const effectivePermissions = await resolveEffectivePermissions(user);
+    const allowed = effectivePermissions.includes(permission);
 
-    if (!allowedByRole && !allowedByUserList) {
+    if (!allowed) {
       return res
         .status(403)
         .json({ message: `Forbidden: missing permission ${permission}` });
@@ -141,18 +144,16 @@ function requirePermission(permission) {
 function requireAnyPermission(permissions = []) {
   const allowedPermissions = permissions.flat().filter(Boolean);
 
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const user = req.user;
     if (!user?.role) return res.status(401).json({ message: "Unauthorized" });
 
-    const allowedByRole = allowedPermissions.some((permission) =>
-      hasPermission(user.role, permission),
+    const effectivePermissions = await resolveEffectivePermissions(user);
+    const allowed = allowedPermissions.some((permission) =>
+      effectivePermissions.includes(permission),
     );
-    const allowedByUserList = Array.isArray(user.permissions)
-      ? allowedPermissions.some((permission) => user.permissions.includes(permission))
-      : false;
 
-    if (!allowedByRole && !allowedByUserList) {
+    if (!allowed) {
       return res.status(403).json({
         message: `Forbidden: missing one of permissions ${allowedPermissions.join(", ")}`,
       });
@@ -160,6 +161,42 @@ function requireAnyPermission(permissions = []) {
 
     return next();
   };
+}
+
+async function resolveEffectivePermissions(user) {
+  if (Array.isArray(user.permissions)) {
+    return normalizePermissionList(user.permissions);
+  }
+
+  if (!user?.id) {
+    return getEffectivePermissions(user?.role);
+  }
+
+  const admin = await prisma.adminUser.findUnique({
+    where: { id: user.id },
+    select: {
+      id: true,
+      role: true,
+      actif: true,
+      countryId: true,
+      permissionAllow: true,
+      permissionDeny: true,
+    },
+  });
+
+  if (!admin || !admin.actif) {
+    return [];
+  }
+
+  user.role = admin.role;
+  user.countryId = admin.countryId || null;
+  user.permissions = getEffectivePermissions(
+    admin.role,
+    admin.permissionAllow,
+    admin.permissionDeny,
+  );
+
+  return user.permissions;
 }
 
 function requireCountryScope(req, res, next) {

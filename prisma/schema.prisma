@@ -542,6 +542,8 @@ model AdminUser {
   passwordChangedAt DateTime?
   failedLoginCount Int @default(0)
   lockedUntil DateTime?
+  permissionAllow Json?
+  permissionDeny Json?
 
   countryId String?
   country   Country? @relation(fields: [countryId], references: [id], onDelete: Restrict)

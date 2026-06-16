@@ -33,6 +33,7 @@ const Permission = {
 
   INVOICE_CREATE: "INVOICE_CREATE",
   PAYMENT_VALIDATE: "PAYMENT_VALIDATE",
+  EXTERNAL_PAYMENT_LINKS_MANAGE: "EXTERNAL_PAYMENT_LINKS_MANAGE",
 
   PREPARATION_UPDATE: "PREPARATION_UPDATE",
 
@@ -68,6 +69,7 @@ const ROLE_PERMISSIONS = {
     Permission.PREORDER_READ,
     Permission.PREORDER_UPDATE_STATUS,
     Permission.INVOICE_CREATE,
+    Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
     Permission.EXPORT_READ,
   ],
 
@@ -76,6 +78,7 @@ const ROLE_PERMISSIONS = {
     Permission.PREORDER_READ,
     Permission.PREORDER_UPDATE_STATUS,
     Permission.INVOICE_CREATE,
+    Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
     Permission.EXPORT_READ,
   ],
 
@@ -107,6 +110,7 @@ const ROLE_PERMISSIONS = {
     Permission.COUNTRY_READ,
     Permission.PREORDER_READ,
     Permission.PAYMENT_VALIDATE,
+    Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
     Permission.EXPORT_READ,
   ],
 
@@ -114,12 +118,14 @@ const ROLE_PERMISSIONS = {
     Permission.COUNTRY_READ,
     Permission.PREORDER_READ,
     Permission.PAYMENT_VALIDATE,
+    Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
   ],
 
   [AdminRole.INVOICER]: [
     Permission.COUNTRY_READ,
     Permission.PREORDER_READ,
     Permission.INVOICE_CREATE,
+    Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
   ],
 
   [AdminRole.ORDER_PREPARER]: [
@@ -138,10 +144,37 @@ function hasPermission(role, permission) {
   return permissions.includes(permission);
 }
 
+function normalizePermissionList(value) {
+  if (!Array.isArray(value)) return [];
+  const valid = new Set(Object.values(Permission));
+  return [
+    ...new Set(
+      value
+        .map((item) => String(item || "").trim())
+        .filter((item) => valid.has(item)),
+    ),
+  ];
+}
+
+function getEffectivePermissions(role, permissionAllow = [], permissionDeny = []) {
+  const merged = new Set([
+    ...getRolePermissions(role),
+    ...normalizePermissionList(permissionAllow),
+  ]);
+
+  for (const permission of normalizePermissionList(permissionDeny)) {
+    merged.delete(permission);
+  }
+
+  return [...merged];
+}
+
 module.exports = {
   AdminRole,
   Permission,
   ROLE_PERMISSIONS,
   getRolePermissions,
+  getEffectivePermissions,
+  normalizePermissionList,
   hasPermission,
 };

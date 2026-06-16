@@ -1,53 +1,52 @@
 const express = require("express");
 const { Permission } = require("../../auth/permissions");
-const { requireAnyPermission } = require("../../middlewares/rbac");
+const { requirePermission } = require("../../middlewares/rbac");
 const controller = require("../../controllers/admin/externalPaymentLinks.controller");
 
 const router = express.Router();
-const requireBillingOrCashier = requireAnyPermission([
-  Permission.INVOICE_CREATE,
-  Permission.PAYMENT_VALIDATE,
-]);
+const requireExternalPaymentLinksManage = requirePermission(
+  Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
+);
 
 router.get(
   "/",
-  requireBillingOrCashier,
+  requireExternalPaymentLinksManage,
   controller.listLinks,
 );
 
 router.get(
   "/qr-config",
-  requireBillingOrCashier,
+  requireExternalPaymentLinksManage,
   controller.getQrConfig,
 );
 
 router.post(
   "/",
-  requireBillingOrCashier,
+  requireExternalPaymentLinksManage,
   controller.createLink,
 );
 
 router.post(
   "/:id/resend-sms",
-  requireBillingOrCashier,
+  requireExternalPaymentLinksManage,
   controller.resendSms,
 );
 
 router.post(
   "/:id/sync-wave",
-  requireBillingOrCashier,
+  requireExternalPaymentLinksManage,
   controller.syncWave,
 );
 
 router.post(
   "/:id/attach-order",
-  requireBillingOrCashier,
+  requireExternalPaymentLinksManage,
   controller.attachToOrder,
 );
 
 router.patch(
   "/:id/status",
-  requireBillingOrCashier,
+  requireExternalPaymentLinksManage,
   controller.updateStatus,
 );
 

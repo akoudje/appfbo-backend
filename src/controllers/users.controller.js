@@ -2,7 +2,11 @@
 
 const bcrypt = require("bcryptjs");
 const prisma = require("../prisma");
-const { AdminRole } = require("../auth/permissions");
+const {
+  AdminRole,
+  getEffectivePermissions,
+  normalizePermissionList,
+} = require("../auth/permissions");
 const {
   validateAdminPassword,
   buildWeakPasswordMessage,
@@ -128,12 +132,17 @@ async function resolveCountryIdFromCode(countryCode) {
 
 function sanitizeUser(user) {
   if (!user) return null;
+  const permissionAllow = normalizePermissionList(user.permissionAllow);
+  const permissionDeny = normalizePermissionList(user.permissionDeny);
 
   return {
     id: user.id,
     email: user.email,
     fullName: user.fullName,
     role: user.role,
+    permissions: getEffectivePermissions(user.role, permissionAllow, permissionDeny),
+    permissionAllow,
+    permissionDeny,
     actif: user.actif,
     countryId: user.countryId || null,
     countryCode: user.country?.code || null,
@@ -306,6 +315,8 @@ async function createUser(req, res) {
       role,
       actif = true,
       countryCode,
+      permissionAllow,
+      permissionDeny,
     } = req.body || {};
 
     const normalizedEmail = String(email || "").trim().toLowerCase();
@@ -348,6 +359,7 @@ async function createUser(req, res) {
     });
 
     const hashedPassword = await bcrypt.hash(normalizedPassword, SALT_ROUNDS);
+    const canSetPermissionOverrides = req.user?.role === AdminRole.SUPER_ADMIN;
 
     const created = await prisma.adminUser.create({
       data: {
@@ -358,6 +370,12 @@ async function createUser(req, res) {
         actif: Boolean(actif),
         countryId: resolvedCountryId,
         passwordChangedAt: new Date(),
+        permissionAllow: canSetPermissionOverrides
+          ? normalizePermissionList(permissionAllow)
+          : [],
+        permissionDeny: canSetPermissionOverrides
+          ? normalizePermissionList(permissionDeny)
+          : [],
       },
       include: {
         country: {
@@ -379,6 +397,8 @@ async function createUser(req, res) {
         role: created.role,
         countryId: created.countryId,
         actif: created.actif,
+        permissionAllow: normalizePermissionList(created.permissionAllow),
+        permissionDeny: normalizePermissionList(created.permissionDeny),
       },
     });
 
@@ -408,7 +428,16 @@ async function createUser(req, res) {
 async function updateUser(req, res) {
   try {
     const { id } = req.params;
-    const { email, password, fullName, role, actif, countryCode } = req.body || {};
+    const {
+      email,
+      password,
+      fullName,
+      role,
+      actif,
+      countryCode,
+      permissionAllow,
+      permissionDeny,
+    } = req.body || {};
 
     const existing = await prisma.adminUser.findUnique({
       where: { id },
@@ -478,6 +507,22 @@ async function updateUser(req, res) {
       passwordChanged = true;
     }
 
+    if (permissionAllow !== undefined || permissionDeny !== undefined) {
+      if (req.user?.role !== AdminRole.SUPER_ADMIN) {
+        return res.status(403).json({
+          message: "Seul le Super Admin peut modifier les droits spécifiques.",
+        });
+      }
+
+      if (permissionAllow !== undefined) {
+        data.permissionAllow = normalizePermissionList(permissionAllow);
+      }
+
+      if (permissionDeny !== undefined) {
+        data.permissionDeny = normalizePermissionList(permissionDeny);
+      }
+    }
+
     let requestedCountryId =
       existing.countryId !== undefined ? existing.countryId : null;
 
@@ -526,6 +571,8 @@ async function updateUser(req, res) {
         countryId: updated.countryId,
         actif: updated.actif,
         passwordChanged,
+        permissionAllow: normalizePermissionList(updated.permissionAllow),
+        permissionDeny: normalizePermissionList(updated.permissionDeny),
       },
     });
 

@@ -4,7 +4,7 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
-const { getRolePermissions } = require("../auth/permissions");
+const { getEffectivePermissions, normalizePermissionList } = require("../auth/permissions");
 const {
   validateAdminPassword,
   buildWeakPasswordMessage,
@@ -31,12 +31,17 @@ function signAdminToken(admin) {
 }
 
 function sanitizeAdmin(admin) {
+  const permissionAllow = normalizePermissionList(admin.permissionAllow);
+  const permissionDeny = normalizePermissionList(admin.permissionDeny);
+
   return {
     id: admin.id,
     email: admin.email,
     fullName: admin.fullName || null,
     role: admin.role,
-    permissions: getRolePermissions(admin.role),
+    permissions: getEffectivePermissions(admin.role, permissionAllow, permissionDeny),
+    permissionAllow,
+    permissionDeny,
     actif: admin.actif,
     countryId: admin.countryId || null,
     countryCode: admin.country?.code || null,
