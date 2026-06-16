@@ -72,6 +72,13 @@ function normalizeGrade(raw) {
     .toUpperCase()
     .replace(/\s+/g, "_")
     .replace(/-/g, "_");
+  const normalizedText = String(raw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
 
   const aliases = {
     CLIENTPRIVILEGIE: "CLIENT_PRIVILEGIE",
@@ -99,6 +106,14 @@ function normalizeGrade(raw) {
   };
 
   if (VALID_GRADES.includes(normalized)) return normalized;
+  if (
+    normalizedText.includes("MANAGER") &&
+    (normalizedText.includes("UNRECOGNIZED") ||
+      normalizedText.includes("UNRECOGNISED") ||
+      (normalizedText.includes("NON") && normalizedText.includes("RECONNU")))
+  ) {
+    return "MANAGER";
+  }
   return aliases[normalized] || "";
 }
 
