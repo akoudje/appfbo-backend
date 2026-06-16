@@ -138,6 +138,30 @@ function requirePermission(permission) {
   };
 }
 
+function requireAnyPermission(permissions = []) {
+  const allowedPermissions = permissions.flat().filter(Boolean);
+
+  return (req, res, next) => {
+    const user = req.user;
+    if (!user?.role) return res.status(401).json({ message: "Unauthorized" });
+
+    const allowedByRole = allowedPermissions.some((permission) =>
+      hasPermission(user.role, permission),
+    );
+    const allowedByUserList = Array.isArray(user.permissions)
+      ? allowedPermissions.some((permission) => user.permissions.includes(permission))
+      : false;
+
+    if (!allowedByRole && !allowedByUserList) {
+      return res.status(403).json({
+        message: `Forbidden: missing one of permissions ${allowedPermissions.join(", ")}`,
+      });
+    }
+
+    return next();
+  };
+}
+
 function requireCountryScope(req, res, next) {
   const user = req.user;
   if (!user?.role) return res.status(401).json({ message: "Unauthorized" });
@@ -163,5 +187,6 @@ module.exports = {
   requireAuth,
   requireRole,
   requirePermission,
+  requireAnyPermission,
   requireCountryScope,
 };
