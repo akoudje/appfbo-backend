@@ -249,6 +249,35 @@ async function upsertTicketType(req, res) {
   }
 }
 
+async function deleteTicketType(req, res) {
+  try {
+    const event = await prisma.ticketEvent.findFirst({
+      where: { id: req.params.id, countryId: req.countryId },
+      select: { id: true },
+    });
+    if (!event) return res.status(404).json({ message: "Événement introuvable" });
+
+    const ticketType = await prisma.ticketType.findFirst({
+      where: { id: req.params.ticketTypeId, eventId: event.id },
+      include: { _count: { select: { tickets: true } } },
+    });
+    if (!ticketType) return res.status(404).json({ message: "Type de billet introuvable." });
+
+    if (Number(ticketType._count?.tickets || 0) > 0) {
+      return res.status(409).json({
+        message:
+          "Ce type de ticket contient déjà des billets. Désactivez-le plutôt que de le supprimer.",
+      });
+    }
+
+    await prisma.ticketType.delete({ where: { id: ticketType.id } });
+    return res.json({ ok: true, deletedId: ticketType.id });
+  } catch (error) {
+    console.error("ticketEvents.deleteTicketType error:", error);
+    return res.status(500).json({ message: "Erreur serveur (deleteTicketType)" });
+  }
+}
+
 async function uploadPoster(req, res) {
   try {
     const file = req.file;
@@ -506,6 +535,7 @@ module.exports = {
   getEvent,
   upsertEvent,
   upsertTicketType,
+  deleteTicketType,
   uploadPosterMiddleware,
   uploadPoster,
   listOrders,

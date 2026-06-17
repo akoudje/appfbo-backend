@@ -72,4 +72,10 @@ router.post(
   ticketEventsController.upsertTicketType,
 );
 
+router.delete(
+  "/:id/ticket-types/:ticketTypeId",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.deleteTicketType,
+);
+
 module.exports = router;
