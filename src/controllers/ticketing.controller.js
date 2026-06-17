@@ -161,7 +161,6 @@ async function createTicketOrder(req, res) {
       buyerFboNumber,
       buyerFboName,
       holderFullName,
-      paymentMethod,
       note,
     } = req.body || {};
 
@@ -218,7 +217,8 @@ async function createTicketOrder(req, res) {
           holderPhone: normalizedBuyerPhone,
           holderEmail: buyerEmail ? String(buyerEmail).trim().toLowerCase() : null,
           totalFcfa: Number(ticketType.priceFcfa || 0) * qty,
-          paymentMethod: paymentMethod ? String(paymentMethod).trim().toUpperCase() : null,
+          paymentMethod: "WAVE",
+          paymentProvider: "WAVE",
           paymentStatus: "INITIATED",
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
           note: note ? String(note).trim() : null,

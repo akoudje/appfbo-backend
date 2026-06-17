@@ -348,6 +348,10 @@ async function listOrders(req, res) {
 
 async function markOrderPaid(req, res) {
   try {
+    return res.status(400).json({
+      message: "Les achats de tickets sont confirmés automatiquement par Wave.",
+    });
+
     const order = await prisma.ticketOrder.findFirst({
       where: { id: req.params.orderId, countryId: req.countryId },
       include: { ticketType: true, tickets: { include: { ticketType: true } } },
