@@ -40,6 +40,44 @@ function inclusiveDayCount(fromIso, toIso) {
   );
 }
 
+function monthKeyFromIso(iso) {
+  return String(iso || "").slice(0, 7);
+}
+
+function addMonthsIso(monthIso, count) {
+  const [year, month] = String(monthIso || "").split("-").map((part) => Number(part));
+  const date = new Date(Date.UTC(year, month - 1 + count, 1));
+  return date.toISOString().slice(0, 7);
+}
+
+function buildMonthBuckets(start, end) {
+  const startIso = start.toISOString().slice(0, 10);
+  const endIso = end.toISOString().slice(0, 10);
+  let cursor = monthKeyFromIso(startIso);
+  const last = monthKeyFromIso(endIso);
+  const buckets = [];
+
+  while (cursor <= last) {
+    const monthStartIso = `${cursor}-01`;
+    const nextMonthIso = addMonthsIso(cursor, 1);
+    const rawStart = startOfUtcDay(monthStartIso);
+    const rawEnd = new Date(startOfUtcDay(`${nextMonthIso}-01`).getTime() - 1);
+    const bucketStart = rawStart < start ? start : rawStart;
+    const bucketEnd = rawEnd > end ? end : rawEnd;
+    buckets.push({
+      key: cursor,
+      label: cursor,
+      start: bucketStart,
+      end: bucketEnd,
+      startIso: bucketStart.toISOString(),
+      endIso: bucketEnd.toISOString(),
+    });
+    cursor = nextMonthIso;
+  }
+
+  return buckets;
+}
+
 function resolveReportPeriod(query = {}) {
   const periodType = String(query.period || query.periodType || "day")
     .trim()
@@ -373,6 +411,28 @@ async function getDailySnapshot(req, start, end, filters = {}) {
   };
 }
 
+async function getMonthlySnapshot(req, start, end, filters = {}) {
+  const snapshot = await getDailySnapshot(req, start, end, filters);
+  const submittedCount = toNumber(snapshot.submitted?.count);
+  const invoicedCount = toNumber(snapshot.invoiced?.count);
+  const paidCount = toNumber(snapshot.paid?.count);
+  const cancelledCount = toNumber(snapshot.cancelled?.count);
+  return {
+    ...snapshot,
+    conversionRate: submittedCount ? Math.round((paidCount / submittedCount) * 100) : 0,
+    invoiceRate: submittedCount ? Math.round((invoicedCount / submittedCount) * 100) : 0,
+    cancellationRate: submittedCount + cancelledCount
+      ? Math.round((cancelledCount / (submittedCount + cancelledCount)) * 100)
+      : 0,
+    averageSubmittedFcfa: submittedCount
+      ? Math.round(toNumber(snapshot.submitted?.amountFcfa) / submittedCount)
+      : 0,
+    averagePaidFcfa: paidCount
+      ? Math.round(toNumber(snapshot.paid?.amountFcfa) / paidCount)
+      : 0,
+  };
+}
+
 async function getDailySalesReport(req, res) {
   try {
     const countryId = pickCountryId(req);
@@ -500,7 +560,19 @@ async function getDailySalesReport(req, res) {
       return submittedAt < start;
     });
     const previousDay = reportPeriod.previous;
-    const previousSnapshot = await getDailySnapshot(req, previousDay.start, previousDay.end, filters);
+    const monthBuckets = buildMonthBuckets(start, end);
+    const [previousSnapshot, monthlySeries] = await Promise.all([
+      getDailySnapshot(req, previousDay.start, previousDay.end, filters),
+      Promise.all(
+        monthBuckets.map(async (bucket) => ({
+          key: bucket.key,
+          label: bucket.label,
+          start: bucket.startIso,
+          end: bucket.endIso,
+          ...(await getMonthlySnapshot(req, bucket.start, bucket.end, filters)),
+        })),
+      ),
+    ]);
     const currentSnapshot = {
       submitted: summarizeRows(submittedRows, "totalFcfa"),
       invoiced: summarizeRows(invoicedRows, "as400InvoiceTotalFcfa"),
@@ -581,6 +653,9 @@ async function getDailySalesReport(req, res) {
         averageSubmitToInvoiceMinutes: averageMinutes(invoicedRows, "submittedAt", "invoicedAt"),
         averageInvoiceToPaymentMinutes: averageMinutes(paidRows, "invoicedAt", "paidAt"),
         averagePaymentToPreparationMinutes: averageMinutes(launchedRows, "paidAt", "preparationLaunchedAt"),
+      },
+      monthly: {
+        rows: monthlySeries,
       },
       comparison: {
         previousDay: {
