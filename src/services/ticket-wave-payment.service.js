@@ -2,6 +2,10 @@ const prisma = require("../prisma");
 const paymentOrchestrator = require("../payments/payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper");
 const { normalizeForCountry } = require("../utils/phone");
+const {
+  ensureTicketsActivatedForPaidOrder,
+  paidOrderTicketInclude,
+} = require("./ticket-order-ticketing.service");
 
 function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
@@ -124,6 +128,7 @@ async function findTicketOrderByNumber({ req, orderNumber }) {
     include: {
       country: { select: { code: true } },
       event: true,
+      ticketType: true,
       tickets: { include: { ticketType: true } },
     },
   });
@@ -202,9 +207,7 @@ async function initiateTicketWavePayment({ req, orderNumber, payerPhone }) {
       providerPayloadJson: providerResponse.raw || null,
     },
     include: {
-      country: { select: { code: true } },
-      event: true,
-      tickets: { include: { ticketType: true } },
+      ...paidOrderTicketInclude(),
     },
   });
 
@@ -250,10 +253,7 @@ async function applyWaveStatusToTicketOrder({ order, providerStatusRaw }) {
     };
 
     if (mapped.markOrderPaid) {
-      await tx.ticket.updateMany({
-        where: { orderId: order.id, status: "RESERVED" },
-        data: { status: "ACTIVE" },
-      });
+      await ensureTicketsActivatedForPaidOrder(tx, order);
       data.status = "PAID";
       data.paidAt = order.paidAt || now;
       data.paymentReference =
@@ -277,11 +277,7 @@ async function applyWaveStatusToTicketOrder({ order, providerStatusRaw }) {
     return tx.ticketOrder.update({
       where: { id: order.id },
       data,
-      include: {
-        country: { select: { code: true } },
-        event: true,
-        tickets: { include: { ticketType: true } },
-      },
+      include: paidOrderTicketInclude(),
     });
   });
 }
@@ -317,6 +313,7 @@ async function syncTicketWaveOrderFromWebhook({ ticketOrderId, providerStatusRaw
     include: {
       country: { select: { code: true } },
       event: true,
+      ticketType: true,
       tickets: { include: { ticketType: true } },
     },
   });

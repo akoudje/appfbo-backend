@@ -1630,6 +1630,7 @@ model TicketType {
   sortOrder Int @default(0)
 
   tickets Ticket[]
+  ticketOrders TicketOrder[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1646,6 +1647,9 @@ model TicketOrder {
   eventId String
   event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
 
+  ticketTypeId String?
+  ticketType TicketType? @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+
   orderNumber String @unique
   status TicketOrderStatus @default(DRAFT)
 
@@ -1654,6 +1658,10 @@ model TicketOrder {
   buyerEmail String?
   buyerFboNumber String?
   buyerFboName String?
+  quantity Int @default(1)
+  holderFullName String?
+  holderPhone String?
+  holderEmail String?
 
   totalFcfa Int @default(0)
   paymentMethod String?
@@ -1678,6 +1686,7 @@ model TicketOrder {
 
   @@index([countryId, status, createdAt])
   @@index([eventId, status, createdAt])
+  @@index([ticketTypeId])
   @@index([paymentProvider, providerSessionId])
   @@index([buyerPhone])
   @@index([buyerFboNumber])

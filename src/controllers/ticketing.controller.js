@@ -22,16 +22,6 @@ function ticketOrderNumber() {
   return `EVT-${stamp}-${suffix}`;
 }
 
-function ticketCode() {
-  const stamp = new Date().toISOString().slice(2, 10).replace(/\D/g, "");
-  const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
-  return `TCK-${stamp}-${suffix}`;
-}
-
-function ticketQrToken() {
-  return crypto.randomBytes(24).toString("base64url");
-}
-
 function isSalesOpen(event, now = new Date()) {
   if (event.status !== "PUBLISHED") return false;
   if (event.salesOpenAt && new Date(event.salesOpenAt) > now) return false;
@@ -48,7 +38,7 @@ async function getTicketTypeAvailability(ticketTypeId) {
     prisma.ticket.count({
       where: {
         ticketTypeId,
-        status: { in: ["RESERVED", "ACTIVE", "USED"] },
+        status: { in: ["ACTIVE", "USED"] },
       },
     }),
   ]);
@@ -109,7 +99,7 @@ async function listPublicEvents(req, res) {
             _count: {
               select: {
                 tickets: {
-                  where: { status: { in: ["RESERVED", "ACTIVE", "USED"] } },
+                  where: { status: { in: ["ACTIVE", "USED"] } },
                 },
               },
             },
@@ -142,7 +132,7 @@ async function getPublicEvent(req, res) {
             _count: {
               select: {
                 tickets: {
-                  where: { status: { in: ["RESERVED", "ACTIVE", "USED"] } },
+                  where: { status: { in: ["ACTIVE", "USED"] } },
                 },
               },
             },
@@ -215,6 +205,7 @@ async function createTicketOrder(req, res) {
         data: {
           countryId: req.countryId,
           eventId: event.id,
+          ticketTypeId: ticketType.id,
           orderNumber: ticketOrderNumber(),
           status: "PENDING_PAYMENT",
           buyerFullName: normalizedBuyerName,
@@ -222,6 +213,10 @@ async function createTicketOrder(req, res) {
           buyerEmail: buyerEmail ? String(buyerEmail).trim().toLowerCase() : null,
           buyerFboNumber: buyerFboNumber ? String(buyerFboNumber).trim() : null,
           buyerFboName: buyerFboName ? String(buyerFboName).trim() : null,
+          quantity: qty,
+          holderFullName: normalizedHolderName,
+          holderPhone: normalizedBuyerPhone,
+          holderEmail: buyerEmail ? String(buyerEmail).trim().toLowerCase() : null,
           totalFcfa: Number(ticketType.priceFcfa || 0) * qty,
           paymentMethod: paymentMethod ? String(paymentMethod).trim().toUpperCase() : null,
           paymentStatus: "INITIATED",
@@ -230,27 +225,11 @@ async function createTicketOrder(req, res) {
         },
       });
 
-      for (let i = 0; i < qty; i += 1) {
-        await tx.ticket.create({
-          data: {
-            countryId: req.countryId,
-            eventId: event.id,
-            ticketTypeId: ticketType.id,
-            orderId: savedOrder.id,
-            ticketCode: ticketCode(),
-            qrToken: ticketQrToken(),
-            holderFullName: normalizedHolderName,
-            holderPhone: normalizedBuyerPhone,
-            holderEmail: buyerEmail ? String(buyerEmail).trim().toLowerCase() : null,
-            status: "RESERVED",
-          },
-        });
-      }
-
       return tx.ticketOrder.findUnique({
         where: { id: savedOrder.id },
         include: {
           event: true,
+          ticketType: true,
           tickets: { include: { ticketType: true } },
         },
       });
@@ -272,6 +251,7 @@ async function getTicketOrder(req, res) {
       },
       include: {
         event: true,
+        ticketType: true,
         tickets: { include: { ticketType: true } },
       },
     });

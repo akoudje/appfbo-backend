@@ -2,6 +2,10 @@ const multer = require("multer");
 const prisma = require("../../prisma");
 const { uploadBuffer } = require("../../services/cloudinary");
 const ticketWavePaymentService = require("../../services/ticket-wave-payment.service");
+const {
+  ensureTicketsActivatedForPaidOrder,
+  paidOrderTicketInclude,
+} = require("../../services/ticket-order-ticketing.service");
 
 const MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_UPLOAD_MIME_TYPES = new Set([
@@ -60,7 +64,7 @@ function includeEventDetails() {
         _count: {
           select: {
             tickets: {
-              where: { status: { in: ["RESERVED", "ACTIVE", "USED"] } },
+              where: { status: { in: ["ACTIVE", "USED"] } },
             },
           },
         },
@@ -331,6 +335,7 @@ async function listOrders(req, res) {
       take: 200,
       include: {
         event: { select: { id: true, title: true, startsAt: true } },
+        ticketType: true,
         tickets: { include: { ticketType: true } },
       },
     });
@@ -345,16 +350,13 @@ async function markOrderPaid(req, res) {
   try {
     const order = await prisma.ticketOrder.findFirst({
       where: { id: req.params.orderId, countryId: req.countryId },
-      include: { tickets: true },
+      include: { ticketType: true, tickets: { include: { ticketType: true } } },
     });
     if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
 
     const { paymentReference, paymentMethod, note } = req.body || {};
     const updated = await prisma.$transaction(async (tx) => {
-      await tx.ticket.updateMany({
-        where: { orderId: order.id, status: "RESERVED" },
-        data: { status: "ACTIVE" },
-      });
+      await ensureTicketsActivatedForPaidOrder(tx, order);
       return tx.ticketOrder.update({
         where: { id: order.id },
         data: {
@@ -365,10 +367,7 @@ async function markOrderPaid(req, res) {
           paidAt: order.paidAt || new Date(),
           note: note ? String(note).trim() : order.note,
         },
-        include: {
-          event: true,
-          tickets: { include: { ticketType: true } },
-        },
+        include: paidOrderTicketInclude(),
       });
     });
 
