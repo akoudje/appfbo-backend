@@ -235,7 +235,18 @@ async function createTicketOrder(req, res) {
       });
     });
 
-    return res.status(201).json(order);
+    const payment = await ticketWavePaymentService.initiateTicketWavePayment({
+      req,
+      orderNumber: order.orderNumber,
+      payerPhone: buyerPhone,
+    });
+
+    return res.status(201).json({
+      ...(payment.order || order),
+      checkoutUrl: payment.checkoutUrl || null,
+      paymentInitiated: true,
+      simulatedPayment: Boolean(payment.simulated),
+    });
   } catch (error) {
     console.error("createTicketOrder error:", error);
     return res.status(500).json({ message: "Erreur serveur (createTicketOrder)" });
