@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const prisma = require("../prisma");
+const ticketWavePaymentService = require("../services/ticket-wave-payment.service");
 
 function normalizeSlug(value) {
   return String(value || "")
@@ -282,9 +283,42 @@ async function getTicketOrder(req, res) {
   }
 }
 
+async function initiateTicketWavePayment(req, res) {
+  try {
+    const result = await ticketWavePaymentService.initiateTicketWavePayment({
+      req,
+      orderNumber: req.params.orderNumber,
+      payerPhone: req.body?.payerPhone,
+    });
+    return res.json(result);
+  } catch (error) {
+    console.error("initiateTicketWavePayment error:", error);
+    return res
+      .status(error.statusCode || 500)
+      .json({ message: error.message || "Erreur serveur (initiateTicketWavePayment)" });
+  }
+}
+
+async function syncTicketWavePaymentStatus(req, res) {
+  try {
+    const result = await ticketWavePaymentService.syncTicketWavePaymentStatus({
+      req,
+      orderNumber: req.params.orderNumber,
+    });
+    return res.json(result);
+  } catch (error) {
+    console.error("syncTicketWavePaymentStatus error:", error);
+    return res
+      .status(error.statusCode || 500)
+      .json({ message: error.message || "Erreur serveur (syncTicketWavePaymentStatus)" });
+  }
+}
+
 module.exports = {
   listPublicEvents,
   getPublicEvent,
   createTicketOrder,
   getTicketOrder,
+  initiateTicketWavePayment,
+  syncTicketWavePaymentStatus,
 };

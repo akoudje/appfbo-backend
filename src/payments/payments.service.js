@@ -18,6 +18,9 @@ const {
 const {
   syncExternalWaveLinkFromSession,
 } = require("../services/external-wave-payment.service");
+const {
+  syncTicketWaveOrderFromWebhook,
+} = require("../services/ticket-wave-payment.service");
 
 function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
@@ -2505,6 +2508,45 @@ async function handleWaveWebhook({ req }) {
           parsed.body?.checkout_session?.client_reference ||
           "",
       ).trim();
+      const ticketOrderId = externalClientReference.startsWith("TICKET:")
+        ? externalClientReference.slice(7)
+        : "";
+      const ticketOrder = ticketOrderId
+        ? await syncTicketWaveOrderFromWebhook({
+            ticketOrderId,
+            providerStatusRaw: parsed.body?.data || parsed.body?.checkout_session || parsed.body || {},
+          })
+        : null;
+
+      if (ticketOrder) {
+        await addPaymentTransactionLogTx(prisma, {
+          preorderId: null,
+          provider: "WAVE",
+          eventType: "WEBHOOK_TICKET_ORDER_PROCESSED",
+          source: "WEBHOOK",
+          providerStatus: parsed.eventType || null,
+          providerSessionId:
+            parsed.body?.data?.id ||
+            parsed.body?.id ||
+            parsed.body?.checkout_session?.id ||
+            null,
+          providerTransactionId:
+            parsed.body?.data?.transaction_id ||
+            parsed.body?.transaction_id ||
+            parsed.body?.checkout_session?.transaction_id ||
+            null,
+          amountFcfa: ticketOrder.totalFcfa,
+          currencyCode: "XOF",
+          note: "Webhook Wave traité pour commande ticket",
+          payloadJson: {
+            providerEventId: parsed.providerEventId || null,
+            syntheticEventId,
+            eventType: parsed.eventType || null,
+            ticketOrderId: ticketOrder.id,
+            ticketOrderNumber: ticketOrder.orderNumber,
+          },
+        });
+      } else {
       const externalLinkId = externalClientReference.startsWith("EXT:")
         ? externalClientReference.slice(4)
         : externalClientReference.startsWith("EXT_")
@@ -2584,6 +2626,7 @@ async function handleWaveWebhook({ req }) {
           preorderHint: webhookPreorderHint,
         },
       });
+      }
       }
     }
 

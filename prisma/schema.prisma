@@ -1660,6 +1660,13 @@ model TicketOrder {
   paymentProvider String?
   paymentReference String?
   paymentStatus PaymentStatus @default(INITIATED)
+  providerSessionId String?
+  providerTransactionId String?
+  providerCheckoutUrl String?
+  providerLaunchUrl String?
+  providerPayerPhone String?
+  providerStatusLabel String?
+  providerPayloadJson Json?
   paidAt DateTime?
   expiresAt DateTime?
   note String? @db.Text
@@ -1671,6 +1678,7 @@ model TicketOrder {
 
   @@index([countryId, status, createdAt])
   @@index([eventId, status, createdAt])
+  @@index([paymentProvider, providerSessionId])
   @@index([buyerPhone])
   @@index([buyerFboNumber])
 }
