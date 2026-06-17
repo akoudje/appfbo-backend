@@ -1,6 +1,7 @@
 const multer = require("multer");
 const prisma = require("../../prisma");
 const { uploadBuffer } = require("../../services/cloudinary");
+const ticketWavePaymentService = require("../../services/ticket-wave-payment.service");
 
 const MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_UPLOAD_MIME_TYPES = new Set([
@@ -349,6 +350,40 @@ async function markOrderPaid(req, res) {
   }
 }
 
+async function syncOrderWavePayment(req, res) {
+  try {
+    const order = await prisma.ticketOrder.findFirst({
+      where: { id: req.params.orderId, countryId: req.countryId },
+      select: {
+        id: true,
+        orderNumber: true,
+        paymentMethod: true,
+        paymentProvider: true,
+      },
+    });
+    if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
+
+    const isWaveOrder =
+      String(order.paymentMethod || "").toUpperCase() === "WAVE" ||
+      String(order.paymentProvider || "").toUpperCase() === "WAVE";
+    if (!isWaveOrder) {
+      return res.status(400).json({ message: "Cette commande ticket n'est pas une commande Wave." });
+    }
+
+    const result = await ticketWavePaymentService.syncTicketWavePaymentStatus({
+      req,
+      orderNumber: order.orderNumber,
+    });
+
+    return res.json(result.order || result);
+  } catch (error) {
+    console.error("ticketEvents.syncOrderWavePayment error:", error);
+    return res
+      .status(error.statusCode || 500)
+      .json({ message: error.message || "Erreur serveur (syncOrderWavePayment)" });
+  }
+}
+
 async function cancelOrder(req, res) {
   try {
     const order = await prisma.ticketOrder.findFirst({
@@ -475,6 +510,7 @@ module.exports = {
   uploadPoster,
   listOrders,
   markOrderPaid,
+  syncOrderWavePayment,
   cancelOrder,
   expireOrders,
   checkInTicket,

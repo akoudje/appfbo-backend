@@ -36,6 +36,12 @@ router.post(
 );
 
 router.post(
+  "/orders/:orderId/wave/sync",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.syncOrderWavePayment,
+);
+
+router.post(
   "/orders/:orderId/cancel",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.cancelOrder,
