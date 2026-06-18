@@ -66,6 +66,44 @@ function normalizeEmail(v = "") {
   return email;
 }
 
+function normalizeClientIdempotencyKey(value = "") {
+  const key = String(value || "").trim();
+  if (!key) return null;
+  return key.replace(/[^a-zA-Z0-9:_-]/g, "").slice(0, 128) || null;
+}
+
+function getClientIdempotencyKey(req, bodyField) {
+  return normalizeClientIdempotencyKey(
+    req.body?.[bodyField] ||
+      req.headers["x-idempotency-key"] ||
+      req.headers["idempotency-key"],
+  );
+}
+
+function serializeExistingPreorder(preorder) {
+  return {
+    preorderId: preorder.id,
+    preorderNumber: preorder.preorderNumber,
+    status: preorder.status,
+    billingWorkStatus: preorder.billingWorkStatus || "NONE",
+    assignedInvoicerId: preorder.assignedInvoicerId || null,
+    totals: {
+      totalCc: Number(preorder.totalCc || 0),
+      totalPoidsKg: Number(preorder.totalPoidsKg || 0),
+      totalProduitsFcfa: Number(preorder.totalProduitsFcfa || 0),
+      fraisLivraisonFcfa: Number(preorder.fraisLivraisonFcfa || 0),
+      totalFcfa: Number(preorder.totalFcfa || 0),
+    },
+    smsTo: preorder.factureWhatsappTo || null,
+    smsStatus: mapSmsStatus(preorder.lastWhatsappStatus),
+    smsLastError: null,
+    smsLastSentAt: preorder.lastWhatsappStatusAt
+      ? preorder.lastWhatsappStatusAt.toISOString()
+      : null,
+    reused: true,
+  };
+}
+
 function normalizeGrade(raw) {
   const normalized = String(raw || "")
     .trim()
@@ -404,6 +442,30 @@ async function createDraft(req, res) {
       });
     }
 
+    const clientDraftKey = getClientIdempotencyKey(req, "clientDraftKey");
+    if (clientDraftKey) {
+      const existingDraft = await prisma.preorder.findFirst({
+        where: {
+          countryId,
+          clientDraftKey,
+        },
+        select: {
+          id: true,
+          preorderNumber: true,
+          status: true,
+        },
+      });
+
+      if (existingDraft) {
+        return res.json({
+          preorderId: existingDraft.id,
+          preorderNumber: existingDraft.preorderNumber,
+          status: existingDraft.status,
+          reused: true,
+        });
+      }
+    }
+
     const countrySettings = await prisma.countrySettings.findUnique({
       where: { countryId },
       select: {
@@ -526,6 +588,7 @@ async function createDraft(req, res) {
           preorderNumber,
           preorderSeq: nextSeq,
           preorderDateKey,
+          clientDraftKey,
         }),
       });
 
@@ -567,6 +630,22 @@ async function createDraft(req, res) {
     });
   } catch (e) {
     if (e?.code === "P2002") {
+      const countryId = req.country?.id || req.scope?.countryId || req.countryId;
+      const clientDraftKey = getClientIdempotencyKey(req, "clientDraftKey");
+      if (countryId && clientDraftKey) {
+        const existingDraft = await prisma.preorder.findFirst({
+          where: { countryId, clientDraftKey },
+          select: { id: true, preorderNumber: true, status: true },
+        });
+        if (existingDraft) {
+          return res.json({
+            preorderId: existingDraft.id,
+            preorderNumber: existingDraft.preorderNumber,
+            status: existingDraft.status,
+            reused: true,
+          });
+        }
+      }
       return res.status(409).json({
         error: "Conflit de numérotation détecté. Réessayez immédiatement.",
       });
@@ -848,6 +927,7 @@ async function submit(req, res) {
   const preorderId = req.params.id;
   const { phoneRaw, phoneNormalized, email, paymentMode } = req.body || {};
   const countryId = req.country.id;
+  const clientSubmissionKey = getClientIdempotencyKey(req, "clientSubmissionKey");
 
   if (isEnvSubmissionDisabled()) {
     return res.status(503).json({
@@ -877,7 +957,25 @@ async function submit(req, res) {
     }
 
     if (preorder.status !== "DRAFT") {
+      if (
+        clientSubmissionKey &&
+        preorder.clientSubmissionKey &&
+        preorder.clientSubmissionKey === clientSubmissionKey
+      ) {
+        return res.json(serializeExistingPreorder(preorder));
+      }
       return res.status(400).json({ error: "Preorder not editable" });
+    }
+
+    if (
+      clientSubmissionKey &&
+      preorder.clientSubmissionKey &&
+      preorder.clientSubmissionKey !== clientSubmissionKey
+    ) {
+      return res.status(409).json({
+        error: "Une autre tentative de soumission est déjà associée à cette précommande.",
+        code: "PREORDER_SUBMISSION_KEY_CONFLICT",
+      });
     }
 
     if (!preorder.items || preorder.items.length === 0) {
@@ -1076,6 +1174,7 @@ async function submit(req, res) {
         where: { id: preorderId },
         data: {
           status: "SUBMITTED",
+          clientSubmissionKey,
           paymentStatus: "UNPAID",
           billingWorkStatus: "QUEUED",
           billingQueueEnteredAt: now,
@@ -1159,6 +1258,17 @@ async function submit(req, res) {
       notificationAttempts: notificationResult.attempts || [],
     });
   } catch (e) {
+    if (e?.code === "P2002" && clientSubmissionKey) {
+      const existing = await prisma.preorder.findFirst({
+        where: {
+          countryId,
+          clientSubmissionKey,
+        },
+      });
+      if (existing) {
+        return res.json(serializeExistingPreorder(existing));
+      }
+    }
     if (String(e.message) === "PRODUCT_GRADE_PRICE_MISSING") {
       return res.status(400).json({
         error:

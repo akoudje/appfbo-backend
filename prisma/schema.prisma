@@ -724,6 +724,8 @@ model Preorder {
   preorderNumber  String? @unique
   preorderSeq     Int?
   preorderDateKey String?
+  clientDraftKey String?
+  clientSubmissionKey String?
 
   // mode de paiement
   preorderPaymentMode PreorderPaymentMode?
@@ -884,6 +886,8 @@ model Preorder {
   @@index([status, createdAt])
   @@index([preorderPaymentMode])
   @@index([countryId, status, createdAt])
+  @@unique([countryId, clientDraftKey])
+  @@unique([countryId, clientSubmissionKey])
   @@index([paymentStatus, createdAt])
   @@index([fboId])
   @@index([placedByFboNumero])
