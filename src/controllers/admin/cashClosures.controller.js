@@ -69,6 +69,10 @@ function dateRangeUtc(dateKey) {
   };
 }
 
+function dateKeyFromDate(value) {
+  return value.toISOString().slice(0, 10);
+}
+
 function normalizePaymentMode(value) {
   return String(value || "").trim().toUpperCase() || "UNKNOWN";
 }
@@ -248,30 +252,33 @@ async function findClosure(req, id) {
   return closure;
 }
 
-async function fetchOrdersForClosure(req, { dateKey, cashierId }) {
-  const { start, end } = dateRangeUtc(dateKey);
+function buildPaidOrdersWhere(req, { start, end, cashierId }) {
   const where = scopeWhere(req, {
-      paymentStatus: "PAID",
-      OR: [
-        { manualPaymentValidatedAt: { gte: start, lte: end } },
-        { paidAt: { gte: start, lte: end } },
-        {
-          activePayment: {
-            is: {
-              status: "SUCCEEDED",
-              paidAt: { gte: start, lte: end },
-            },
+    paymentStatus: "PAID",
+    OR: [
+      { manualPaymentValidatedAt: { gte: start, lte: end } },
+      { paidAt: { gte: start, lte: end } },
+      {
+        activePayment: {
+          is: {
+            status: "SUCCEEDED",
+            paidAt: { gte: start, lte: end },
           },
         },
-      ],
-    });
+      },
+    ],
+  });
 
-  if (!canReview(req)) {
+  if (cashierId) {
     where.manualPaymentValidatedById = cashierId;
   }
 
+  return where;
+}
+
+async function fetchPaidOrders(req, { start, end, cashierId }) {
   return prisma.preorder.findMany({
-    where,
+    where: buildPaidOrdersWhere(req, { start, end, cashierId }),
     select: {
       id: true,
       preorderPaymentMode: true,
@@ -300,6 +307,15 @@ async function fetchOrdersForClosure(req, { dateKey, cashierId }) {
       },
     },
     orderBy: [{ manualPaymentValidatedAt: "asc" }, { paidAt: "asc" }],
+  });
+}
+
+async function fetchOrdersForClosure(req, { dateKey, cashierId }) {
+  const { start, end } = dateRangeUtc(dateKey);
+  return fetchPaidOrders(req, {
+    start,
+    end,
+    cashierId: canReview(req) ? null : cashierId,
   });
 }
 
@@ -344,10 +360,64 @@ function aggregateClosureLines(closures = []) {
     .sort((a, b) => paymentModeOrder(a.paymentMode) - paymentModeOrder(b.paymentMode));
 }
 
-function summarizeClosures(closures = []) {
-  const totalExpectedFcfa = closures.reduce((sum, closure) => sum + toAmount(closure.totalExpectedFcfa), 0);
-  const totalDeclaredFcfa = closures.reduce((sum, closure) => sum + toAmount(closure.totalDeclaredFcfa), 0);
-  const transactionCount = closures.reduce((sum, closure) => sum + Number(closure.transactionCount || 0), 0);
+function mergeExpectedAndDeclaredLines(expectedLines = [], declaredLines = []) {
+  const map = new Map();
+
+  for (const paymentMode of DECLARATION_PAYMENT_MODES) {
+    map.set(paymentMode, {
+      paymentMode,
+      label: paymentModeLabel(paymentMode),
+      expectedFcfa: 0,
+      declaredFcfa: 0,
+      discrepancyFcfa: 0,
+      transactionCount: 0,
+      closureCount: 0,
+    });
+  }
+
+  for (const line of expectedLines) {
+    const paymentMode = normalizePaymentMode(line.paymentMode);
+    const current = map.get(paymentMode) || {
+      paymentMode,
+      label: paymentModeLabel(paymentMode),
+      expectedFcfa: 0,
+      declaredFcfa: 0,
+      discrepancyFcfa: 0,
+      transactionCount: 0,
+      closureCount: 0,
+    };
+    current.expectedFcfa += toAmount(line.expectedFcfa);
+    current.transactionCount += Number(line.transactionCount || 0);
+    current.discrepancyFcfa = current.declaredFcfa - current.expectedFcfa;
+    map.set(paymentMode, current);
+  }
+
+  for (const line of declaredLines) {
+    const paymentMode = normalizePaymentMode(line.paymentMode);
+    const current = map.get(paymentMode) || {
+      paymentMode,
+      label: paymentModeLabel(paymentMode),
+      expectedFcfa: 0,
+      declaredFcfa: 0,
+      discrepancyFcfa: 0,
+      transactionCount: 0,
+      closureCount: 0,
+    };
+    current.declaredFcfa += toAmount(line.declaredFcfa);
+    current.closureCount += Number(line.closureCount || 0);
+    current.discrepancyFcfa = current.declaredFcfa - current.expectedFcfa;
+    map.set(paymentMode, current);
+  }
+
+  return Array.from(map.values())
+    .filter(isVisibleDeclarationLine)
+    .sort((a, b) => paymentModeOrder(a.paymentMode) - paymentModeOrder(b.paymentMode));
+}
+
+function summarizePeriodLines(lines = [], closures = []) {
+  const totalExpectedFcfa = lines.reduce((sum, line) => sum + toAmount(line.expectedFcfa), 0);
+  const totalDeclaredFcfa = lines.reduce((sum, line) => sum + toAmount(line.declaredFcfa), 0);
+  const transactionCount = lines.reduce((sum, line) => sum + Number(line.transactionCount || 0), 0);
   return {
     closureCount: closures.length,
     totalExpectedFcfa,
@@ -502,30 +572,41 @@ async function getSummary(req, res) {
   try {
     const from = normalizeDateStart(req.query.from || req.query.date || req.query.dateKey);
     const to = normalizeDateEnd(req.query.to || req.query.from || req.query.date || req.query.dateKey);
+    const cashierId = canReview(req) && req.query.cashierId
+      ? String(req.query.cashierId)
+      : !canReview(req)
+        ? req.user?.id || "__none__"
+        : null;
     const where = scopeWhere(req, {
       dateKey: {
-        gte: from.toISOString().slice(0, 10),
-        lte: to.toISOString().slice(0, 10),
+        gte: dateKeyFromDate(from),
+        lte: dateKeyFromDate(to),
       },
     });
 
-    if (!canReview(req)) where.cashierId = req.user?.id || "__none__";
-    if (canReview(req) && req.query.cashierId) where.cashierId = String(req.query.cashierId);
+    if (cashierId) where.cashierId = cashierId;
     if (req.query.status) where.status = String(req.query.status).trim().toUpperCase();
 
-    const closures = await prisma.cashClosure.findMany({
-      where,
-      include: includeClosure,
-      orderBy: [{ dateKey: "desc" }, { updatedAt: "desc" }],
-      take: 500,
-    });
+    const [closures, paidOrders] = await Promise.all([
+      prisma.cashClosure.findMany({
+        where,
+        include: includeClosure,
+        orderBy: [{ dateKey: "desc" }, { updatedAt: "desc" }],
+        take: 500,
+      }),
+      fetchPaidOrders(req, { start: from, end: to, cashierId }),
+    ]);
+
+    const expectedLines = buildLineTotalsFromOrders(paidOrders);
+    const declaredLines = aggregateClosureLines(closures);
+    const byPaymentMode = mergeExpectedAndDeclaredLines(expectedLines, declaredLines);
 
     return res.json({
       ok: true,
-      from: from.toISOString().slice(0, 10),
-      to: to.toISOString().slice(0, 10),
-      summary: summarizeClosures(closures),
-      byPaymentMode: aggregateClosureLines(closures),
+      from: dateKeyFromDate(from),
+      to: dateKeyFromDate(to),
+      summary: summarizePeriodLines(byPaymentMode, closures),
+      byPaymentMode,
       closures: closures.map(serializeClosure),
       permissions: { canReview: canReview(req) },
     });
