@@ -17,6 +17,12 @@ router.get(
   cashClosuresController.getOrCreateDraft,
 );
 
+router.get(
+  "/summary",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  cashClosuresController.getSummary,
+);
+
 router.put(
   "/:id",
   requirePermission(Permission.PAYMENT_VALIDATE),

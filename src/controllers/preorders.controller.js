@@ -32,6 +32,7 @@ const FBO_SERVICE_URL = String(process.env.FBO_SERVICE_URL || "").trim().replace
 const FBO_SERVICE_INTERNAL_TOKEN = String(
   process.env.FBO_SERVICE_INTERNAL_TOKEN || "",
 ).trim();
+const FBO_SERVICE_TIMEOUT_MS = Number(process.env.FBO_SERVICE_TIMEOUT_MS || 8000);
 const FBO_CHECK_RATE_LIMIT_WINDOW_MS = Number(process.env.FBO_CHECK_RATE_LIMIT_WINDOW_MS || 60000);
 const FBO_CHECK_RATE_LIMIT_MAX = Number(process.env.FBO_CHECK_RATE_LIMIT_MAX || 30);
 const fboCheckRateLimitBuckets = new Map();
@@ -246,10 +247,27 @@ async function fetchFboDirectoryProfile(numeroFbo) {
     headers["x-internal-token"] = FBO_SERVICE_INTERNAL_TOKEN;
   }
 
-  const response = await fetch(
-    `${FBO_SERVICE_URL}/fbo/check/${encodeURIComponent(numeroFbo)}`,
-    { headers },
-  );
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FBO_SERVICE_TIMEOUT_MS);
+  let response;
+
+  try {
+    response = await fetch(
+      `${FBO_SERVICE_URL}/fbo/check/${encodeURIComponent(numeroFbo)}`,
+      { headers, signal: controller.signal },
+    );
+  } catch (error) {
+    const err = new Error(
+      error?.name === "AbortError"
+        ? "Service FBO trop lent"
+        : "Service FBO indisponible",
+    );
+    err.statusCode = error?.name === "AbortError" ? 504 : 503;
+    err.cause = error;
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const rawText = await response.text();
   let payload = null;
@@ -266,6 +284,11 @@ async function fetchFboDirectoryProfile(numeroFbo) {
   }
 
   return payload;
+}
+
+function isFboDirectoryTemporarilyUnavailable(error) {
+  const statusCode = Number(error?.statusCode || 0);
+  return statusCode === 502 || statusCode === 503 || statusCode === 504;
 }
 
 function isBillingNumber(phone = "") {
@@ -363,9 +386,24 @@ async function createDraft(req, res) {
     }
 
     const normalizedNumeroFbo = normalizeNumeroFbo(numeroFbo);
-    const directoryProfile = normalizeFboDirectoryProfile(
-      await fetchFboDirectoryProfile(normalizedNumeroFbo),
-    );
+    let directoryProfile = { exists: false };
+    let directoryLookupWarning = null;
+    try {
+      directoryProfile = normalizeFboDirectoryProfile(
+        await fetchFboDirectoryProfile(normalizedNumeroFbo),
+      );
+    } catch (error) {
+      if (!isFboDirectoryTemporarilyUnavailable(error)) {
+        throw error;
+      }
+
+      directoryLookupWarning = error?.message || "Service FBO indisponible";
+      console.warn("createDraft FBO directory fallback:", {
+        numeroFbo: normalizedNumeroFbo,
+        message: directoryLookupWarning,
+        statusCode: error?.statusCode || null,
+      });
+    }
     const clientName = String(nomComplet || "").trim();
     const clientGrade = normalizeGrade(grade);
 
@@ -627,6 +665,7 @@ async function createDraft(req, res) {
       preorderId: preorder.id,
       preorderNumber: preorder.preorderNumber,
       status: preorder.status,
+      directoryLookupWarning,
     });
   } catch (e) {
     if (e?.code === "P2002") {

@@ -13,6 +13,8 @@ const PAYMENT_MODE_LABELS = {
   ESPECES: "Espèces",
   WAVE: "Wave",
   ORANGE_MONEY: "Orange Money",
+  MTN_MOMO: "MTN MoMo",
+  MOOV_MONEY: "Moov Money",
   BANK_TRANSFER: "Virement bancaire",
   ECOBANK_PAY: "Ecobank Pay",
   PI_SPI: "PI SPI",
@@ -50,6 +52,16 @@ function normalizeDateKey(value) {
   return dt.toISOString().slice(0, 10);
 }
 
+function normalizeDateStart(value) {
+  const dateKey = normalizeDateKey(value);
+  return new Date(`${dateKey}T00:00:00.000Z`);
+}
+
+function normalizeDateEnd(value) {
+  const dateKey = normalizeDateKey(value);
+  return new Date(`${dateKey}T23:59:59.999Z`);
+}
+
 function dateRangeUtc(dateKey) {
   return {
     start: new Date(`${dateKey}T00:00:00.000Z`),
@@ -66,9 +78,36 @@ function paymentModeLabel(value) {
   return PAYMENT_MODE_LABELS[mode] || mode.replace(/_/g, " ");
 }
 
+function paymentModeOrder(paymentMode) {
+  const index = DECLARATION_PAYMENT_MODES.indexOf(normalizePaymentMode(paymentMode));
+  return index === -1 ? 999 : index;
+}
+
 function toAmount(value) {
   const n = Number(value || 0);
   return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+}
+
+function resolveOrderPaymentMode(order) {
+  const latestTx = order?.cashierTransactions?.[0] || null;
+  return normalizePaymentMode(
+    latestTx?.paymentMode ||
+      order?.preorderPaymentMode ||
+      order?.activePayment?.provider ||
+      order?.paymentProvider,
+  );
+}
+
+function resolveOrderExpectedAmount(order) {
+  const latestTx = order?.cashierTransactions?.[0] || null;
+  return toAmount(
+    latestTx?.amountReceivedFcfa ||
+      latestTx?.amountExpectedFcfa ||
+      order?.activePayment?.amountPaidFcfa ||
+      order?.activePayment?.amountExpectedFcfa ||
+      order?.as400InvoiceTotalFcfa ||
+      order?.totalFcfa,
+  );
 }
 
 function canReview(req) {
@@ -109,10 +148,7 @@ function buildLineTotalsFromOrders(orders = []) {
   }
 
   for (const order of orders) {
-    const latestTx = order?.cashierTransactions?.[0] || null;
-    const paymentMode = normalizePaymentMode(
-      latestTx?.paymentMode || order?.preorderPaymentMode || order?.paymentProvider,
-    );
+    const paymentMode = resolveOrderPaymentMode(order);
     const current = map.get(paymentMode) || {
       paymentMode,
       label: paymentModeLabel(paymentMode),
@@ -122,12 +158,7 @@ function buildLineTotalsFromOrders(orders = []) {
       transactionCount: 0,
       note: null,
     };
-    const expected = toAmount(
-      latestTx?.amountReceivedFcfa ||
-        latestTx?.amountExpectedFcfa ||
-        order?.as400InvoiceTotalFcfa ||
-        order?.totalFcfa,
-    );
+    const expected = resolveOrderExpectedAmount(order);
     current.expectedFcfa += expected;
     current.transactionCount += 1;
     current.discrepancyFcfa = current.declaredFcfa - current.expectedFcfa;
@@ -135,9 +166,9 @@ function buildLineTotalsFromOrders(orders = []) {
   }
 
   return Array.from(map.values()).sort((a, b) => {
-    const ai = DECLARATION_PAYMENT_MODES.indexOf(a.paymentMode);
-    const bi = DECLARATION_PAYMENT_MODES.indexOf(b.paymentMode);
-    if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    const ai = paymentModeOrder(a.paymentMode);
+    const bi = paymentModeOrder(b.paymentMode);
+    if (ai !== bi) return ai - bi;
     return a.label.localeCompare(b.label);
   });
 }
@@ -219,19 +250,45 @@ async function findClosure(req, id) {
 
 async function fetchOrdersForClosure(req, { dateKey, cashierId }) {
   const { start, end } = dateRangeUtc(dateKey);
-  return prisma.preorder.findMany({
-    where: scopeWhere(req, {
+  const where = scopeWhere(req, {
       paymentStatus: "PAID",
-      manualPaymentValidatedById: cashierId,
-      manualPaymentValidatedAt: { gte: start, lte: end },
-    }),
+      OR: [
+        { manualPaymentValidatedAt: { gte: start, lte: end } },
+        { paidAt: { gte: start, lte: end } },
+        {
+          activePayment: {
+            is: {
+              status: "SUCCEEDED",
+              paidAt: { gte: start, lte: end },
+            },
+          },
+        },
+      ],
+    });
+
+  if (!canReview(req)) {
+    where.manualPaymentValidatedById = cashierId;
+  }
+
+  return prisma.preorder.findMany({
+    where,
     select: {
       id: true,
       preorderPaymentMode: true,
       paymentProvider: true,
       totalFcfa: true,
       as400InvoiceTotalFcfa: true,
+      paidAt: true,
       manualPaymentValidatedAt: true,
+      activePayment: {
+        select: {
+          provider: true,
+          amountPaidFcfa: true,
+          amountExpectedFcfa: true,
+          paidAt: true,
+          status: true,
+        },
+      },
       cashierTransactions: {
         orderBy: { updatedAt: "desc" },
         take: 1,
@@ -242,8 +299,62 @@ async function fetchOrdersForClosure(req, { dateKey, cashierId }) {
         },
       },
     },
-    orderBy: { manualPaymentValidatedAt: "asc" },
+    orderBy: [{ manualPaymentValidatedAt: "asc" }, { paidAt: "asc" }],
   });
+}
+
+function aggregateClosureLines(closures = []) {
+  const map = new Map();
+
+  for (const paymentMode of DECLARATION_PAYMENT_MODES) {
+    map.set(paymentMode, {
+      paymentMode,
+      label: paymentModeLabel(paymentMode),
+      expectedFcfa: 0,
+      declaredFcfa: 0,
+      discrepancyFcfa: 0,
+      transactionCount: 0,
+      closureCount: 0,
+    });
+  }
+
+  for (const closure of closures) {
+    for (const line of closure.lines || []) {
+      const paymentMode = normalizePaymentMode(line.paymentMode);
+      const current = map.get(paymentMode) || {
+        paymentMode,
+        label: paymentModeLabel(paymentMode),
+        expectedFcfa: 0,
+        declaredFcfa: 0,
+        discrepancyFcfa: 0,
+        transactionCount: 0,
+        closureCount: 0,
+      };
+      current.expectedFcfa += toAmount(line.expectedFcfa);
+      current.declaredFcfa += toAmount(line.declaredFcfa);
+      current.discrepancyFcfa = current.declaredFcfa - current.expectedFcfa;
+      current.transactionCount += Number(line.transactionCount || 0);
+      current.closureCount += 1;
+      map.set(paymentMode, current);
+    }
+  }
+
+  return Array.from(map.values())
+    .filter(isVisibleDeclarationLine)
+    .sort((a, b) => paymentModeOrder(a.paymentMode) - paymentModeOrder(b.paymentMode));
+}
+
+function summarizeClosures(closures = []) {
+  const totalExpectedFcfa = closures.reduce((sum, closure) => sum + toAmount(closure.totalExpectedFcfa), 0);
+  const totalDeclaredFcfa = closures.reduce((sum, closure) => sum + toAmount(closure.totalDeclaredFcfa), 0);
+  const transactionCount = closures.reduce((sum, closure) => sum + Number(closure.transactionCount || 0), 0);
+  return {
+    closureCount: closures.length,
+    totalExpectedFcfa,
+    totalDeclaredFcfa,
+    discrepancyFcfa: totalDeclaredFcfa - totalExpectedFcfa,
+    transactionCount,
+  };
 }
 
 async function syncClosureSnapshot(tx, closure, orders) {
@@ -387,6 +498,45 @@ async function listClosures(req, res) {
   }
 }
 
+async function getSummary(req, res) {
+  try {
+    const from = normalizeDateStart(req.query.from || req.query.date || req.query.dateKey);
+    const to = normalizeDateEnd(req.query.to || req.query.from || req.query.date || req.query.dateKey);
+    const where = scopeWhere(req, {
+      dateKey: {
+        gte: from.toISOString().slice(0, 10),
+        lte: to.toISOString().slice(0, 10),
+      },
+    });
+
+    if (!canReview(req)) where.cashierId = req.user?.id || "__none__";
+    if (canReview(req) && req.query.cashierId) where.cashierId = String(req.query.cashierId);
+    if (req.query.status) where.status = String(req.query.status).trim().toUpperCase();
+
+    const closures = await prisma.cashClosure.findMany({
+      where,
+      include: includeClosure,
+      orderBy: [{ dateKey: "desc" }, { updatedAt: "desc" }],
+      take: 500,
+    });
+
+    return res.json({
+      ok: true,
+      from: from.toISOString().slice(0, 10),
+      to: to.toISOString().slice(0, 10),
+      summary: summarizeClosures(closures),
+      byPaymentMode: aggregateClosureLines(closures),
+      closures: closures.map(serializeClosure),
+      permissions: { canReview: canReview(req) },
+    });
+  } catch (error) {
+    console.error("cash closure summary error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Erreur serveur (synthèse clôtures caisse)",
+    });
+  }
+}
+
 async function updateClosure(req, res) {
   try {
     const closure = await findClosure(req, req.params.id);
@@ -504,6 +654,7 @@ async function reviewClosure(req, res, status) {
 module.exports = {
   getOrCreateDraft,
   listClosures,
+  getSummary,
   updateClosure,
   submitClosure,
   approveClosure: (req, res) => reviewClosure(req, res, "APPROVED"),
