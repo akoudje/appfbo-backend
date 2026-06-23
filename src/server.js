@@ -149,7 +149,13 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Country", "X-Request-Id"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Country",
+    "X-Request-Id",
+    "X-Idempotency-Key",
+  ],
 };
 
 app.use(cors(corsOptions));

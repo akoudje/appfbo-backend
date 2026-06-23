@@ -22,6 +22,7 @@ const ROLE_ASSIGNMENT_MATRIX = {
     Object.values(AdminRole).filter((role) => role !== AdminRole.SUPER_ADMIN),
   ),
   OPERATIONS_DIRECTOR: new Set([
+    AdminRole.FINANCE_MANAGER,
     AdminRole.BILLING_MANAGER,
     AdminRole.COUNTER_MANAGER,
     AdminRole.STOCK_MANAGER,

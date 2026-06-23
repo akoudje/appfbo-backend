@@ -6,6 +6,7 @@ const REVIEW_ROLES = new Set([
   AdminRole.SUPER_ADMIN,
   AdminRole.TECH_ADMIN,
   AdminRole.OPERATIONS_DIRECTOR,
+  AdminRole.FINANCE_MANAGER,
   AdminRole.COUNTER_MANAGER,
 ]);
 

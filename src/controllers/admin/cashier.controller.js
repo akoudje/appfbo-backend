@@ -59,6 +59,7 @@ function canViewConsolidated(role) {
     AdminRole.SUPER_ADMIN,
     AdminRole.TECH_ADMIN,
     AdminRole.OPERATIONS_DIRECTOR,
+    AdminRole.FINANCE_MANAGER,
     AdminRole.COUNTER_MANAGER,
   ]).has(String(role || "").trim().toUpperCase());
 }
