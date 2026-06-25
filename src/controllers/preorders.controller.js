@@ -979,7 +979,18 @@ async function submit(req, res) {
     const preorder = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id: preorderId }),
       include: {
-        items: { include: { product: true } },
+        items: {
+          include: {
+            product: {
+              include: {
+                countryProducts: {
+                  where: { countryId },
+                  select: { maxQtyPerOrder: true },
+                },
+              },
+            },
+          },
+        },
         country: { include: { settings: true } },
       },
     });
@@ -1025,7 +1036,18 @@ async function submit(req, res) {
 
     const violations = findItemsExceedingProductLimits(
       preorder.items,
-      new Map((preorder.items || []).map((item) => [item.productId, item.product])),
+      new Map(
+        (preorder.items || []).map((item) => {
+          const countryProduct = item.product?.countryProducts?.[0] || {};
+          return [
+            item.productId,
+            {
+              ...item.product,
+              maxQtyPerOrder: countryProduct.maxQtyPerOrder,
+            },
+          ];
+        }),
+      ),
       preorder?.country?.settings?.maxQtyPerProduct || 10,
     );
 
