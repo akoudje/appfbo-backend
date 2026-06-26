@@ -450,10 +450,14 @@ function normalizePurposeKey(purpose = "") {
 
 function shouldSendSmsForPurpose(purpose = "") {
   const key = String(purpose || "").trim().toUpperCase();
-  if (key === "PREORDER_SUBMITTED") return false;
-  if (key === "PREPARATION_STARTED") return false;
-  if (key === "ORDER_FULFILLED") return false;
-  return true;
+  // Politique SMS essentielle: on réserve le crédit aux messages qui
+  // déclenchent une action client ou un déplacement.
+  return new Set([
+    "INVOICE",
+    "PAYMENT_LINK",
+    "REMINDER",
+    "ORDER_READY",
+  ]).has(key);
 }
 
 const ORDER_MESSAGE_PURPOSE_VALUES = new Set([
@@ -473,6 +477,7 @@ function resolvePersistedOrderMessagePurpose(purpose = "") {
   // Compatibilité rétroactive: certains flux utilisent PREORDER_SUBMITTED
   // alors que l'enum Prisma ne le contient pas.
   if (key === "PREORDER_SUBMITTED") return "REMINDER";
+  if (key === "AUTO_CANCEL") return "REMINDER";
 
   return "REMINDER";
 }

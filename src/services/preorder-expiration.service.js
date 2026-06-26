@@ -490,7 +490,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
         ...order,
         ...updated,
       },
-      purpose: "REMINDER",
+      purpose: "AUTO_CANCEL",
       message: buildAutoCancelMessage({
         ...order,
         ...updated,
