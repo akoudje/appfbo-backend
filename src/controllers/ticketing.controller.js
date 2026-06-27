@@ -61,10 +61,12 @@ function serializeEvent(event) {
     description: event.description,
     venueName: event.venueName,
     venueAddress: event.venueAddress,
+    countryName: event.country?.name || null,
     startsAt: event.startsAt,
     endsAt: event.endsAt,
     posterUrl: event.posterUrl,
     status: event.status,
+    capacity: event.capacity,
     ticketTypes: ticketTypes.map((type) => ({
       id: type.id,
       label: type.label,
@@ -92,6 +94,7 @@ async function listPublicEvents(req, res) {
       },
       orderBy: [{ startsAt: "asc" }],
       include: {
+        country: { select: { name: true } },
         ticketTypes: {
           where: { active: true },
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -125,6 +128,7 @@ async function getPublicEvent(req, res) {
         status: "PUBLISHED",
       },
       include: {
+        country: { select: { name: true } },
         ticketTypes: {
           where: { active: true },
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
