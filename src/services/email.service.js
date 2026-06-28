@@ -337,6 +337,8 @@ async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
         html: html ? String(html) : undefined,
         headers: {
           "X-AppFbo-PreorderId": String(metadata?.preorderId || ""),
+          "X-AppFbo-TicketOrderId": String(metadata?.ticketOrderId || ""),
+          "X-AppFbo-TicketOrderNumber": String(metadata?.ticketOrderNumber || ""),
           "X-AppFbo-Message-Id": messageId,
         },
       });

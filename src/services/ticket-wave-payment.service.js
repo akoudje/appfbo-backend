@@ -6,6 +6,7 @@ const {
   ensureTicketsActivatedForPaidOrder,
   paidOrderTicketInclude,
 } = require("./ticket-order-ticketing.service");
+const { sendTicketOrderEmail } = require("./ticket-email-notifications.service");
 
 function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
@@ -232,12 +233,36 @@ async function expireTicketOrder(orderId) {
   });
 }
 
-async function applyWaveStatusToTicketOrder({ order, providerStatusRaw }) {
+async function sendTicketEmailAfterPaid({ order, req = null }) {
+  try {
+    const result = await sendTicketOrderEmail({
+      order,
+      publicUrl: publicBaseUrl(req),
+    });
+    if (!result?.sent && !result?.skipped) {
+      console.warn("ticket email send failed", {
+        orderNumber: order?.orderNumber,
+        errorCode: result?.errorCode,
+        errorMessage: result?.errorMessage,
+      });
+    }
+    return result;
+  } catch (error) {
+    console.error("ticket email send error:", {
+      orderNumber: order?.orderNumber,
+      message: error?.message,
+    });
+    return { sent: false, skipped: false, errorMessage: error?.message };
+  }
+}
+
+async function applyWaveStatusToTicketOrder({ order, providerStatusRaw, req = null }) {
   const mapped = mapWaveSessionToInternal(providerStatusRaw || {});
   const metadata = extractProviderMetadata({ raw: providerStatusRaw || {} });
   const now = new Date();
+  const shouldSendTicketEmail = Boolean(mapped.markOrderPaid && order.status !== "PAID");
 
-  return prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx) => {
     const data = {
       paymentProvider: "WAVE",
       paymentStatus: mapped.paymentStatus || order.paymentStatus,
@@ -280,6 +305,12 @@ async function applyWaveStatusToTicketOrder({ order, providerStatusRaw }) {
       include: paidOrderTicketInclude(),
     });
   });
+
+  if (shouldSendTicketEmail) {
+    await sendTicketEmailAfterPaid({ order: updated, req });
+  }
+
+  return updated;
 }
 
 async function syncTicketWavePaymentStatus({ req, orderNumber }) {
@@ -302,6 +333,7 @@ async function syncTicketWavePaymentStatus({ req, orderNumber }) {
   const updated = await applyWaveStatusToTicketOrder({
     order,
     providerStatusRaw,
+    req,
   });
 
   return { ok: true, order: updated };

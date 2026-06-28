@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const prisma = require("../prisma");
 const ticketWavePaymentService = require("../services/ticket-wave-payment.service");
+const { normalizeEmail } = require("../services/email.service");
 
 function normalizeSlug(value) {
   return String(value || "")
@@ -171,6 +172,7 @@ async function createTicketOrder(req, res) {
     const qty = Math.max(1, Math.min(50, Number.parseInt(quantity, 10) || 1));
     const normalizedBuyerName = String(buyerFullName || "").trim();
     const normalizedBuyerPhone = digitsOnly(buyerPhone);
+    const normalizedBuyerEmail = normalizeEmail(buyerEmail || "");
     const normalizedHolderName = String(holderFullName || buyerFullName || "").trim();
 
     if (!eventSlug || !ticketTypeId) {
@@ -178,6 +180,9 @@ async function createTicketOrder(req, res) {
     }
     if (!normalizedBuyerName || !normalizedBuyerPhone) {
       return res.status(400).json({ message: "Nom et téléphone acheteur requis." });
+    }
+    if (!normalizedBuyerEmail) {
+      return res.status(400).json({ message: "Adresse email acheteur valide requise pour recevoir les tickets." });
     }
     if (!normalizedHolderName) {
       return res.status(400).json({ message: "Nom du participant requis." });
@@ -213,13 +218,13 @@ async function createTicketOrder(req, res) {
           status: "PENDING_PAYMENT",
           buyerFullName: normalizedBuyerName,
           buyerPhone: normalizedBuyerPhone,
-          buyerEmail: buyerEmail ? String(buyerEmail).trim().toLowerCase() : null,
+          buyerEmail: normalizedBuyerEmail,
           buyerFboNumber: buyerFboNumber ? String(buyerFboNumber).trim() : null,
           buyerFboName: buyerFboName ? String(buyerFboName).trim() : null,
           quantity: qty,
           holderFullName: normalizedHolderName,
           holderPhone: normalizedBuyerPhone,
-          holderEmail: buyerEmail ? String(buyerEmail).trim().toLowerCase() : null,
+          holderEmail: normalizedBuyerEmail,
           totalFcfa: Number(ticketType.priceFcfa || 0) * qty,
           paymentMethod: "WAVE",
           paymentProvider: "WAVE",
