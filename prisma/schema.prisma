@@ -242,6 +242,15 @@ enum TicketStatus {
   CANCELLED
 }
 
+enum TicketCheckInResult {
+  ACCEPTED
+  ALREADY_USED
+  WRONG_EVENT
+  INACTIVE
+  NOT_FOUND
+  INVALID
+}
+
 enum ProductCategory {
   NON_CLASSE
   BUVABLE
@@ -428,6 +437,8 @@ model Country {
   ticketEvents TicketEvent[]
   ticketOrders TicketOrder[]
   tickets Ticket[]
+  ticketCheckInSessions TicketCheckInSession[]
+  ticketCheckInLogs TicketCheckInLog[]
   externalPaymentLinks ExternalPaymentLink[]
 }
 
@@ -574,6 +585,8 @@ model AdminUser {
   createdTicketEvents TicketEvent[] @relation("TicketEventCreatedBy")
   updatedTicketEvents TicketEvent[] @relation("TicketEventUpdatedBy")
   checkedInTickets Ticket[] @relation("TicketCheckedInBy")
+  ticketCheckInSessions TicketCheckInSession[] @relation("TicketCheckInSessionAgent")
+  ticketCheckInLogs TicketCheckInLog[] @relation("TicketCheckInLogAgent")
   createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
   updatedExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkUpdatedBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
@@ -1611,6 +1624,8 @@ model TicketEvent {
   ticketTypes TicketType[]
   ticketOrders TicketOrder[]
   tickets Ticket[]
+  checkInSessions TicketCheckInSession[]
+  checkInLogs TicketCheckInLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1635,6 +1650,7 @@ model TicketType {
   sortOrder Int @default(0)
 
   tickets Ticket[]
+  checkInLogs TicketCheckInLog[]
   ticketOrders TicketOrder[]
 
   createdAt DateTime @default(now())
@@ -1685,6 +1701,7 @@ model TicketOrder {
   note String? @db.Text
 
   tickets Ticket[]
+  checkInLogs TicketCheckInLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1721,6 +1738,7 @@ model Ticket {
   checkedInAt DateTime?
   checkedInById String?
   checkedInBy AdminUser? @relation("TicketCheckedInBy", fields: [checkedInById], references: [id], onDelete: SetNull)
+  checkInLogs TicketCheckInLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1729,4 +1747,74 @@ model Ticket {
   @@index([eventId, status])
   @@index([orderId])
   @@index([ticketTypeId])
+}
+
+model TicketCheckInSession {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  eventId String
+  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  agentId String?
+  agent AdminUser? @relation("TicketCheckInSessionAgent", fields: [agentId], references: [id], onDelete: SetNull)
+
+  entryPoint String
+  deviceName String?
+  openedAt DateTime @default(now())
+  closedAt DateTime?
+
+  logs TicketCheckInLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, eventId, openedAt])
+  @@index([agentId, openedAt])
+  @@index([closedAt])
+}
+
+model TicketCheckInLog {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  eventId String?
+  event TicketEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  ticketTypeId String?
+  ticketType TicketType? @relation(fields: [ticketTypeId], references: [id], onDelete: SetNull)
+
+  ticketId String?
+  ticket Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  orderId String?
+  order TicketOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  sessionId String?
+  session TicketCheckInSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  checkedById String?
+  checkedBy AdminUser? @relation("TicketCheckInLogAgent", fields: [checkedById], references: [id], onDelete: SetNull)
+
+  entryPoint String?
+  scannedValue String?
+  ticketCode String?
+  result TicketCheckInResult
+  reason String?
+  ticketStatusBefore TicketStatus?
+  ticketStatusAfter TicketStatus?
+  scannedAt DateTime @default(now())
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([countryId, eventId, scannedAt])
+  @@index([ticketId, scannedAt])
+  @@index([sessionId, scannedAt])
+  @@index([checkedById, scannedAt])
+  @@index([result, scannedAt])
 }

@@ -60,6 +60,30 @@ router.post(
   ticketEventsController.checkInTicket,
 );
 
+router.post(
+  "/check-in/sessions",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.openCheckInSession,
+);
+
+router.post(
+  "/check-in/sessions/:sessionId/close",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.closeCheckInSession,
+);
+
+router.get(
+  "/check-in/logs",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.listCheckInLogs,
+);
+
+router.get(
+  "/check-in/summary",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.getCheckInSummary,
+);
+
 router.get(
   "/:id",
   requirePermission(Permission.MARKETING_WRITE),
