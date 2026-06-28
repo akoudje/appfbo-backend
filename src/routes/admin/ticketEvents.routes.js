@@ -48,6 +48,12 @@ router.post(
 );
 
 router.post(
+  "/orders/:orderId/resend-email",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.resendOrderTicketsEmail,
+);
+
+router.post(
   "/assets",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.uploadPosterMiddleware,

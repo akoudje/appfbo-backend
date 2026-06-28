@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const prisma = require("../prisma");
 const ticketWavePaymentService = require("../services/ticket-wave-payment.service");
 const { normalizeEmail } = require("../services/email.service");
+const { sendTicketOrderEmail } = require("../services/ticket-email-notifications.service");
 
 function normalizeSlug(value) {
   return String(value || "")
@@ -21,6 +22,38 @@ function ticketOrderNumber() {
   const stamp = new Date().toISOString().slice(0, 10).replace(/\D/g, "");
   const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `EVT-${stamp}-${suffix}`;
+}
+
+function getRequestOrigin(req = null) {
+  const origin = req?.get?.("origin") || req?.headers?.origin || "";
+  if (!origin) return "";
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return "";
+  }
+}
+
+function isHttpsUrl(value) {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function publicBaseUrl(req = null) {
+  const configured =
+    process.env.APP_PUBLIC_BASE_URL ||
+    process.env.FRONTEND_PUBLIC_URL ||
+    process.env.PUBLIC_APP_URL ||
+    "";
+  if (isHttpsUrl(configured)) return configured.replace(/\/+$/, "");
+
+  const requestOrigin = getRequestOrigin(req);
+  if (isHttpsUrl(requestOrigin)) return requestOrigin.replace(/\/+$/, "");
+
+  return (configured || "http://localhost:5173").replace(/\/+$/, "");
 }
 
 function isSalesOpen(event, now = new Date()) {
@@ -283,6 +316,60 @@ async function getTicketOrder(req, res) {
   }
 }
 
+async function recoverTicketOrder(req, res) {
+  try {
+    const identifier = String(req.body?.identifier || "").trim();
+    const orderNumber = String(req.body?.orderNumber || "").trim().toUpperCase();
+    const normalizedEmail = normalizeEmail(identifier);
+    const normalizedPhone = digitsOnly(identifier);
+
+    const neutralResponse = {
+      ok: true,
+      message: "Si un achat payé correspond à ces informations, le ticket sera renvoyé par email.",
+    };
+
+    if (!identifier && !orderNumber) return res.json(neutralResponse);
+
+    const where = {
+      countryId: req.countryId,
+      status: "PAID",
+      tickets: { some: {} },
+    };
+    if (orderNumber) where.orderNumber = orderNumber;
+    if (identifier) {
+      where.OR = [
+        ...(normalizedEmail
+          ? [{ buyerEmail: normalizedEmail }, { holderEmail: normalizedEmail }]
+          : []),
+        ...(normalizedPhone
+          ? [{ buyerPhone: normalizedPhone }, { holderPhone: normalizedPhone }]
+          : []),
+      ];
+      if (!where.OR.length) return res.json(neutralResponse);
+    }
+
+    const order = await prisma.ticketOrder.findFirst({
+      where,
+      orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+      include: {
+        country: { select: { code: true } },
+        event: true,
+        ticketType: true,
+        tickets: { include: { ticketType: true } },
+      },
+    });
+
+    if (order?.buyerEmail || order?.holderEmail) {
+      await sendTicketOrderEmail({ order, publicUrl: publicBaseUrl(req) });
+    }
+
+    return res.json(neutralResponse);
+  } catch (error) {
+    console.error("recoverTicketOrder error:", error);
+    return res.status(500).json({ message: "Erreur serveur (recoverTicketOrder)" });
+  }
+}
+
 async function initiateTicketWavePayment(req, res) {
   try {
     const result = await ticketWavePaymentService.initiateTicketWavePayment({
@@ -319,6 +406,7 @@ module.exports = {
   getPublicEvent,
   createTicketOrder,
   getTicketOrder,
+  recoverTicketOrder,
   initiateTicketWavePayment,
   syncTicketWavePaymentStatus,
 };
