@@ -492,8 +492,9 @@ async function expireOrders(req, res) {
 
 async function checkInTicket(req, res) {
   try {
-    const { tokenOrCode } = req.body || {};
+    const { tokenOrCode, eventId } = req.body || {};
     const raw = String(tokenOrCode || "").trim();
+    const expectedEventId = String(eventId || "").trim();
     if (!raw) return res.status(400).json({ message: "Code billet ou QR requis." });
 
     const ticket = await prisma.ticket.findFirst({
@@ -505,9 +506,13 @@ async function checkInTicket(req, res) {
         event: true,
         ticketType: true,
         order: true,
+        checkedInBy: { select: { id: true, fullName: true, email: true } },
       },
     });
     if (!ticket) return res.status(404).json({ message: "Billet introuvable." });
+    if (expectedEventId && ticket.eventId !== expectedEventId) {
+      return res.status(409).json({ message: "Ce billet appartient à un autre événement.", ticket });
+    }
     if (ticket.status === "USED") return res.status(409).json({ message: "Billet déjà utilisé.", ticket });
     if (ticket.status !== "ACTIVE") return res.status(400).json({ message: "Billet non actif.", ticket });
 
