@@ -7,6 +7,10 @@ const {
   paidOrderTicketInclude,
 } = require("./ticket-order-ticketing.service");
 const { sendTicketOrderEmail } = require("./ticket-email-notifications.service");
+const {
+  extractWaveProviderMetadata,
+  firstNonEmptyString,
+} = require("../payments/wave-metadata");
 
 function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
@@ -58,30 +62,13 @@ function buildWaveUrls(order, req = null) {
 
 function extractProviderMetadata(response = {}) {
   const raw = response.raw || response || {};
+  const metadata = extractWaveProviderMetadata(raw);
   return {
-    providerSessionId:
-      response.providerSessionId ||
-      raw.id ||
-      raw.checkout_session_id ||
-      raw.checkout_session?.id ||
-      null,
-    providerTransactionId:
-      response.providerTransactionId ||
-      raw.transaction_id ||
-      raw.checkout_session?.transaction_id ||
-      null,
-    providerPayerPhone:
-      response.providerPayerPhone ||
-      raw.payer_phone ||
-      raw.customer_msisdn ||
-      raw.checkout_session?.payer_phone ||
-      null,
-    providerStatusLabel:
-      response.providerStatusLabel ||
-      raw.checkout_status_label ||
-      raw.payment_status_label ||
-      raw.checkout_session?.checkout_status_label ||
-      null,
+    providerSessionId: response.providerSessionId || metadata.providerSessionId || null,
+    providerTransactionId: response.providerTransactionId || metadata.providerTransactionId || null,
+    providerPayerPhone: response.providerPayerPhone || metadata.providerPayerPhone || null,
+    providerStatusLabel: response.providerStatusLabel || metadata.providerStatusLabel || null,
+    completedAt: metadata.completedAt || null,
   };
 }
 
@@ -259,30 +246,94 @@ async function sendTicketEmailAfterPaid({ order, req = null }) {
 async function applyWaveStatusToTicketOrder({ order, providerStatusRaw, req = null }) {
   const mapped = mapWaveSessionToInternal(providerStatusRaw || {});
   const metadata = extractProviderMetadata({ raw: providerStatusRaw || {} });
+  let detailsRaw = null;
+  let detailsMetadata = null;
+
+  if (!providerStatusRaw?.simulated && mapped.isFinal) {
+    const lookupSessionId = firstNonEmptyString(
+      metadata.providerSessionId,
+      order.providerSessionId,
+    );
+    const lookupTransactionId = firstNonEmptyString(
+      metadata.providerTransactionId,
+      order.providerTransactionId,
+      order.paymentReference,
+    );
+
+    if (lookupSessionId || lookupTransactionId) {
+      try {
+        const details = await paymentOrchestrator.getCheckoutSessionDetails("WAVE", {
+          providerSessionId: lookupSessionId || null,
+          providerTransactionId: lookupTransactionId || null,
+        });
+        detailsRaw = details?.raw || null;
+        detailsMetadata = extractProviderMetadata({ raw: detailsRaw || {} });
+      } catch (error) {
+        console.warn("ticket wave details enrichment failed", {
+          orderNumber: order.orderNumber,
+          providerSessionId: lookupSessionId || null,
+          providerTransactionId: lookupTransactionId || null,
+          message: error?.message || String(error),
+        });
+      }
+    }
+  }
+
+  const resolvedMetadata = {
+    providerSessionId:
+      detailsMetadata?.providerSessionId || metadata.providerSessionId || null,
+    providerTransactionId:
+      detailsMetadata?.providerTransactionId || metadata.providerTransactionId || null,
+    providerPayerPhone:
+      detailsMetadata?.providerPayerPhone || metadata.providerPayerPhone || null,
+    providerStatusLabel:
+      detailsMetadata?.providerStatusLabel || metadata.providerStatusLabel || null,
+    completedAt: detailsMetadata?.completedAt || metadata.completedAt || null,
+  };
+  const providerPayloadForPersist = detailsRaw
+    ? {
+        ...providerStatusRaw,
+        _wave: {
+          statusPayload: providerStatusRaw,
+          detailsPayload: detailsRaw,
+          detailsFetchedAt: new Date().toISOString(),
+        },
+      }
+    : providerStatusRaw;
   const now = new Date();
+  const completedAtDate = resolvedMetadata.completedAt
+    ? new Date(resolvedMetadata.completedAt)
+    : null;
+  const paidAtValue =
+    mapped.markOrderPaid &&
+    completedAtDate &&
+    !Number.isNaN(completedAtDate.getTime())
+      ? completedAtDate
+      : now;
   const shouldSendTicketEmail = Boolean(mapped.markOrderPaid && order.status !== "PAID");
 
   const updated = await prisma.$transaction(async (tx) => {
     const data = {
       paymentProvider: "WAVE",
       paymentStatus: mapped.paymentStatus || order.paymentStatus,
-      providerSessionId: metadata.providerSessionId || order.providerSessionId,
-      providerTransactionId: metadata.providerTransactionId || order.providerTransactionId,
-      providerPayerPhone: metadata.providerPayerPhone || order.providerPayerPhone,
+      providerSessionId: resolvedMetadata.providerSessionId || order.providerSessionId,
+      providerTransactionId:
+        resolvedMetadata.providerTransactionId || order.providerTransactionId,
+      providerPayerPhone: resolvedMetadata.providerPayerPhone || order.providerPayerPhone,
       providerStatusLabel:
-        metadata.providerStatusLabel ||
+        resolvedMetadata.providerStatusLabel ||
         providerStatusRaw?.payment_status ||
         providerStatusRaw?.checkout_status ||
         order.providerStatusLabel,
-      providerPayloadJson: providerStatusRaw || order.providerPayloadJson,
+      providerPayloadJson: providerPayloadForPersist || order.providerPayloadJson,
     };
 
     if (mapped.markOrderPaid) {
       await ensureTicketsActivatedForPaidOrder(tx, order);
       data.status = "PAID";
-      data.paidAt = order.paidAt || now;
+      data.paidAt = order.paidAt || paidAtValue;
       data.paymentReference =
-        metadata.providerTransactionId ||
+        resolvedMetadata.providerTransactionId ||
         providerStatusRaw?.transaction_id ||
         order.paymentReference;
     } else if (mapped.markExpired) {
