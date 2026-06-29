@@ -9,6 +9,28 @@ function normalizeFboNumber(value) {
   return digitsOnly(value);
 }
 
+function fboNumberSearchTerms(value) {
+  const raw = String(value || "").trim();
+  const numeric = normalizeFboNumber(raw);
+  const terms = new Set([raw]);
+  if (numeric) {
+    terms.add(numeric);
+    const grouped = numeric.match(/.{1,3}/g)?.join("-");
+    if (grouped) terms.add(grouped);
+  }
+  return [...terms].filter(Boolean);
+}
+
+function scopedFboWhere(req, extra = {}) {
+  return {
+    ...extra,
+    OR: [
+      { fboCountries: { some: { countryId: req.countryId } } },
+      { fboCountries: { none: {} } },
+    ],
+  };
+}
+
 function documentNumber() {
   const stamp = new Date().toISOString().slice(0, 10).replace(/\D/g, "");
   const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
@@ -32,16 +54,20 @@ async function searchFbos(req, res) {
     const q = String(req.query.q || "").trim();
     if (q.length < 2) return res.json({ data: [] });
 
-    const numeric = normalizeFboNumber(q);
+    const numberTerms = fboNumberSearchTerms(q);
     const fbos = await prisma.fbo.findMany({
-      where: {
-        fboCountries: { some: { countryId: req.countryId } },
-        OR: [
+      where: scopedFboWhere(req, {
+        AND: [{
+          OR: [
           { nomComplet: { contains: q, mode: "insensitive" } },
           { email: { contains: q, mode: "insensitive" } },
-          ...(numeric ? [{ numeroFbo: { contains: numeric } }] : []),
-        ],
-      },
+          ...numberTerms.flatMap((term) => ([
+            { numeroFbo: { contains: term } },
+            { numeroFbo: { endsWith: term } },
+          ])),
+          ],
+        }],
+      }),
       include: {
         fboCountries: {
           where: { countryId: req.countryId },
@@ -104,10 +130,7 @@ async function createDocument(req, res) {
     } = req.body || {};
 
     const fbo = await prisma.fbo.findFirst({
-      where: {
-        id: String(fboId || ""),
-        fboCountries: { some: { countryId: req.countryId } },
-      },
+      where: scopedFboWhere(req, { id: String(fboId || "") }),
       include: {
         fboCountries: {
           where: { countryId: req.countryId },
