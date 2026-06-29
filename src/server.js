@@ -25,6 +25,7 @@ const customerRoutes = require("./routes/customer.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
 const marketingEventsRoutes = require("./routes/marketing-events.routes");
 const ticketingRoutes = require("./routes/ticketing.routes");
+const fboDocumentsRoutes = require("./routes/fboDocuments.routes");
 const externalPaymentLinksRoutes = require("./routes/external-payment-links.routes");
 const {
   startExpiredInvoiceAutoCancelScheduler,
@@ -203,6 +204,7 @@ app.use("/api/customer", customerRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/marketing-events", marketingEventsRoutes);
 app.use("/api/ticketing", ticketingRoutes);
+app.use("/api/fbo-documents", fboDocumentsRoutes);
 app.use("/api/external-payment-links", externalPaymentLinksRoutes);
 
 /* =========================================================

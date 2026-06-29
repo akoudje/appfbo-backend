@@ -251,6 +251,15 @@ enum TicketCheckInResult {
   INVALID
 }
 
+enum FboDocumentType {
+  ACTIVITY_CERTIFICATE
+}
+
+enum FboDocumentStatus {
+  ISSUED
+  CANCELLED
+}
+
 enum ProductCategory {
   NON_CLASSE
   BUVABLE
@@ -401,6 +410,7 @@ model Fbo {
   bankPaymentProofs BankPaymentProof[]
   mobilePushTokens MobilePushToken[]
   customerNotificationReads CustomerNotificationRead[]
+  documents FboDocument[]
 
   @@index([pointDeVente])
   @@index([grade])
@@ -439,6 +449,7 @@ model Country {
   tickets Ticket[]
   ticketCheckInSessions TicketCheckInSession[]
   ticketCheckInLogs TicketCheckInLog[]
+  fboDocuments FboDocument[]
   externalPaymentLinks ExternalPaymentLink[]
 }
 
@@ -587,6 +598,8 @@ model AdminUser {
   checkedInTickets Ticket[] @relation("TicketCheckedInBy")
   ticketCheckInSessions TicketCheckInSession[] @relation("TicketCheckInSessionAgent")
   ticketCheckInLogs TicketCheckInLog[] @relation("TicketCheckInLogAgent")
+  issuedFboDocuments FboDocument[] @relation("FboDocumentIssuedBy")
+  cancelledFboDocuments FboDocument[] @relation("FboDocumentCancelledBy")
   createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
   updatedExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkUpdatedBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
@@ -635,6 +648,51 @@ model FboCountry {
 
   @@unique([fboId, countryId])
   @@index([countryId])
+}
+
+model FboDocument {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  fboId String
+  fbo Fbo @relation(fields: [fboId], references: [id], onDelete: Restrict)
+
+  documentNumber String @unique
+  verificationToken String @unique
+  type FboDocumentType @default(ACTIVITY_CERTIFICATE)
+  status FboDocumentStatus @default(ISSUED)
+
+  fboNumber String
+  fboFullName String
+  fboEmail String?
+  fboGrade Grade?
+  fboPointDeVente String?
+
+  city String
+  purpose String? @db.Text
+  signatoryName String
+  signatoryTitle String
+  issuedAt DateTime @default(now())
+
+  issuedById String?
+  issuedBy AdminUser? @relation("FboDocumentIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+
+  cancelledAt DateTime?
+  cancelReason String? @db.Text
+  cancelledById String?
+  cancelledBy AdminUser? @relation("FboDocumentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, issuedAt])
+  @@index([fboId, issuedAt])
+  @@index([status, issuedAt])
+  @@index([fboNumber])
 }
 
 model Product {
