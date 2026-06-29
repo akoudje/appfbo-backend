@@ -11,6 +11,12 @@ router.get(
   memorialsController.listAdminTributes,
 );
 
+router.put(
+  "/",
+  requirePermission(Permission.MARKETING_WRITE),
+  memorialsController.updateAdminMemorial,
+);
+
 router.patch(
   "/tributes/:id/status",
   requirePermission(Permission.MARKETING_WRITE),

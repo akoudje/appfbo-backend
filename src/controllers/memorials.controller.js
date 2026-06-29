@@ -76,6 +76,14 @@ function serializeMemorial(memorial, tributes = []) {
   };
 }
 
+function parseOptionalDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
 async function findOrCreateMemorial(countryId, slug) {
   const normalizedSlug = normalizeSlug(slug);
   const existing = await prisma.memorial.findUnique({
@@ -199,6 +207,44 @@ async function listAdminTributes(req, res) {
   }
 }
 
+async function updateAdminMemorial(req, res) {
+  try {
+    const slug = normalizeSlug(req.body?.slug || req.query?.slug || "livre-blanc");
+    const memorial = await findOrCreateMemorial(req.countryId, slug);
+
+    const title = cleanText(req.body?.title, 180);
+    const personName = cleanText(req.body?.personName, 180);
+    if (!title || !personName) {
+      return res.status(400).json({ message: "Titre et nom de la personne requis." });
+    }
+
+    const updated = await prisma.memorial.update({
+      where: { id: memorial.id },
+      data: {
+        title,
+        personName,
+        subtitle: cleanText(req.body?.subtitle, 280) || null,
+        birthDate: parseOptionalDate(req.body?.birthDate),
+        deathDate: parseOptionalDate(req.body?.deathDate),
+        coverImageUrl: optionalUrl(req.body?.coverImageUrl),
+        biography: cleanLongText(req.body?.biography, 8000) || null,
+        thankYouMessage: cleanLongText(req.body?.thankYouMessage, 2000) || null,
+        published: req.body?.published === false ? false : true,
+      },
+      include: {
+        _count: {
+          select: { tributes: { where: { status: "PUBLISHED" } } },
+        },
+      },
+    });
+
+    return res.json(serializeMemorial(updated, []));
+  } catch (error) {
+    console.error("updateAdminMemorial error:", error);
+    return res.status(500).json({ message: "Erreur serveur (updateAdminMemorial)" });
+  }
+}
+
 async function updateAdminTributeStatus(req, res) {
   try {
     const status = cleanText(req.body?.status, 20).toUpperCase();
@@ -231,5 +277,6 @@ module.exports = {
   getPublicMemorial,
   submitTribute,
   listAdminTributes,
+  updateAdminMemorial,
   updateAdminTributeStatus,
 };
