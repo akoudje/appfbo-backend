@@ -260,6 +260,13 @@ enum FboDocumentStatus {
   CANCELLED
 }
 
+enum MemorialTributeStatus {
+  PENDING
+  PUBLISHED
+  ARCHIVED
+  REJECTED
+}
+
 enum ProductCategory {
   NON_CLASSE
   BUVABLE
@@ -451,6 +458,8 @@ model Country {
   ticketCheckInLogs TicketCheckInLog[]
   fboDocuments FboDocument[]
   externalPaymentLinks ExternalPaymentLink[]
+  memorials Memorial[]
+  memorialTributes MemorialTribute[]
 }
 
 model MobilePushToken {
@@ -602,6 +611,7 @@ model AdminUser {
   cancelledFboDocuments FboDocument[] @relation("FboDocumentCancelledBy")
   createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
   updatedExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkUpdatedBy")
+  reviewedMemorialTributes MemorialTribute[] @relation("MemorialTributeReviewedBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
   auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
 
@@ -693,6 +703,62 @@ model FboDocument {
   @@index([fboId, issuedAt])
   @@index([status, issuedAt])
   @@index([fboNumber])
+}
+
+model Memorial {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  slug String
+  title String
+  personName String
+  subtitle String?
+  birthDate DateTime?
+  deathDate DateTime?
+  coverImageUrl String? @db.Text
+  biography String? @db.Text
+  thankYouMessage String? @db.Text
+  published Boolean @default(true)
+
+  tributes MemorialTribute[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, slug])
+  @@index([countryId, published])
+}
+
+model MemorialTribute {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  memorialId String
+  memorial Memorial @relation(fields: [memorialId], references: [id], onDelete: Cascade)
+
+  authorName String
+  relationship String?
+  authorEmail String?
+  authorPhone String?
+  message String @db.Text
+  photoUrl String? @db.Text
+  candleLit Boolean @default(false)
+  status MemorialTributeStatus @default(PENDING)
+
+  reviewedAt DateTime?
+  reviewedById String?
+  reviewedBy AdminUser? @relation("MemorialTributeReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, status, createdAt])
+  @@index([memorialId, status, createdAt])
+  @@index([reviewedById])
 }
 
 model Product {

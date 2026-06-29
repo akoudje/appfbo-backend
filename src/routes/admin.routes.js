@@ -44,6 +44,7 @@ const reportsRoutes = require("./admin/reports.routes");
 const ticketEventsRoutes = require("./admin/ticketEvents.routes");
 const fboDocumentsRoutes = require("./admin/fboDocuments.routes");
 const externalPaymentLinksRoutes = require("./admin/externalPaymentLinks.routes");
+const memorialsRoutes = require("./admin/memorials.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 const eventsController = require("../controllers/admin/events.controller");
 const paymentLinkResendRequestsController = require("../controllers/paymentLinkResendRequests.controller");
@@ -129,6 +130,7 @@ router.use("/cash-closures", cashClosuresRoutes);
 router.use("/stock", stockRoutes);
 router.use("/ticket-events", ticketEventsRoutes);
 router.use("/fbo-documents", fboDocumentsRoutes);
+router.use("/memorials", memorialsRoutes);
 
 router.get(
   "/grade-discounts",

@@ -27,6 +27,7 @@ const marketingEventsRoutes = require("./routes/marketing-events.routes");
 const ticketingRoutes = require("./routes/ticketing.routes");
 const fboDocumentsRoutes = require("./routes/fboDocuments.routes");
 const externalPaymentLinksRoutes = require("./routes/external-payment-links.routes");
+const memorialsRoutes = require("./routes/memorials.routes");
 const {
   startExpiredInvoiceAutoCancelScheduler,
 } = require("./services/preorder-expiration.service");
@@ -206,6 +207,7 @@ app.use("/api/marketing-events", marketingEventsRoutes);
 app.use("/api/ticketing", ticketingRoutes);
 app.use("/api/fbo-documents", fboDocumentsRoutes);
 app.use("/api/external-payment-links", externalPaymentLinksRoutes);
+app.use("/api/memorials", memorialsRoutes);
 
 /* =========================================================
    Routes de paiement (webhooks, etc.)
