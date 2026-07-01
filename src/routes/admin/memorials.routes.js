@@ -17,6 +17,13 @@ router.put(
   memorialsController.updateAdminMemorial,
 );
 
+router.post(
+  "/assets",
+  requirePermission(Permission.MARKETING_WRITE),
+  memorialsController.uploadMemorialCoverMiddleware,
+  memorialsController.uploadAdminMemorialCover,
+);
+
 router.patch(
   "/tributes/:id/status",
   requirePermission(Permission.MARKETING_WRITE),

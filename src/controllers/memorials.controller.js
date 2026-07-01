@@ -1,4 +1,22 @@
+const multer = require("multer");
 const prisma = require("../prisma");
+const { uploadBuffer } = require("../services/cloudinary");
+
+const MAX_UPLOAD_FILE_SIZE = 8 * 1024 * 1024;
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_FILE_SIZE },
+  fileFilter: (_req, file, cb) => {
+    const ok = ALLOWED_UPLOAD_MIME_TYPES.has(String(file.mimetype || "").toLowerCase());
+    cb(ok ? null : new Error("Format image non supporté (png/jpg/webp)"), ok);
+  },
+});
 
 const DEFAULT_MEMORIAL = {
   title: "Livre blanc d'hommage",
@@ -41,6 +59,16 @@ function optionalUrl(value) {
   } catch {
     return null;
   }
+}
+
+function uploadMemorialCoverMiddleware(req, res, next) {
+  upload.single("file")(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ message: "Le fichier dépasse 8 MB." });
+    }
+    return res.status(400).json({ message: err.message || "Upload invalide" });
+  });
 }
 
 function serializeTribute(tribute, includePrivate = false) {
@@ -245,6 +273,37 @@ async function updateAdminMemorial(req, res) {
   }
 }
 
+async function uploadAdminMemorialCover(req, res) {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ message: "Fichier requis" });
+
+    const slug = normalizeSlug(req.body?.slug || "livre-blanc");
+    const uploadResult = await uploadBuffer(file.buffer, {
+      folder: `appfbo/memorials/${req.countryId || "global"}`,
+      resource_type: "image",
+      use_filename: true,
+      unique_filename: true,
+      filename_override: `${slug}-cover-${Date.now()}`,
+    });
+
+    const url = uploadResult?.secure_url || uploadResult?.url || null;
+    if (!url) throw new Error("UPLOAD_MEMORIAL_COVER_FAILED");
+
+    return res.status(201).json({
+      ok: true,
+      url,
+      width: uploadResult?.width || null,
+      height: uploadResult?.height || null,
+      bytes: uploadResult?.bytes || file.size || null,
+      format: uploadResult?.format || null,
+    });
+  } catch (error) {
+    console.error("memorials.uploadAdminMemorialCover error:", error);
+    return res.status(500).json({ message: "Erreur serveur (uploadAdminMemorialCover)" });
+  }
+}
+
 async function updateAdminTributeStatus(req, res) {
   try {
     const status = cleanText(req.body?.status, 20).toUpperCase();
@@ -278,5 +337,7 @@ module.exports = {
   submitTribute,
   listAdminTributes,
   updateAdminMemorial,
+  uploadMemorialCoverMiddleware,
+  uploadAdminMemorialCover,
   updateAdminTributeStatus,
 };
