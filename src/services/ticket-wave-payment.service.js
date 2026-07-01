@@ -1,7 +1,6 @@
 const prisma = require("../prisma");
 const paymentOrchestrator = require("../payments/payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper");
-const { normalizeForCountry } = require("../utils/phone");
 const {
   ensureTicketsActivatedForPaidOrder,
   paidOrderTicketInclude,
@@ -122,7 +121,7 @@ async function findTicketOrderByNumber({ req, orderNumber }) {
   });
 }
 
-async function initiateTicketWavePayment({ req, orderNumber, payerPhone }) {
+async function initiateTicketWavePayment({ req, orderNumber }) {
   const order = await findTicketOrderByNumber({ req, orderNumber });
   if (!order) {
     const err = new Error("Commande billet introuvable");
@@ -146,15 +145,6 @@ async function initiateTicketWavePayment({ req, orderNumber, payerPhone }) {
     throw err;
   }
 
-  const normalizedPayerPhone = payerPhone
-    ? normalizeForCountry(payerPhone, order.country?.code || "CIV")
-    : "";
-  if (payerPhone && !normalizedPayerPhone) {
-    const err = new Error("Numero Wave invalide");
-    err.statusCode = 400;
-    throw err;
-  }
-
   const amountFcfa = Number(order.totalFcfa || 0);
   if (!Number.isFinite(amountFcfa) || amountFcfa <= 0) {
     const err = new Error("Montant ticket invalide");
@@ -171,7 +161,6 @@ async function initiateTicketWavePayment({ req, orderNumber, payerPhone }) {
         successUrl: urls.successUrl,
         errorUrl: urls.errorUrl,
         clientReference: `TICKET:${order.id}`,
-        restrictPayerMobile: normalizedPayerPhone || undefined,
       });
   const metadata = extractProviderMetadata(providerResponse);
 
@@ -186,7 +175,7 @@ async function initiateTicketWavePayment({ req, orderNumber, payerPhone }) {
       providerTransactionId: metadata.providerTransactionId,
       providerCheckoutUrl: providerResponse.checkoutUrl || null,
       providerLaunchUrl: providerResponse.providerLaunchUrl || providerResponse.checkoutUrl || null,
-      providerPayerPhone: metadata.providerPayerPhone || normalizedPayerPhone || null,
+      providerPayerPhone: metadata.providerPayerPhone || null,
       providerStatusLabel:
         metadata.providerStatusLabel ||
         providerResponse.paymentStatus ||

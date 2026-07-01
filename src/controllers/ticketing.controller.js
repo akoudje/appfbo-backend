@@ -280,7 +280,6 @@ async function createTicketOrder(req, res) {
     const payment = await ticketWavePaymentService.initiateTicketWavePayment({
       req,
       orderNumber: order.orderNumber,
-      payerPhone: buyerPhone,
     });
 
     return res.status(201).json({
@@ -375,7 +374,6 @@ async function initiateTicketWavePayment(req, res) {
     const result = await ticketWavePaymentService.initiateTicketWavePayment({
       req,
       orderNumber: req.params.orderNumber,
-      payerPhone: req.body?.payerPhone,
     });
     return res.json(result);
   } catch (error) {
