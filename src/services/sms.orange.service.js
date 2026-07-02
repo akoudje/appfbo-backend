@@ -4,8 +4,16 @@ const { normalizeForCountry } = require("../utils/phone");
 
 const DEFAULT_TOKEN_URL = "https://api.orange.com/oauth/v3/token";
 const ORANGE_SMS_API_BASE_URL = "https://api.orange.com/smsmessaging/v1";
-const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_SMS_LENGTH = 160;
+
+function readPositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getRequestTimeoutMs() {
+  return readPositiveInt(process.env.ORANGE_SMS_TIMEOUT_MS, 20_000);
+}
 
 let tokenCache = {
   byCountry: new Map(),
@@ -137,7 +145,7 @@ async function getAccessToken(countryCode = "CIV") {
           "Content-Type": "application/x-www-form-urlencoded",
           Accept: "application/json",
         },
-        timeout: REQUEST_TIMEOUT_MS,
+        timeout: getRequestTimeoutMs(),
       },
     );
 
@@ -205,7 +213,7 @@ async function postOrangeSms({
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        timeout: REQUEST_TIMEOUT_MS,
+        timeout: getRequestTimeoutMs(),
       },
     );
 

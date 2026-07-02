@@ -78,6 +78,60 @@ function buildSafeClientCorrelator(callbackData = null) {
   return `app${Date.now()}${safeData || "sms"}`.slice(0, 48);
 }
 
+function readPositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function getSmsTransientRetries() {
+  return Math.min(
+    3,
+    readPositiveInt(process.env.ORANGE_SMS_TRANSIENT_RETRIES, 1),
+  );
+}
+
+function getSmsRetryDelayMs(attemptNumber) {
+  const baseMs = Math.max(
+    250,
+    readPositiveInt(process.env.ORANGE_SMS_RETRY_DELAY_MS, 1_500),
+  );
+  return baseMs * Math.max(1, attemptNumber);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getOrangeErrorCode(err) {
+  return (
+    err?.data?.requestError?.serviceException?.messageId ||
+    err?.response?.data?.requestError?.serviceException?.messageId ||
+    err?.code ||
+    "SMS_SEND_FAILED"
+  );
+}
+
+function getOrangeErrorMessage(err) {
+  return (
+    err?.data?.requestError?.serviceException?.text ||
+    err?.response?.data?.requestError?.serviceException?.text ||
+    err?.data?.message ||
+    err?.response?.data?.message ||
+    err?.message ||
+    "Échec d'envoi SMS"
+  );
+}
+
+function isTransientOrangeError(err) {
+  const code = String(err?.code || "").toUpperCase();
+  if (["ECONNABORTED", "ETIMEDOUT", "ECONNRESET", "EAI_AGAIN"].includes(code)) {
+    return true;
+  }
+
+  const status = Number(err?.status || err?.response?.status || 0);
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
 async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }) {
   const normalizedCountry = String(countryCode || "CIV").trim().toUpperCase();
   const toAddress = normalizePhoneForCountry(to, normalizedCountry);
@@ -117,12 +171,35 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
       clientCorrelator: clientCorrelator || "(auto)",
     });
 
-    const smsResult = await sendText({
-      phone: toAddress,
-      message: normalizedMessage,
-      clientCorrelator,
-      countryCode: normalizedCountry,
-    });
+    const maxRetries = getSmsTransientRetries();
+    let smsResult = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      try {
+        smsResult = await sendText({
+          phone: toAddress,
+          message: normalizedMessage,
+          clientCorrelator,
+          countryCode: normalizedCountry,
+        });
+        break;
+      } catch (err) {
+        const canRetry = attempt < maxRetries && isTransientOrangeError(err);
+        if (!canRetry) throw err;
+
+        const delayMs = getSmsRetryDelayMs(attempt + 1);
+        console.warn("[sms][orange] transient failure, retrying", {
+          to: toAddress,
+          attempt: attempt + 1,
+          nextAttempt: attempt + 2,
+          maxAttempts: maxRetries + 1,
+          delayMs,
+          errorCode: getOrangeErrorCode(err),
+          errorMessage: getOrangeErrorMessage(err),
+          httpStatus: err?.status || err?.response?.status || null,
+        });
+        await wait(delayMs);
+      }
+    }
 
     console.log("[sms][orange] send accepted", {
       to: `tel:${toAddress}`,
@@ -140,18 +217,8 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
   } catch (err) {
     console.error("[sms][orange] send failed", {
       to: toAddress,
-      errorCode:
-        err?.data?.requestError?.serviceException?.messageId ||
-        err?.response?.data?.requestError?.serviceException?.messageId ||
-        err?.code ||
-        "SMS_SEND_FAILED",
-      errorMessage:
-        err?.data?.requestError?.serviceException?.text ||
-        err?.response?.data?.requestError?.serviceException?.text ||
-        err?.data?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Échec d'envoi SMS",
+      errorCode: getOrangeErrorCode(err),
+      errorMessage: getOrangeErrorMessage(err),
       httpStatus: err?.status || err?.response?.status || null,
     });
 
@@ -160,18 +227,8 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
       provider: "ORANGE",
       providerMessageId: null,
       rawPayload: err?.data || err?.response?.data || null,
-      errorCode:
-        err?.data?.requestError?.serviceException?.messageId ||
-        err?.response?.data?.requestError?.serviceException?.messageId ||
-        err?.code ||
-        "SMS_SEND_FAILED",
-      errorMessage:
-        err?.data?.requestError?.serviceException?.text ||
-        err?.response?.data?.requestError?.serviceException?.text ||
-        err?.data?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Échec d'envoi SMS",
+      errorCode: getOrangeErrorCode(err),
+      errorMessage: getOrangeErrorMessage(err),
     };
   }
 }
