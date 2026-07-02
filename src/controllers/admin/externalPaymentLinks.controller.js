@@ -85,8 +85,8 @@ async function getQrConfig(req, res) {
 }
 
 function buildSmsMessage(link, req) {
-  const invoice = link.invoiceReference ? `Facture ${link.invoiceReference}` : "Paiement Forever";
-  return `FOREVER: ${invoice}. Montant ${formatAmount(link.amountFcfa)}. Payez via Wave: ${publicUrl(req, link.token)}`;
+  const reference = link.invoiceReference || link.reference || "Paiement";
+  return `FOREVER: ${reference}. ${formatAmount(link.amountFcfa)}. Wave: ${publicUrl(req, link.token)}`;
 }
 
 async function sendExternalLinkSms({ link, req, phoneOverride = null }) {

@@ -40,6 +40,13 @@ function buildNextAttemptAt(attemptNumber = 1, fromDate = new Date()) {
   return new Date(fromDate.getTime() + delaySeconds * 1000);
 }
 
+function getProcessingStaleAfterSeconds() {
+  return Math.max(
+    60,
+    parsePositiveInt(process.env.NOTIFICATION_PROCESSING_STALE_SECONDS, 300),
+  );
+}
+
 async function appendOrderMessageEvent(tx, orderMessageId, status, note, rawPayload = null) {
   await tx.orderMessageEvent.create({
     data: {
@@ -53,12 +60,16 @@ async function appendOrderMessageEvent(tx, orderMessageId, status, note, rawPayl
 
 async function processQueuedSmsMessage(message) {
   const now = new Date();
+  const staleBefore = new Date(now.getTime() - getProcessingStaleAfterSeconds() * 1000);
   const claim = await prisma.orderMessage.updateMany({
     where: {
       id: message.id,
       channel: "SMS",
       status: "QUEUED",
-      processingStartedAt: null,
+      OR: [
+        { processingStartedAt: null },
+        { processingStartedAt: { lt: staleBefore } },
+      ],
     },
     data: {
       processingStartedAt: now,
@@ -194,8 +205,21 @@ async function dispatchQueuedNotificationsOnce() {
     where: {
       channel: "SMS",
       status: "QUEUED",
-      processingStartedAt: null,
-      OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+      AND: [
+        {
+          OR: [
+            { processingStartedAt: null },
+            {
+              processingStartedAt: {
+                lt: new Date(now.getTime() - getProcessingStaleAfterSeconds() * 1000),
+              },
+            },
+          ],
+        },
+        {
+          OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+        },
+      ],
     },
     orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
     take: getDispatchBatchSize(),

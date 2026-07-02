@@ -15,13 +15,13 @@ function buildDefaultNotificationTemplates() {
       INVOICE:
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Paiement a effectuer sous ${expiryHours}H.`,
       INVOICE_WAVE:
-        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Reglez sous ${expiryHours}H via le lien Wave: {{paymentLink}}`,
+        `Code {{paymentCollectionCode}}. {{totalFcfaLabel}}. Wave: {{paymentLink}}`,
       INVOICE_BANK_TRANSFER:
-        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Effectuez le virement puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
+        `Code {{paymentCollectionCode}}. {{totalFcfaLabel}}. Depot preuve: {{bankProofUploadLink}}`,
       INVOICE_ECOBANK_PAY:
-        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Scannez le QR Ecobank Pay puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
+        `Code {{paymentCollectionCode}}. {{totalFcfaLabel}}. Depot preuve Ecobank: {{bankProofUploadLink}}`,
       INVOICE_PI_SPI:
-        `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Scannez le QR PI SPI puis deposez votre preuve sous ${expiryHours}H: {{bankProofUploadLink}}`,
+        `Code {{paymentCollectionCode}}. {{totalFcfaLabel}}. Depot preuve PI SPI: {{bankProofUploadLink}}`,
       INVOICE_CASH:
         `Code paiement {{paymentCollectionCode}}. Montant final {{totalFcfaLabel}}. Passez a la caisse FLP sous ${expiryHours}H. Passe ce delai, la commande sera annulee.`,
       PAYMENT_CONFIRMED:

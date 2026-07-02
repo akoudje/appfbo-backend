@@ -745,6 +745,42 @@ function ensureInvoiceSmsIncludesCollectionCode({
   ]);
 }
 
+function compactPaymentLinkSmsIfNeeded({ purpose, context, smsMessage }) {
+  const normalized = compactText(smsMessage || "");
+  const paymentLink = compactText(context?.paymentLink || "");
+  if (!paymentLink || normalized.length <= MAX_SMS_LENGTH) return normalized;
+
+  const purposeKey = normalizePurposeKey(purpose);
+  if (!["INVOICE", "PAYMENT_LINK", "REMINDER"].includes(purposeKey)) {
+    return firstSmsCandidate([normalized]);
+  }
+
+  const flow = String(context?.paymentFlow || "").toUpperCase();
+  const code = compactText(context?.paymentCollectionCode || context?.preorderNumber || "");
+  const amount = compactText(context?.totalFcfaLabel || "")
+    .replace(/\s*FCFA$/i, "F")
+    .replace(/\s+/g, "");
+  const isBankFlow = ["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"].includes(flow);
+  const action = isBankFlow ? "Depot preuve" : "Wave";
+  const reminderPrefix = purposeKey === "REMINDER" ? "Rappel. " : "";
+
+  return firstSmsCandidate([
+    prependNotificationPrefix(
+      context?.preorder || null,
+      `${reminderPrefix}Code ${code}. ${amount}. ${action}: ${paymentLink}`,
+    ),
+    prependNotificationPrefix(
+      context?.preorder || null,
+      `${reminderPrefix}${code}. ${amount}. ${action}: ${paymentLink}`,
+    ),
+    prependNotificationPrefix(
+      context?.preorder || null,
+      `${action} ${code}: ${paymentLink}`,
+    ),
+    normalized,
+  ]);
+}
+
 function resolveConfiguredTemplates({
   templatesRoot,
   purpose,
@@ -794,14 +830,18 @@ function resolveConfiguredTemplates({
   });
 
   return {
-    smsMessage: prependNotificationPrefix(
-      context?.preorder || null,
-      ensureInvoiceSmsIncludesCollectionCode({
-        purpose,
-        smsMessage: resolvedSms || fallbackSms,
-        paymentCollectionCode: context?.paymentCollectionCode,
-      }),
-    ),
+    smsMessage: compactPaymentLinkSmsIfNeeded({
+      purpose,
+      context,
+      smsMessage: prependNotificationPrefix(
+        context?.preorder || null,
+        ensureInvoiceSmsIncludesCollectionCode({
+          purpose,
+          smsMessage: resolvedSms || fallbackSms,
+          paymentCollectionCode: context?.paymentCollectionCode,
+        }),
+      ),
+    }),
     emailSubject: resolvedSubject || fallbackEmailSubject,
     emailBody: resolvedEmailBody || fallbackEmailBody,
     emailHtml: resolvedEmailHtml,
