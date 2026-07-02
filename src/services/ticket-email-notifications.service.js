@@ -1,4 +1,5 @@
 const { normalizeEmail, sendEmail } = require("./email.service");
+const { isSafePublicFrontendOrigin, publicFrontendBaseUrl } = require("./public-url.service");
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -24,7 +25,9 @@ function formatDateTime(value) {
 }
 
 function ticketOrderPublicUrl({ order, publicUrl }) {
-  const base = String(publicUrl || "").replace(/\/+$/, "");
+  const base = isSafePublicFrontendOrigin(publicUrl)
+    ? String(publicUrl || "").replace(/\/+$/, "")
+    : publicFrontendBaseUrl();
   if (!base || !order?.orderNumber) return "";
   const countryCode = order.country?.code || "CIV";
   return `${base}/tickets/${encodeURIComponent(order.orderNumber)}?country=${encodeURIComponent(countryCode)}`;

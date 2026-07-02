@@ -6,6 +6,7 @@ const {
   paidOrderTicketInclude,
 } = require("./ticket-order-ticketing.service");
 const { sendTicketOrderEmail } = require("./ticket-email-notifications.service");
+const { publicFrontendBaseUrl } = require("./public-url.service");
 const {
   extractWaveProviderMetadata,
   firstNonEmptyString,
@@ -15,40 +16,8 @@ function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
 }
 
-function getRequestOrigin(req = null) {
-  const origin = req?.get?.("origin") || req?.headers?.origin || "";
-  if (!origin) return "";
-  try {
-    return new URL(origin).origin;
-  } catch {
-    return "";
-  }
-}
-
-function isHttpsUrl(value) {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function publicBaseUrl(req = null) {
-  const configured =
-    process.env.APP_PUBLIC_BASE_URL ||
-    process.env.FRONTEND_PUBLIC_URL ||
-    process.env.PUBLIC_APP_URL ||
-    "";
-  if (isHttpsUrl(configured)) return configured.replace(/\/+$/, "");
-
-  const requestOrigin = getRequestOrigin(req);
-  if (isHttpsUrl(requestOrigin)) return requestOrigin.replace(/\/+$/, "");
-
-  return (configured || "http://localhost:5173").replace(/\/+$/, "");
-}
-
 function buildTicketOrderUrl(orderNumber, countryCode = "CIV", req = null) {
-  return `${publicBaseUrl(req)}/tickets/${encodeURIComponent(orderNumber)}?country=${encodeURIComponent(countryCode || "CIV")}`;
+  return `${publicFrontendBaseUrl(req)}/tickets/${encodeURIComponent(orderNumber)}?country=${encodeURIComponent(countryCode || "CIV")}`;
 }
 
 function buildWaveUrls(order, req = null) {
@@ -213,7 +182,7 @@ async function sendTicketEmailAfterPaid({ order, req = null }) {
   try {
     const result = await sendTicketOrderEmail({
       order,
-      publicUrl: publicBaseUrl(req),
+      publicUrl: publicFrontendBaseUrl(req),
     });
     if (!result?.sent && !result?.skipped) {
       console.warn("ticket email send failed", {

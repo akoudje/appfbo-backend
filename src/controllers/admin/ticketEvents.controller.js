@@ -7,6 +7,7 @@ const {
   paidOrderTicketInclude,
 } = require("../../services/ticket-order-ticketing.service");
 const { sendTicketOrderEmail } = require("../../services/ticket-email-notifications.service");
+const { publicFrontendBaseUrl } = require("../../services/public-url.service");
 
 const MAX_UPLOAD_FILE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_UPLOAD_MIME_TYPES = new Set([
@@ -102,38 +103,6 @@ function includeCheckInDetails() {
 function normalizeEntryPoint(value) {
   const normalized = String(value || "").trim();
   return normalized || "Entrée principale";
-}
-
-function getRequestOrigin(req = null) {
-  const origin = req?.get?.("origin") || req?.headers?.origin || "";
-  if (!origin) return "";
-  try {
-    return new URL(origin).origin;
-  } catch {
-    return "";
-  }
-}
-
-function isHttpsUrl(value) {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function publicBaseUrl(req = null) {
-  const configured =
-    process.env.APP_PUBLIC_BASE_URL ||
-    process.env.FRONTEND_PUBLIC_URL ||
-    process.env.PUBLIC_APP_URL ||
-    "";
-  if (isHttpsUrl(configured)) return configured.replace(/\/+$/, "");
-
-  const requestOrigin = getRequestOrigin(req);
-  if (isHttpsUrl(requestOrigin)) return requestOrigin.replace(/\/+$/, "");
-
-  return (configured || "http://localhost:5173").replace(/\/+$/, "");
 }
 
 function maskScannedValue(value) {
@@ -567,7 +536,7 @@ async function resendOrderTicketsEmail(req, res) {
       return res.status(400).json({ message: "Seules les commandes payées peuvent être renvoyées." });
     }
 
-    const result = await sendTicketOrderEmail({ order, publicUrl: publicBaseUrl(req) });
+    const result = await sendTicketOrderEmail({ order, publicUrl: publicFrontendBaseUrl(req) });
     if (!result.sent) {
       return res.status(400).json({
         message: result.reason === "NO_EMAIL"

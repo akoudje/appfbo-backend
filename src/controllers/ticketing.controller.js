@@ -3,6 +3,7 @@ const prisma = require("../prisma");
 const ticketWavePaymentService = require("../services/ticket-wave-payment.service");
 const { normalizeEmail } = require("../services/email.service");
 const { sendTicketOrderEmail } = require("../services/ticket-email-notifications.service");
+const { publicFrontendBaseUrl } = require("../services/public-url.service");
 
 function normalizeSlug(value) {
   return String(value || "")
@@ -22,38 +23,6 @@ function ticketOrderNumber() {
   const stamp = new Date().toISOString().slice(0, 10).replace(/\D/g, "");
   const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
   return `EVT-${stamp}-${suffix}`;
-}
-
-function getRequestOrigin(req = null) {
-  const origin = req?.get?.("origin") || req?.headers?.origin || "";
-  if (!origin) return "";
-  try {
-    return new URL(origin).origin;
-  } catch {
-    return "";
-  }
-}
-
-function isHttpsUrl(value) {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function publicBaseUrl(req = null) {
-  const configured =
-    process.env.APP_PUBLIC_BASE_URL ||
-    process.env.FRONTEND_PUBLIC_URL ||
-    process.env.PUBLIC_APP_URL ||
-    "";
-  if (isHttpsUrl(configured)) return configured.replace(/\/+$/, "");
-
-  const requestOrigin = getRequestOrigin(req);
-  if (isHttpsUrl(requestOrigin)) return requestOrigin.replace(/\/+$/, "");
-
-  return (configured || "http://localhost:5173").replace(/\/+$/, "");
 }
 
 function isSalesOpen(event, now = new Date()) {
@@ -359,7 +328,7 @@ async function recoverTicketOrder(req, res) {
     });
 
     if (order?.buyerEmail || order?.holderEmail) {
-      await sendTicketOrderEmail({ order, publicUrl: publicBaseUrl(req) });
+      await sendTicketOrderEmail({ order, publicUrl: publicFrontendBaseUrl(req) });
     }
 
     return res.json(neutralResponse);
