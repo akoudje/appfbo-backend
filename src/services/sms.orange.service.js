@@ -181,6 +181,8 @@ async function postOrangeSms({
   message,
   clientCorrelator = buildClientCorrelator(),
   countryCode = "CIV",
+  receiptNotifyUrl = null,
+  callbackData = null,
 }) {
   const config = getCountryOrangeConfig(countryCode);
   const target = normalizeForCountry(phone, config.countryCode);
@@ -192,6 +194,13 @@ async function postOrangeSms({
 
   const accessToken = await getAccessToken(config.countryCode);
   const normalizedMessage = clampSmsContent(message);
+  const receiptRequest =
+    receiptNotifyUrl && callbackData
+      ? {
+          notifyURL: String(receiptNotifyUrl),
+          callbackData: String(callbackData),
+        }
+      : undefined;
 
   try {
     const response = await axios.post(
@@ -205,6 +214,7 @@ async function postOrangeSms({
             message: normalizedMessage,
           },
           clientCorrelator,
+          ...(receiptRequest ? { receiptRequest } : {}),
         },
       },
       {
@@ -262,12 +272,21 @@ async function send(dest, communique) {
   };
 }
 
-async function sendText({ phone, message, clientCorrelator, countryCode = "CIV" }) {
+async function sendText({
+  phone,
+  message,
+  clientCorrelator,
+  countryCode = "CIV",
+  receiptNotifyUrl = null,
+  callbackData = null,
+}) {
   const { response } = await postOrangeSms({
     phone,
     message,
     clientCorrelator,
     countryCode,
+    receiptNotifyUrl,
+    callbackData,
   });
 
   return {

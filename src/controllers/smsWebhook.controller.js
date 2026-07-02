@@ -47,6 +47,25 @@ function readCallbackPreorderId(rawCallbackData) {
   return txt;
 }
 
+function readCallbackExternalLinkId(rawCallbackData) {
+  const txt = String(rawCallbackData || "").trim();
+  if (!txt) return null;
+
+  if (txt.startsWith("{") && txt.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(txt);
+      if (typeof parsed?.externalLinkId === "string" && parsed.externalLinkId.trim()) {
+        return parsed.externalLinkId.trim();
+      }
+    } catch (e) {
+      // ignore malformed json callbackData
+    }
+  }
+
+  const match = txt.match(/^external-link-(.+)$/i);
+  return match?.[1] || null;
+}
+
 function parseOrangeDeliveryPayload(body = {}) {
   const deliveryStatusRaw = pickString([
     body?.deliveryReceiptNotification?.deliveryInfo?.deliveryStatus,
@@ -102,7 +121,8 @@ function isWebhookAuthorized(req) {
 
   const headerToken =
     req.get("x-webhook-token") || req.get("x-orange-webhook-token") || "";
-  return expectedToken === headerToken;
+  const queryToken = String(req.query?.token || "").trim();
+  return expectedToken === headerToken || expectedToken === queryToken;
 }
 
 async function findPreorderForDelivery(parsed) {
@@ -137,6 +157,71 @@ async function findPreorderForDelivery(parsed) {
   return null;
 }
 
+async function findExternalPaymentLinkForDelivery(parsed) {
+  const callbackExternalLinkId = readCallbackExternalLinkId(parsed.callbackData);
+  if (callbackExternalLinkId) {
+    const byId = await prisma.externalPaymentLink.findUnique({
+      where: { id: callbackExternalLinkId },
+      select: { id: true },
+    });
+    if (byId) return byId;
+  }
+
+  if (parsed.providerMessageId) {
+    const byExactMessageId = await prisma.externalPaymentLink.findFirst({
+      where: { smsProviderMessageId: parsed.providerMessageId },
+      select: { id: true },
+    });
+    if (byExactMessageId) return byExactMessageId;
+  }
+
+  if (parsed.requestId) {
+    const byRequestIdSuffix = await prisma.externalPaymentLink.findFirst({
+      where: {
+        smsProviderMessageId: {
+          endsWith: `/requests/${parsed.requestId}`,
+        },
+      },
+      select: { id: true },
+    });
+    if (byRequestIdSuffix) return byRequestIdSuffix;
+  }
+
+  return null;
+}
+
+async function updateExternalPaymentLinkDelivery({ parsed, link }) {
+  const deliveryStatus = parsed.deliveryStatus;
+  const now = new Date();
+  const smsStatus =
+    deliveryStatus === "delivered"
+      ? "DELIVERED"
+      : deliveryStatus === "failed"
+        ? "FAILED"
+        : "SENT";
+
+  await prisma.externalPaymentLink.update({
+    where: { id: link.id },
+    data: {
+      smsStatus,
+      smsProviderMessageId: parsed.providerMessageId || undefined,
+      smsLastError:
+        deliveryStatus === "failed"
+          ? parsed.providerStatus || "Échec de distribution SMS"
+          : null,
+      smsLastSentAt: now,
+    },
+  });
+
+  console.log("[sms][orange][webhook] external link delivery updated", {
+    externalPaymentLinkId: link.id,
+    smsStatus,
+    providerStatus: parsed.providerStatus,
+    providerMessageId: parsed.providerMessageId,
+    requestId: parsed.requestId,
+  });
+}
+
 async function orangeSmsDlrWebhook(req, res) {
   if (!isWebhookAuthorized(req)) {
     return res.status(401).json({ ok: false, error: "Unauthorized webhook" });
@@ -147,7 +232,21 @@ async function orangeSmsDlrWebhook(req, res) {
     const preorder = await findPreorderForDelivery(parsed);
 
     if (!preorder) {
-      console.warn("[sms][orange][webhook] preorder unresolved", {
+      const externalPaymentLink = await findExternalPaymentLinkForDelivery(parsed);
+      if (externalPaymentLink) {
+        await updateExternalPaymentLinkDelivery({
+          parsed,
+          link: externalPaymentLink,
+        });
+        return res.status(200).json({
+          ok: true,
+          resolved: true,
+          type: "externalPaymentLink",
+          externalPaymentLinkId: externalPaymentLink.id,
+        });
+      }
+
+      console.warn("[sms][orange][webhook] message unresolved", {
         providerMessageId: parsed.providerMessageId,
         requestId: parsed.requestId,
         callbackData: parsed.callbackData,

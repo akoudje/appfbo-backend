@@ -78,6 +78,42 @@ function buildSafeClientCorrelator(callbackData = null) {
   return `app${Date.now()}${safeData || "sms"}`.slice(0, 48);
 }
 
+function normalizeBaseUrl(value = "") {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (!["https:", "http:"].includes(url.protocol)) return "";
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
+
+function backendPublicBaseUrl() {
+  const candidates = [
+    process.env.BACKEND_PUBLIC_URL,
+    process.env.API_PUBLIC_BASE_URL,
+    process.env.APP_BASE_URL,
+    process.env.RENDER_EXTERNAL_URL,
+    "https://appfbo-backend.onrender.com",
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeBaseUrl(candidate);
+    if (normalized) return normalized;
+  }
+
+  return "";
+}
+
+function buildOrangeReceiptNotifyUrl() {
+  const token = String(process.env.ORANGE_WEBHOOK_TOKEN || "").trim();
+  const baseUrl = backendPublicBaseUrl();
+  if (!token || !baseUrl) return null;
+  return `${baseUrl}/webhooks/orange-sms/dlr?token=${encodeURIComponent(token)}`;
+}
+
 function readPositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -137,6 +173,7 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
   const toAddress = normalizePhoneForCountry(to, normalizedCountry);
   const normalizedMessage = clampSmsContent(message);
   const clientCorrelator = buildSafeClientCorrelator(callbackData);
+  const receiptNotifyUrl = callbackData ? buildOrangeReceiptNotifyUrl() : null;
 
   if (!toAddress) {
     return {
@@ -169,6 +206,7 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
       messageLength: normalizedMessage.length,
       maxLength: MAX_SMS_LENGTH,
       clientCorrelator: clientCorrelator || "(auto)",
+      deliveryReceiptRequested: Boolean(receiptNotifyUrl),
     });
 
     const maxRetries = getSmsTransientRetries();
@@ -180,6 +218,8 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
           message: normalizedMessage,
           clientCorrelator,
           countryCode: normalizedCountry,
+          receiptNotifyUrl,
+          callbackData,
         });
         break;
       } catch (err) {
