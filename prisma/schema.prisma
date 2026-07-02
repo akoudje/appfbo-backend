@@ -1736,6 +1736,7 @@ model TicketEvent {
   startsAt DateTime
   endsAt DateTime?
   posterUrl String?
+  videoUrl String?
   status TicketEventStatus @default(DRAFT)
   capacity Int?
   salesOpenAt DateTime?

@@ -68,6 +68,7 @@ function serializeEvent(event) {
     startsAt: event.startsAt,
     endsAt: event.endsAt,
     posterUrl: event.posterUrl,
+    videoUrl: event.videoUrl,
     status: event.status,
     capacity: event.capacity,
     ticketTypes: ticketTypes.map((type) => ({
