@@ -1601,10 +1601,18 @@ async function initiateWavePayment({
   const result = await prisma.$transaction(async (tx) => {
     let payment = preorder.activePayment;
 
-    if (
-      !payment ||
-      ["FAILED", "EXPIRED", "CANCELLED"].includes(payment.status)
-    ) {
+    if (!payment) {
+      payment = await tx.payment.findUnique({
+        where: {
+          provider_clientReference: {
+            provider: "WAVE",
+            clientReference: preorder.id,
+          },
+        },
+      });
+    }
+
+    if (!payment) {
       payment = await tx.payment.create({
         data: {
           preorderId: preorder.id,
