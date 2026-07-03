@@ -290,6 +290,11 @@ function buildInvoiceMessage({
     .trim()
     .toUpperCase();
   const isCashFlow = normalizedMode.includes("ESPE") || normalizedMode === "MANUAL";
+  const isWaveFlow =
+    normalizedMode === "WAVE" ||
+    normalizedMode.includes("WAVE") ||
+    normalizedMode.includes("MOBILE") ||
+    normalizedMode.includes("MOMO");
   const isPiSpiFlow = normalizedMode === "PI_SPI" || normalizedMode.includes("SPI");
   const isEcobankPayFlow = normalizedMode === "ECOBANK_PAY" || normalizedMode.includes("ECOBANK");
   const isBankTransferFlow =
@@ -342,6 +347,21 @@ function buildInvoiceMessage({
       `Code ${collectionCode}. Montant ${amountFmt}F. Effectuez le virement sous ${expiryHours}H. Consultez votre email ou l'espace client.`,
       `Code ${collectionCode}. ${amountFmt}F. Instructions bancaires envoyees. Paiement sous ${expiryHours}H.`,
       `Code ${collectionCode}. Voir espace client pour le virement. Delai ${expiryHours}H.`,
+    ]);
+  }
+
+  if (isWaveFlow) {
+    if (normalizedLink) {
+      return firstSmsCandidate([
+        `Code ${collectionCode}. ${amountFmt}F. Wave: ${normalizedLink}`,
+        `Code ${collectionCode}. Paiement Wave: ${normalizedLink}`,
+        `Wave ${collectionCode}: ${normalizedLink}`,
+      ]);
+    }
+    return firstSmsCandidate([
+      `Code ${collectionCode}. Montant ${amountFmt}F. Payez via Wave sous ${expiryHours}H.`,
+      `Code ${collectionCode}. ${amountFmt}F. Paiement Wave sous ${expiryHours}H.`,
+      `Code ${collectionCode}. Paiement Wave attendu sous ${expiryHours}H.`,
     ]);
   }
 
