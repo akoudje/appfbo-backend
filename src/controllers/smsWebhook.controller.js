@@ -125,6 +125,22 @@ function isWebhookAuthorized(req) {
   return expectedToken === headerToken || expectedToken === queryToken;
 }
 
+function logUnauthorizedWebhook(req) {
+  console.warn("[sms][orange][webhook] unauthorized", {
+    method: req.method,
+    path: req.originalUrl || req.url,
+    hasExpectedToken: Boolean(String(process.env.ORANGE_WEBHOOK_TOKEN || "").trim()),
+    hasHeaderToken: Boolean(
+      req.get("x-webhook-token") || req.get("x-orange-webhook-token"),
+    ),
+    hasQueryToken: Boolean(String(req.query?.token || "").trim()),
+    contentType: req.get("content-type") || null,
+    userAgent: req.get("user-agent") || null,
+    bodyKeys:
+      req.body && typeof req.body === "object" ? Object.keys(req.body).slice(0, 10) : [],
+  });
+}
+
 async function findPreorderForDelivery(parsed) {
   if (parsed.callbackData) {
     const byId = await prisma.preorder.findUnique({
@@ -224,6 +240,7 @@ async function updateExternalPaymentLinkDelivery({ parsed, link }) {
 
 async function orangeSmsDlrWebhook(req, res) {
   if (!isWebhookAuthorized(req)) {
+    logUnauthorizedWebhook(req);
     return res.status(401).json({ ok: false, error: "Unauthorized webhook" });
   }
 
@@ -364,6 +381,25 @@ async function orangeSmsDlrWebhook(req, res) {
   }
 }
 
+function orangeSmsDlrWebhookProbe(req, res) {
+  if (!isWebhookAuthorized(req)) {
+    logUnauthorizedWebhook(req);
+    return res.status(401).json({ ok: false, error: "Unauthorized webhook" });
+  }
+
+  console.log("[sms][orange][webhook] probe ok", {
+    method: req.method,
+    path: req.originalUrl || req.url,
+    userAgent: req.get("user-agent") || null,
+  });
+
+  return res.status(200).json({
+    ok: true,
+    webhook: "orange-sms-dlr",
+  });
+}
+
 module.exports = {
   orangeSmsDlrWebhook,
+  orangeSmsDlrWebhookProbe,
 };
