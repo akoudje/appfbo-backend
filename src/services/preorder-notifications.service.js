@@ -453,6 +453,7 @@ function shouldSendSmsForPurpose(purpose = "") {
   // Politique SMS essentielle: on réserve le crédit aux messages qui
   // déclenchent une action client ou un déplacement.
   return new Set([
+    "PREORDER_SUBMITTED",
     "INVOICE",
     "PAYMENT_LINK",
     "REMINDER",

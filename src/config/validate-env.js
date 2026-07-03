@@ -51,6 +51,10 @@ function checkRequired(name, value) {
   }
 }
 
+function warn(message) {
+  console.warn(`[validate-env] WARN: ${message}`);
+}
+
 function validateEnv() {
   const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 
@@ -70,6 +74,19 @@ function validateEnv() {
     minLength: 32,
     required: false, // optionnel si fbo-service non utilisé
   });
+
+  const orangeConfigured = Boolean(
+    process.env.ORANGE_CLIENT_ID &&
+      process.env.ORANGE_CLIENT_SECRET &&
+      process.env.ORANGE_SENDER_ADDRESS &&
+      process.env.ORANGE_SENDER_NUMBER,
+  );
+  if (orangeConfigured && !String(process.env.ORANGE_WEBHOOK_TOKEN || "").trim()) {
+    warn("ORANGE_WEBHOOK_TOKEN est absent: Orange acceptera les SMS, mais le statut de livraison ne sera pas remonté.");
+  }
+  if (orangeConfigured && !String(process.env.BACKEND_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "").trim()) {
+    warn("BACKEND_PUBLIC_URL/RENDER_EXTERNAL_URL absent: le webhook de livraison SMS Orange peut être impossible à joindre.");
+  }
 
   // ─── Checks spécifiques à la production ──────────────────────────────────
   if (isProd) {

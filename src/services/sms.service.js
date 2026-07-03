@@ -114,6 +114,15 @@ function buildOrangeReceiptNotifyUrl() {
   return `${baseUrl}/webhooks/orange-sms/dlr?token=${encodeURIComponent(token)}`;
 }
 
+function getOrangeReceiptDisabledReason(callbackData = null) {
+  if (!callbackData) return "NO_CALLBACK_DATA";
+  if (!String(process.env.ORANGE_WEBHOOK_TOKEN || "").trim()) {
+    return "ORANGE_WEBHOOK_TOKEN_MISSING";
+  }
+  if (!backendPublicBaseUrl()) return "BACKEND_PUBLIC_URL_MISSING";
+  return null;
+}
+
 function readPositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -174,6 +183,9 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
   const normalizedMessage = clampSmsContent(message);
   const clientCorrelator = buildSafeClientCorrelator(callbackData);
   const receiptNotifyUrl = callbackData ? buildOrangeReceiptNotifyUrl() : null;
+  const receiptDisabledReason = receiptNotifyUrl
+    ? null
+    : getOrangeReceiptDisabledReason(callbackData);
 
   if (!toAddress) {
     return {
@@ -207,6 +219,7 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
       maxLength: MAX_SMS_LENGTH,
       clientCorrelator: clientCorrelator || "(auto)",
       deliveryReceiptRequested: Boolean(receiptNotifyUrl),
+      deliveryReceiptDisabledReason: receiptDisabledReason,
     });
 
     const maxRetries = getSmsTransientRetries();
