@@ -30,6 +30,12 @@ router.post(
 );
 
 router.post(
+  "/orders/cash-sale",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  ticketEventsController.createCashOrder,
+);
+
+router.post(
   "/orders/:orderId/paid",
   requirePermission(Permission.PAYMENT_VALIDATE),
   ticketEventsController.markOrderPaid,

@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const multer = require("multer");
 const prisma = require("../../prisma");
 const { uploadBuffer } = require("../../services/cloudinary");
@@ -6,6 +7,7 @@ const {
   ensureTicketsActivatedForPaidOrder,
   paidOrderTicketInclude,
 } = require("../../services/ticket-order-ticketing.service");
+const { normalizeEmail } = require("../../services/email.service");
 const { sendTicketOrderEmail } = require("../../services/ticket-email-notifications.service");
 const { publicFrontendBaseUrl } = require("../../services/public-url.service");
 
@@ -46,6 +48,16 @@ function parsePositiveInt(value, fallback = null) {
   if (value === null || value === undefined || value === "") return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function digitsOnly(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function ticketOrderNumber() {
+  const stamp = new Date().toISOString().slice(0, 10).replace(/\D/g, "");
+  const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
+  return `EVT-${stamp}-${suffix}`;
 }
 
 function uploadPosterMiddleware(req, res, next) {
@@ -434,6 +446,107 @@ async function listOrders(req, res) {
   } catch (error) {
     console.error("ticketEvents.listOrders error:", error);
     return res.status(500).json({ message: "Erreur serveur (listOrders)" });
+  }
+}
+
+async function createCashOrder(req, res) {
+  try {
+    const {
+      eventId,
+      ticketTypeId,
+      quantity,
+      buyerFullName,
+      buyerPhone,
+      buyerEmail,
+      buyerFboNumber,
+      buyerFboName,
+      holderFullName,
+      note,
+    } = req.body || {};
+
+    const normalizedEventId = String(eventId || "").trim();
+    const normalizedTicketTypeId = String(ticketTypeId || "").trim();
+    const qty = Math.max(1, Math.min(50, Number.parseInt(quantity, 10) || 1));
+    const normalizedBuyerName = String(buyerFullName || "").trim();
+    const normalizedBuyerPhone = digitsOnly(buyerPhone);
+    const normalizedBuyerEmail = normalizeEmail(buyerEmail || "");
+    const normalizedHolderName = String(holderFullName || buyerFullName || "").trim();
+
+    if (!normalizedEventId || !normalizedTicketTypeId) {
+      return res.status(400).json({ message: "Événement et type de ticket requis." });
+    }
+    if (!normalizedBuyerName || !normalizedBuyerPhone) {
+      return res.status(400).json({ message: "Nom et téléphone client requis." });
+    }
+    if (!normalizedBuyerEmail) {
+      return res.status(400).json({ message: "Email client valide requis pour envoyer le ticket digital." });
+    }
+    if (!normalizedHolderName) {
+      return res.status(400).json({ message: "Nom du participant requis." });
+    }
+
+    const ticketType = await prisma.ticketType.findFirst({
+      where: {
+        id: normalizedTicketTypeId,
+        eventId: normalizedEventId,
+        event: { countryId: req.countryId },
+      },
+      include: { event: true },
+    });
+    if (!ticketType) return res.status(404).json({ message: "Type de ticket introuvable." });
+    if (!ticketType.active) return res.status(400).json({ message: "Ce type de ticket est inactif." });
+    if (qty > Number(ticketType.maxPerOrder || 10)) {
+      return res.status(400).json({ message: `Maximum ${ticketType.maxPerOrder} billet(s) par achat.` });
+    }
+
+    const soldCount = await prisma.ticket.count({
+      where: { ticketTypeId: ticketType.id, status: { in: ["ACTIVE", "USED"] } },
+    });
+    if (ticketType.capacity != null && soldCount + qty > Number(ticketType.capacity)) {
+      return res.status(409).json({ message: "Capacité insuffisante pour ce type de ticket." });
+    }
+
+    const totalFcfa = Number(ticketType.priceFcfa || 0) * qty;
+    const order = await prisma.$transaction(async (tx) => {
+      const savedOrder = await tx.ticketOrder.create({
+        data: {
+          countryId: req.countryId,
+          eventId: ticketType.eventId,
+          ticketTypeId: ticketType.id,
+          orderNumber: ticketOrderNumber(),
+          status: "PAID",
+          buyerFullName: normalizedBuyerName,
+          buyerPhone: normalizedBuyerPhone,
+          buyerEmail: normalizedBuyerEmail,
+          buyerFboNumber: buyerFboNumber ? String(buyerFboNumber).trim() : null,
+          buyerFboName: buyerFboName ? String(buyerFboName).trim() : null,
+          quantity: qty,
+          holderFullName: normalizedHolderName,
+          holderPhone: normalizedBuyerPhone,
+          holderEmail: normalizedBuyerEmail,
+          totalFcfa,
+          paymentMethod: "CASH",
+          paymentProvider: "CASH",
+          paymentReference: `CASH-${Date.now()}`,
+          paymentStatus: "SUCCEEDED",
+          paidAt: new Date(),
+          note: note ? String(note).trim() : "Vente ticket espèces au guichet.",
+        },
+        include: { ticketType: true, tickets: { include: { ticketType: true } } },
+      });
+
+      await ensureTicketsActivatedForPaidOrder(tx, savedOrder);
+      return tx.ticketOrder.findUnique({
+        where: { id: savedOrder.id },
+        include: paidOrderTicketInclude(),
+      });
+    });
+
+    const emailResult = await sendTicketOrderEmail({ order, publicUrl: publicFrontendBaseUrl(req) });
+    return res.status(201).json({ ...order, emailSent: Boolean(emailResult.sent), emailResult });
+  } catch (error) {
+    console.error("ticketEvents.createCashOrder error:", error);
+    return res.status(500).json({ message: "Erreur serveur (createCashOrder)" });
   }
 }
 
@@ -945,6 +1058,7 @@ module.exports = {
   uploadPosterMiddleware,
   uploadPoster,
   listOrders,
+  createCashOrder,
   markOrderPaid,
   syncOrderWavePayment,
   cancelOrder,
