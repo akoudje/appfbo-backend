@@ -439,17 +439,17 @@ async function listOrders(req, res) {
 
 async function markOrderPaid(req, res) {
   try {
-    return res.status(400).json({
-      message: "Les achats de tickets sont confirmés automatiquement par Wave.",
-    });
-
     const order = await prisma.ticketOrder.findFirst({
       where: { id: req.params.orderId, countryId: req.countryId },
       include: { ticketType: true, tickets: { include: { ticketType: true } } },
     });
     if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
+    if (order.status === "CANCELLED" || order.status === "EXPIRED") {
+      return res.status(400).json({ message: "Cette commande ne peut plus être encaissée." });
+    }
 
     const { paymentReference, paymentMethod, note } = req.body || {};
+    const normalizedPaymentMethod = paymentMethod ? String(paymentMethod).trim().toUpperCase() : "CASH";
     const updated = await prisma.$transaction(async (tx) => {
       await ensureTicketsActivatedForPaidOrder(tx, order);
       return tx.ticketOrder.update({
@@ -458,13 +458,23 @@ async function markOrderPaid(req, res) {
           status: "PAID",
           paymentStatus: "SUCCEEDED",
           paymentReference: paymentReference ? String(paymentReference).trim() : order.paymentReference,
-          paymentMethod: paymentMethod ? String(paymentMethod).trim().toUpperCase() : order.paymentMethod,
+          paymentMethod: normalizedPaymentMethod,
+          paymentProvider: normalizedPaymentMethod,
           paidAt: order.paidAt || new Date(),
           note: note ? String(note).trim() : order.note,
         },
         include: paidOrderTicketInclude(),
       });
     });
+
+    if (updated.buyerEmail || updated.holderEmail) {
+      sendTicketOrderEmail({ order: updated, publicUrl: publicFrontendBaseUrl(req) }).catch((emailError) => {
+        console.warn("ticket cash payment email send failed", {
+          orderId: updated.id,
+          error: emailError?.message,
+        });
+      });
+    }
 
     return res.json(updated);
   } catch (error) {
