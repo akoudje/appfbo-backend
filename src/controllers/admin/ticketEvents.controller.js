@@ -112,6 +112,29 @@ function maskScannedValue(value) {
   return `${raw.slice(0, 8)}...${raw.slice(-6)}`;
 }
 
+function normalizeScannedTicketValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+    const queryToken =
+      url.searchParams.get("ticket") ||
+      url.searchParams.get("token") ||
+      url.searchParams.get("qr") ||
+      url.searchParams.get("code");
+    if (queryToken && String(queryToken).trim()) return String(queryToken).trim();
+
+    const segments = url.pathname.split("/").map((segment) => segment.trim()).filter(Boolean);
+    const lastSegment = segments[segments.length - 1] || "";
+    if (lastSegment) return decodeURIComponent(lastSegment);
+  } catch {
+    // Le QR contient normalement le token brut, pas une URL.
+  }
+
+  return raw;
+}
+
 function buildCheckInLogData({
   req,
   ticket = null,
@@ -594,7 +617,7 @@ async function expireOrders(req, res) {
 async function checkInTicket(req, res) {
   try {
     const { tokenOrCode, eventId, sessionId, entryPoint } = req.body || {};
-    const raw = String(tokenOrCode || "").trim();
+    const raw = normalizeScannedTicketValue(tokenOrCode);
     const expectedEventId = String(eventId || "").trim();
     if (!raw) return res.status(400).json({ message: "Code billet ou QR requis." });
 
@@ -691,14 +714,19 @@ async function checkInTicket(req, res) {
       return res.status(400).json({ message: "Billet non actif.", ticket, log });
     }
 
-    const { updated, log } = await prisma.$transaction(async (tx) => {
-      const checkedTicket = await tx.ticket.update({
-        where: { id: ticket.id },
+    const { updated, log, alreadyUsed } = await prisma.$transaction(async (tx) => {
+      const checkInTime = new Date();
+      const claim = await tx.ticket.updateMany({
+        where: { id: ticket.id, status: "ACTIVE", checkedInAt: null },
         data: {
           status: "USED",
-          checkedInAt: new Date(),
+          checkedInAt: checkInTime,
           checkedInById: req.user?.id || null,
         },
+      });
+
+      const checkedTicket = await tx.ticket.findUnique({
+        where: { id: ticket.id },
         include: {
           event: true,
           ticketType: true,
@@ -706,6 +734,25 @@ async function checkInTicket(req, res) {
           checkedInBy: { select: { id: true, fullName: true, email: true } },
         },
       });
+
+      if (!claim.count) {
+        const duplicateLog = await tx.ticketCheckInLog.create({
+          data: buildCheckInLogData({
+            req,
+            ticket: checkedTicket || ticket,
+            session,
+            entryPoint: normalizeEntryPoint(entryPoint),
+            scannedValue: raw,
+            result: "ALREADY_USED",
+            reason: "Billet déjà utilisé.",
+            ticketStatusBefore: ticket.status,
+            ticketStatusAfter: checkedTicket?.status || ticket.status,
+          }),
+          include: includeCheckInDetails(),
+        });
+        return { updated: checkedTicket || ticket, log: duplicateLog, alreadyUsed: true };
+      }
+
       const checkInLog = await tx.ticketCheckInLog.create({
         data: buildCheckInLogData({
           req,
@@ -720,8 +767,12 @@ async function checkInTicket(req, res) {
         }),
         include: includeCheckInDetails(),
       });
-      return { updated: checkedTicket, log: checkInLog };
+      return { updated: checkedTicket, log: checkInLog, alreadyUsed: false };
     });
+
+    if (alreadyUsed) {
+      return res.status(409).json({ message: "Billet déjà utilisé.", ticket: updated, log });
+    }
 
     return res.json({ ...updated, checkInLog: log });
   } catch (error) {
