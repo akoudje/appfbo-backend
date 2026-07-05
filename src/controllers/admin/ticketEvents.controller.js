@@ -418,10 +418,41 @@ async function uploadPoster(req, res) {
 
 async function listOrders(req, res) {
   try {
-    const { eventId, status, q } = req.query;
+    const { eventId, status, q, paymentMethod } = req.query;
     const where = { countryId: req.countryId };
     if (eventId) where.eventId = String(eventId);
     if (status) where.status = String(status).trim().toUpperCase();
+    if (paymentMethod) {
+      const normalizedPaymentMethod = String(paymentMethod).trim().toUpperCase();
+      const aliases = {
+        CASH: ["CASH", "ESPECES", "ESPÈCES", "ESPECES_AU_GUICHET"],
+        WAVE: ["WAVE"],
+      };
+      if (normalizedPaymentMethod === "OTHER") {
+        where.AND = [
+          ...(where.AND || []),
+          {
+            NOT: {
+              OR: [
+                { paymentMethod: { in: [...aliases.CASH, ...aliases.WAVE] } },
+                { paymentProvider: { in: [...aliases.CASH, ...aliases.WAVE] } },
+              ],
+            },
+          },
+        ];
+      } else {
+        const values = aliases[normalizedPaymentMethod] || [normalizedPaymentMethod];
+        where.AND = [
+          ...(where.AND || []),
+          {
+            OR: [
+              { paymentMethod: { in: values } },
+              { paymentProvider: { in: values } },
+            ],
+          },
+        ];
+      }
+    }
     if (q && String(q).trim()) {
       const term = String(q).trim();
       where.OR = [
