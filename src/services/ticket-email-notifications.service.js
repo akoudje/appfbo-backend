@@ -131,8 +131,8 @@ function buildTicketEmailHtml({ order, tickets, ticketUrl }) {
   `;
 }
 
-async function sendTicketOrderEmail({ order, publicUrl }) {
-  const to = normalizeEmail(order?.buyerEmail || order?.holderEmail || "");
+async function sendTicketOrderEmail({ order, publicUrl, recipientEmail } = {}) {
+  const to = normalizeEmail(recipientEmail || order?.buyerEmail || order?.holderEmail || "");
   const tickets = Array.isArray(order?.tickets) ? order.tickets : [];
   if (!to || !order || tickets.length === 0) {
     return { sent: false, skipped: true, reason: !to ? "NO_EMAIL" : "NO_TICKETS" };

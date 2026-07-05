@@ -697,6 +697,11 @@ async function cancelOrder(req, res) {
 
 async function resendOrderTicketsEmail(req, res) {
   try {
+    const requestedEmail = normalizeEmail(req.body?.email || req.body?.recipientEmail || "");
+    if ((req.body?.email || req.body?.recipientEmail) && !requestedEmail) {
+      return res.status(400).json({ message: "Adresse email de renvoi invalide." });
+    }
+
     const order = await prisma.ticketOrder.findFirst({
       where: { id: req.params.orderId, countryId: req.countryId },
       include: {
@@ -711,7 +716,11 @@ async function resendOrderTicketsEmail(req, res) {
       return res.status(400).json({ message: "Seules les commandes payées peuvent être renvoyées." });
     }
 
-    const result = await sendTicketOrderEmail({ order, publicUrl: publicFrontendBaseUrl(req) });
+    const result = await sendTicketOrderEmail({
+      order,
+      publicUrl: publicFrontendBaseUrl(req),
+      recipientEmail: requestedEmail || undefined,
+    });
     if (!result.sent) {
       return res.status(400).json({
         message: result.reason === "NO_EMAIL"
@@ -721,7 +730,7 @@ async function resendOrderTicketsEmail(req, res) {
       });
     }
 
-    return res.json({ ok: true, sentTo: result.to });
+    return res.json({ ok: true, sentTo: result.to, recipientOverridden: Boolean(requestedEmail) });
   } catch (error) {
     console.error("ticketEvents.resendOrderTicketsEmail error:", error);
     return res.status(500).json({ message: "Erreur serveur (resendOrderTicketsEmail)" });
