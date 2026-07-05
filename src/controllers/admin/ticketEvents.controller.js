@@ -428,28 +428,24 @@ async function listOrders(req, res) {
         CASH: ["CASH", "ESPECES", "ESPÈCES", "ESPECES_AU_GUICHET"],
         WAVE: ["WAVE"],
       };
+      const knownValues = [...aliases.CASH, ...aliases.WAVE];
+      const paymentMatches = (values) =>
+        values.flatMap((value) => [
+          { paymentMethod: { equals: value, mode: "insensitive" } },
+          { paymentProvider: { equals: value, mode: "insensitive" } },
+        ]);
       if (normalizedPaymentMethod === "OTHER") {
         where.AND = [
           ...(where.AND || []),
           {
-            NOT: {
-              OR: [
-                { paymentMethod: { in: [...aliases.CASH, ...aliases.WAVE] } },
-                { paymentProvider: { in: [...aliases.CASH, ...aliases.WAVE] } },
-              ],
-            },
+            NOT: { OR: paymentMatches(knownValues) },
           },
         ];
       } else {
         const values = aliases[normalizedPaymentMethod] || [normalizedPaymentMethod];
         where.AND = [
           ...(where.AND || []),
-          {
-            OR: [
-              { paymentMethod: { in: values } },
-              { paymentProvider: { in: values } },
-            ],
-          },
+          { OR: paymentMatches(values) },
         ];
       }
     }
