@@ -73,9 +73,9 @@ function getBillingQueueOrderStatusFilter(billingWorkStatus) {
     return { in: ["INVOICED", "PAYMENT_PENDING"] };
   }
   if (normalized === "ESCALATED") {
-    return { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] };
+    return { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID"] };
   }
-  return { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] };
+  return { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID"] };
 }
 
 function normalizeRelaunchPaymentWindowMinutes(body = {}) {
@@ -565,6 +565,11 @@ async function listOrders(req, res) {
           factureReference: true,
           paymentCollectionCode: true,
           billingWorkStatus: true,
+          billingEscalationType: true,
+          as400CertificationStatus: true,
+          as400CertificationReportedAt: true,
+          as400CertificationResolvedAt: true,
+          as400CertificationNote: true,
           preparationLaunchedAt: true,
           billingPriority: true,
           billingQueueEnteredAt: true,
@@ -2723,6 +2728,16 @@ async function prepareOrder(req, res) {
 
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (
+      order.billingEscalationType === "AS400_CERTIFICATION_MISSING" &&
+      ["OPEN", "REPORTED"].includes(order.as400CertificationStatus || "")
+    ) {
+      return res.status(400).json({
+        message:
+          "Préparation bloquée : la facture est signalée absente dans l'application de certification AS400. Le service facturation doit d'abord clôturer le contentieux.",
+      });
     }
 
     if (["READY", "FULFILLED"].includes(order.status)) {

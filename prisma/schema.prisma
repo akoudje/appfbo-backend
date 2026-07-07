@@ -924,6 +924,13 @@ model Preorder {
   billingReleasedAt     DateTime?
   billingEscalatedAt    DateTime?
   billingSlaDeadlineAt  DateTime?
+  billingEscalationType String?
+  as400CertificationStatus String?
+  as400CertificationReportedAt DateTime?
+  as400CertificationReportedById String?
+  as400CertificationResolvedAt DateTime?
+  as400CertificationResolvedById String?
+  as400CertificationNote String? @db.Text
 
   assignedInvoicerId String?
   assignedInvoicer   AdminUser? @relation("PreorderAssignedInvoicer", fields: [assignedInvoicerId], references: [id], onDelete: SetNull)
@@ -1035,6 +1042,8 @@ model Preorder {
   @@index([billingWorkStatus, billingPriority, billingQueueEnteredAt])
   @@index([assignedInvoicerId, billingWorkStatus])
   @@index([billingSlaDeadlineAt])
+  @@index([billingEscalationType, as400CertificationStatus])
+  @@index([as400CertificationReportedAt])
   @@index([invoicedById])
   @@index([manualPaymentValidatedById])
   @@index([preparationLaunchedById])

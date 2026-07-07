@@ -7,6 +7,7 @@ const {
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
+const billingQueueService = require("../../services/billingQueue.service");
 
 function normalizeDateStart(value) {
   if (!value) return null;
@@ -77,6 +78,10 @@ function buildOrderSummary(order) {
     parcelNumber: order.parcelNumber,
     factureReference: order.factureReference,
     paymentCollectionCode: order.paymentCollectionCode,
+    billingEscalationType: order.billingEscalationType,
+    as400CertificationStatus: order.as400CertificationStatus,
+    as400CertificationReportedAt: order.as400CertificationReportedAt,
+    as400CertificationResolvedAt: order.as400CertificationResolvedAt,
     status: order.status,
     paymentStatus: order.paymentStatus,
     paymentProvider: order.paymentProvider,
@@ -292,6 +297,10 @@ async function getWorkspace(req, res) {
       status: "PAID",
       paymentStatus: "PAID",
       preparationLaunchedAt: null,
+      NOT: {
+        billingEscalationType: "AS400_CERTIFICATION_MISSING",
+        as400CertificationStatus: { in: ["OPEN", "REPORTED"] },
+      },
     });
 
     if (searchConditions) {
@@ -547,6 +556,16 @@ async function launchPreparation(req, res) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
 
+    if (
+      order.billingEscalationType === "AS400_CERTIFICATION_MISSING" &&
+      ["OPEN", "REPORTED"].includes(order.as400CertificationStatus || "")
+    ) {
+      return res.status(400).json({
+        message:
+          "Préparation bloquée : facture absente dans l'application de certification AS400. Le contentieux doit être résolu par la facturation.",
+      });
+    }
+
     if (order.status !== "PAID" || order.paymentStatus !== "PAID") {
       return res.status(400).json({
         message:
@@ -667,8 +686,72 @@ async function launchPreparation(req, res) {
   }
 }
 
+async function reportAs400CertificationMissing(req, res) {
+  try {
+    const { id } = req.params;
+    const { note } = req.body || {};
+    const actorAdminId = req.user?.id || null;
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      select: {
+        id: true,
+        countryId: true,
+        status: true,
+        paymentStatus: true,
+        factureReference: true,
+        as400InvoiceTotalFcfa: true,
+        totalFcfa: true,
+        billingEscalationType: true,
+        as400CertificationStatus: true,
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (order.status !== "PAID" || order.paymentStatus !== "PAID") {
+      return res.status(400).json({
+        message:
+          "Le signalement AS400 est réservé aux commandes dont le paiement est déjà confirmé.",
+      });
+    }
+
+    const result = await billingQueueService.escalateBillingWork({
+      preorderId: order.id,
+      userId: actorAdminId,
+      countryId: order.countryId || req.countryId,
+      escalationType: billingQueueService.AS400_CERTIFICATION_MISSING_TYPE,
+      as400Reference: order.factureReference,
+      as400AmountFcfa: order.as400InvoiceTotalFcfa || order.totalFcfa,
+      reason:
+        String(note || "").trim() ||
+        "Facture absente dans l'application de certification AS400, signalée par la caisse.",
+    });
+
+    publishRealtimeEvent({
+      countryId: order.countryId || req.countryId,
+      eventKey: "as400_certification_dispute_new",
+      orderId: order.id,
+      meta: {
+        billingEscalationType: result?.billingEscalationType || null,
+        as400CertificationStatus: result?.as400CertificationStatus || null,
+      },
+    });
+
+    return res.json({ ok: true, order: result });
+  } catch (error) {
+    console.error("reportAs400CertificationMissing error:", error);
+    return res.status(500).json({
+      message: error.message || "Erreur serveur (reportAs400CertificationMissing)",
+    });
+  }
+}
+
 
 module.exports = {
   getWorkspace,
   launchPreparation,
+  reportAs400CertificationMissing,
 };

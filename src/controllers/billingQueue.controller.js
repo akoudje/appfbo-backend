@@ -95,7 +95,7 @@ async function escalateWork(req, res) {
     const userId = req.user?.id;
     const countryId = req.country?.id || req.countryId;
     const { id } = req.params;
-    const { reason } = req.body || {};
+    const { reason, escalationType, as400Reference, as400AmountFcfa } = req.body || {};
 
     if (!userId) {
       return res.status(401).json({ message: "Utilisateur non authentifié" });
@@ -106,14 +106,23 @@ async function escalateWork(req, res) {
       userId,
       countryId,
       reason,
+      escalationType,
+      as400Reference,
+      as400AmountFcfa,
     });
 
     publishRealtimeEvent({
       countryId,
-      eventKey: "billing_escalated_new",
+      eventKey:
+        String(escalationType || "").trim().toUpperCase() ===
+        billingQueueService.AS400_CERTIFICATION_MISSING_TYPE
+          ? "as400_certification_dispute_new"
+          : "billing_escalated_new",
       orderId: id,
       meta: {
         billingWorkStatus: "ESCALATED",
+        billingEscalationType: result?.billingEscalationType || null,
+        as400CertificationStatus: result?.as400CertificationStatus || null,
       },
     });
 
@@ -124,9 +133,47 @@ async function escalateWork(req, res) {
   }
 }
 
+async function resolveAs400CertificationDispute(req, res) {
+  try {
+    const userId = req.user?.id;
+    const countryId = req.country?.id || req.countryId;
+    const { id } = req.params;
+    const { note } = req.body || {};
+
+    if (!userId) {
+      return res.status(401).json({ message: "Utilisateur non authentifié" });
+    }
+
+    const result = await billingQueueService.resolveAs400CertificationDispute({
+      preorderId: id,
+      userId,
+      countryId,
+      note,
+    });
+
+    publishRealtimeEvent({
+      countryId,
+      eventKey: "as400_certification_dispute_resolved",
+      orderId: id,
+      meta: {
+        billingEscalationType: result?.billingEscalationType || null,
+        as400CertificationStatus: result?.as400CertificationStatus || null,
+      },
+    });
+
+    return res.json(result);
+  } catch (e) {
+    console.error("resolveAs400CertificationDispute error:", e);
+    return res.status(400).json({
+      message: e.message || "Erreur resolveAs400CertificationDispute",
+    });
+  }
+}
+
 module.exports = {
   claimNext,
   startWork,
   releaseWork,
   escalateWork,
+  resolveAs400CertificationDispute,
 };

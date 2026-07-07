@@ -17,4 +17,10 @@ router.post(
   cashierController.launchPreparation,
 );
 
+router.post(
+  "/orders/:id/as400-certification/missing",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  cashierController.reportAs400CertificationMissing,
+);
+
 module.exports = router;

@@ -12,6 +12,8 @@ const BILLING_ACTIVE_STATUSES = [
   "WAITING_CUSTOMER_DATA",
   "WAITING_PAYMENT",
 ];
+const AS400_CERTIFICATION_MISSING_TYPE = "AS400_CERTIFICATION_MISSING";
+const AS400_CERTIFICATION_OPEN_STATUSES = ["OPEN", "REPORTED"];
 const BILLING_CONNECTED_ELIGIBLE_ROLES = Object.entries(ROLE_PERMISSIONS)
   .filter(([, permissions]) => permissions.includes(Permission.INVOICE_CREATE))
   .map(([role]) => role);
@@ -499,7 +501,22 @@ async function releaseBillingWork({ preorderId, userId, countryId, reason }) {
   return updated;
 }
 
-async function escalateBillingWork({ preorderId, userId, countryId, reason }) {
+function normalizeAs400Amount(value) {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const parsed = Number(String(value).replace(/[^\d.-]/g, ""));
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(parsed);
+}
+
+async function escalateBillingWork({
+  preorderId,
+  userId,
+  countryId,
+  reason,
+  escalationType,
+  as400Reference,
+  as400AmountFcfa,
+}) {
   const preorder = await prisma.preorder.findFirst({
     where: {
       id: preorderId,
@@ -510,26 +527,118 @@ async function escalateBillingWork({ preorderId, userId, countryId, reason }) {
   if (!preorder) throw new Error("PREORDER_NOT_FOUND");
 
   const now = new Date();
+  const normalizedEscalationType = String(escalationType || "").trim().toUpperCase();
+  const isAs400CertificationMissing =
+    normalizedEscalationType === AS400_CERTIFICATION_MISSING_TYPE;
+  const normalizedReference = String(as400Reference || "").trim();
+  const normalizedAmount = normalizeAs400Amount(as400AmountFcfa);
+  const note = reason || (
+    isAs400CertificationMissing
+      ? "Facture absente dans l'application de certification AS400."
+      : "Dossier escaladé"
+  );
+  const updateData = {
+    billingWorkStatus: "ESCALATED",
+    billingEscalatedAt: now,
+    billingLastActivityAt: now,
+    internalNote: note ? String(note).trim() : preorder.internalNote,
+  };
+
+  if (isAs400CertificationMissing) {
+    updateData.billingEscalationType = AS400_CERTIFICATION_MISSING_TYPE;
+    updateData.as400CertificationStatus = "OPEN";
+    updateData.as400CertificationReportedAt = now;
+    updateData.as400CertificationReportedById = userId || null;
+    updateData.as400CertificationResolvedAt = null;
+    updateData.as400CertificationResolvedById = null;
+    updateData.as400CertificationNote = note;
+    updateData.billingPriority = "URGENT";
+    if (normalizedReference) updateData.factureReference = normalizedReference;
+    if (normalizedAmount !== null) updateData.as400InvoiceTotalFcfa = normalizedAmount;
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const saved = await tx.preorder.update({
+      where: { id: preorder.id },
+      data: updateData,
+    });
+
+    await tx.preorderLog.create({
+      data: {
+        preorderId: preorder.id,
+        action: isAs400CertificationMissing
+          ? "OPEN_AS400_CERTIFICATION_DISPUTE"
+          : "ESCALATE_BILLING",
+        note,
+        actorAdminId: userId || null,
+        meta: {
+          billingWorkStatus: "ESCALATED",
+          billingEscalationType: isAs400CertificationMissing
+            ? AS400_CERTIFICATION_MISSING_TYPE
+            : normalizedEscalationType || null,
+          as400CertificationStatus: isAs400CertificationMissing ? "OPEN" : null,
+          factureReference: normalizedReference || preorder.factureReference || null,
+          as400AmountFcfa: normalizedAmount,
+        },
+      },
+    });
+
+    return saved;
+  });
+
+  return updated;
+}
+
+async function resolveAs400CertificationDispute({
+  preorderId,
+  userId,
+  countryId,
+  note,
+}) {
+  const preorder = await prisma.preorder.findFirst({
+    where: {
+      id: preorderId,
+      countryId,
+    },
+  });
+
+  if (!preorder) throw new Error("PREORDER_NOT_FOUND");
+
+  if (preorder.billingEscalationType !== AS400_CERTIFICATION_MISSING_TYPE) {
+    throw new Error("AS400_CERTIFICATION_DISPUTE_NOT_FOUND");
+  }
+
+  if (!AS400_CERTIFICATION_OPEN_STATUSES.includes(preorder.as400CertificationStatus || "")) {
+    return preorder;
+  }
+
+  const now = new Date();
+  const resolutionNote =
+    String(note || "").trim() || "Facture reprise dans AS400, contentieux clôturé.";
 
   const updated = await prisma.$transaction(async (tx) => {
     const saved = await tx.preorder.update({
       where: { id: preorder.id },
       data: {
-        billingWorkStatus: "ESCALATED",
-        billingEscalatedAt: now,
+        as400CertificationStatus: "RESOLVED",
+        as400CertificationResolvedAt: now,
+        as400CertificationResolvedById: userId || null,
+        as400CertificationNote: resolutionNote,
+        billingWorkStatus: preorder.paymentStatus === "PAID" ? "COMPLETED" : preorder.billingWorkStatus,
         billingLastActivityAt: now,
-        internalNote: reason ? String(reason).trim() : preorder.internalNote,
       },
     });
 
     await tx.preorderLog.create({
       data: {
         preorderId: preorder.id,
-        action: "ESCALATE_BILLING",
-        note: reason || "Dossier escaladé",
+        action: "RESOLVE_AS400_CERTIFICATION_DISPUTE",
+        note: resolutionNote,
         actorAdminId: userId || null,
         meta: {
-          billingWorkStatus: "ESCALATED",
+          billingEscalationType: AS400_CERTIFICATION_MISSING_TYPE,
+          as400CertificationStatus: "RESOLVED",
+          previousBillingWorkStatus: preorder.billingWorkStatus,
         },
       },
     });
@@ -546,6 +655,9 @@ module.exports = {
   startBillingWork,
   releaseBillingWork,
   escalateBillingWork,
+  resolveAs400CertificationDispute,
   releaseExpiredAssignments,
   isBillingActiveStatus,
+  AS400_CERTIFICATION_MISSING_TYPE,
+  AS400_CERTIFICATION_OPEN_STATUSES,
 };
