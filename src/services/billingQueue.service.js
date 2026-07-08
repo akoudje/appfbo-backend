@@ -566,9 +566,7 @@ async function escalateBillingWork({
     await tx.preorderLog.create({
       data: {
         preorderId: preorder.id,
-        action: isAs400CertificationMissing
-          ? "OPEN_AS400_CERTIFICATION_DISPUTE"
-          : "ESCALATE_BILLING",
+        action: "ESCALATE_BILLING",
         note,
         actorAdminId: userId || null,
         meta: {
@@ -632,7 +630,7 @@ async function resolveAs400CertificationDispute({
     await tx.preorderLog.create({
       data: {
         preorderId: preorder.id,
-        action: "RESOLVE_AS400_CERTIFICATION_DISPUTE",
+        action: "ESCALATE_BILLING",
         note: resolutionNote,
         actorAdminId: userId || null,
         meta: {
