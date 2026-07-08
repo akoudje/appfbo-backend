@@ -306,10 +306,12 @@ async function getWorkspace(req, res) {
       status: "PAID",
       paymentStatus: "PAID",
       preparationLaunchedAt: null,
-      NOT: {
-        billingEscalationType: "AS400_CERTIFICATION_MISSING",
-        as400CertificationStatus: { in: ["OPEN", "REPORTED"] },
-      },
+      OR: [
+        { billingEscalationType: null },
+        { billingEscalationType: { not: "AS400_CERTIFICATION_MISSING" } },
+        { as400CertificationStatus: null },
+        { as400CertificationStatus: { notIn: ["OPEN", "REPORTED"] } },
+      ],
     });
 
     if (searchConditions) {
@@ -347,6 +349,10 @@ async function getWorkspace(req, res) {
     const todayStart = normalizeDateStart(new Date());
     const todayEnd = normalizeDateEnd(new Date());
     if (from || to) {
+      toLaunchWhere.paidAt = {};
+      if (from) toLaunchWhere.paidAt.gte = from;
+      if (to) toLaunchWhere.paidAt.lte = to;
+
       journalWhere.preparationLaunchedAt = {};
       if (from) journalWhere.preparationLaunchedAt.gte = from;
       if (to) journalWhere.preparationLaunchedAt.lte = to;
