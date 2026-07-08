@@ -138,7 +138,7 @@ async function resolveAs400CertificationDispute(req, res) {
     const userId = req.user?.id;
     const countryId = req.country?.id || req.countryId;
     const { id } = req.params;
-    const { note } = req.body || {};
+    const { note, as400Reference, as400AmountFcfa } = req.body || {};
 
     if (!userId) {
       return res.status(401).json({ message: "Utilisateur non authentifié" });
@@ -149,6 +149,8 @@ async function resolveAs400CertificationDispute(req, res) {
       userId,
       countryId,
       note,
+      as400Reference,
+      as400AmountFcfa,
     });
 
     publishRealtimeEvent({

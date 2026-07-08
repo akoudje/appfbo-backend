@@ -592,6 +592,8 @@ async function resolveAs400CertificationDispute({
   userId,
   countryId,
   note,
+  as400Reference,
+  as400AmountFcfa,
 }) {
   const preorder = await prisma.preorder.findFirst({
     where: {
@@ -611,6 +613,25 @@ async function resolveAs400CertificationDispute({
   }
 
   const now = new Date();
+  const normalizedReference = String(as400Reference || preorder.factureReference || "").trim();
+  const normalizedAmount = normalizeAs400Amount(
+    as400AmountFcfa !== undefined && as400AmountFcfa !== null
+      ? as400AmountFcfa
+      : preorder.as400InvoiceTotalFcfa,
+  );
+
+  if (!normalizedReference) {
+    const err = new Error("La référence AS400 corrigée est obligatoire pour clôturer le contentieux.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (normalizedAmount === null || normalizedAmount <= 0) {
+    const err = new Error("Le montant AS400 corrigé est obligatoire pour clôturer le contentieux.");
+    err.statusCode = 400;
+    throw err;
+  }
+
   const resolutionNote =
     String(note || "").trim() || "Facture reprise dans AS400, contentieux clôturé.";
 
@@ -618,6 +639,8 @@ async function resolveAs400CertificationDispute({
     const saved = await tx.preorder.update({
       where: { id: preorder.id },
       data: {
+        factureReference: normalizedReference,
+        as400InvoiceTotalFcfa: normalizedAmount,
         as400CertificationStatus: "RESOLVED",
         as400CertificationResolvedAt: now,
         as400CertificationResolvedById: userId || null,
@@ -637,6 +660,10 @@ async function resolveAs400CertificationDispute({
           billingEscalationType: AS400_CERTIFICATION_MISSING_TYPE,
           as400CertificationStatus: "RESOLVED",
           previousBillingWorkStatus: preorder.billingWorkStatus,
+          previousFactureReference: preorder.factureReference || null,
+          nextFactureReference: normalizedReference,
+          previousAs400InvoiceTotalFcfa: preorder.as400InvoiceTotalFcfa || null,
+          nextAs400InvoiceTotalFcfa: normalizedAmount,
         },
       },
     });
