@@ -533,6 +533,9 @@ async function listOrders(req, res) {
       assignedAt: "assignedAt",
       billingLastActivityAt: "billingLastActivityAt",
       billingEscalatedAt: "billingEscalatedAt",
+      preparationLaunchedAt: "preparationLaunchedAt",
+      preparedAt: "preparedAt",
+      fulfilledAt: "fulfilledAt",
     };
     const sortField = sortMap[String(sort || "").trim()] || "createdAt";
     const sortDir = dir === "asc" ? "asc" : "desc";
