@@ -142,6 +142,15 @@ function buildOrderSummary(order) {
             : null,
         }
       : null,
+    logs: Array.isArray(order.logs)
+      ? order.logs.map((log) => ({
+          id: log.id,
+          action: log.action,
+          note: log.note,
+          meta: log.meta || null,
+          createdAt: log.createdAt,
+        }))
+      : [],
     latestAttempt: latestAttempt
       ? {
           id: latestAttempt.id,
@@ -403,6 +412,17 @@ async function getWorkspace(req, res) {
       },
       preparationLaunchedBy: {
         select: { id: true, fullName: true, role: true },
+      },
+      logs: {
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        select: {
+          id: true,
+          action: true,
+          note: true,
+          meta: true,
+          createdAt: true,
+        },
       },
     };
 
