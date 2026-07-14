@@ -44,6 +44,7 @@ const reportsRoutes = require("./admin/reports.routes");
 const ticketEventsRoutes = require("./admin/ticketEvents.routes");
 const fboDocumentsRoutes = require("./admin/fboDocuments.routes");
 const externalPaymentLinksRoutes = require("./admin/externalPaymentLinks.routes");
+const as400GatewayRoutes = require("./admin/as400Gateway.routes");
 const memorialsRoutes = require("./admin/memorials.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 const eventsController = require("../controllers/admin/events.controller");
@@ -57,6 +58,7 @@ router.use(resolveCountry, requireAuth, requireCountryScope);
 router.use("/orders", ordersRoutes);
 router.use("/orders", paymentsRoutes);
 router.use("/external-payment-links", externalPaymentLinksRoutes);
+router.use("/as400", as400GatewayRoutes);
 router.get(
   "/events/stream",
   requirePermission(Permission.PREORDER_READ),

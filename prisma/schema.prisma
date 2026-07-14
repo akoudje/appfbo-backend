@@ -222,6 +222,32 @@ enum BillingPriority {
   URGENT
 }
 
+enum As400AutomationMode {
+  OBSERVATION
+  ASSISTED
+  AUTOMATIC
+}
+
+enum As400RequestStatus {
+  PENDING
+  RUNNING
+  WAITING_HUMAN
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum As400RequestAction {
+  CREATE_AND_VALIDATE_INVOICE
+  CHECK_INVOICE_STATUS
+}
+
+enum As400RequestLogLevel {
+  INFO
+  WARN
+  ERROR
+}
+
 enum TicketEventStatus {
   DRAFT
   PUBLISHED
@@ -446,6 +472,7 @@ model Country {
   payments                Payment[]
   paymentProviderAccounts PaymentProviderAccount[]
   paymentProviderRules    PaymentProviderRule[]
+  as400Requests           As400InvoiceRequest[]
   cashClosures            CashClosure[]
   customerOtpChallenges   CustomerOtpChallenge[]
   bankPaymentProofs       BankPaymentProof[]
@@ -598,6 +625,9 @@ model AdminUser {
   paymentTransactionLogs PaymentTransactionLog[]
   reviewedBankPaymentProofs BankPaymentProof[]
   cashierTransactions CashierTransaction[] @relation("CashierTransactionCashier")
+  createdAs400Requests As400InvoiceRequest[] @relation("As400RequestCreatedBy")
+  updatedAs400Requests As400InvoiceRequest[] @relation("As400RequestUpdatedBy")
+  as400RequestLogs     As400InvoiceRequestLog[] @relation("As400RequestLogActor")
   cashClosuresAsCashier CashClosure[] @relation("CashClosureCashier")
   cashClosuresSubmitted CashClosure[] @relation("CashClosureSubmittedBy")
   cashClosuresReviewed CashClosure[] @relation("CashClosureReviewedBy")
@@ -1022,6 +1052,7 @@ model Preorder {
   messages       OrderMessage[]
   payments       Payment[]       @relation("PreorderPayments")
   cashierTransactions CashierTransaction[]
+  as400InvoiceRequests As400InvoiceRequest[]
   preparationItems PreparationChecklistItem[]
   preparationAnomalies PreparationAnomaly[]
   paymentTransactionLogs PaymentTransactionLog[]
@@ -1169,6 +1200,90 @@ model CashierTransaction {
   @@index([cashierId, createdAt])
   @@index([paymentMode, createdAt])
   @@index([preparationLaunchedAt])
+}
+
+model As400InvoiceRequest {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  preorderId String
+  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+
+  action As400RequestAction @default(CREATE_AND_VALIDATE_INVOICE)
+  mode As400AutomationMode @default(OBSERVATION)
+  status As400RequestStatus @default(PENDING)
+
+  idempotencyKey String @unique
+  priority Int @default(100)
+  attempts Int @default(0)
+  maxAttempts Int @default(1)
+
+  requestedInvoiceReference String?
+  requestedAmountFcfa Int?
+  requestedPayload Json?
+
+  as400InvoiceReference String?
+  as400OrderReference String?
+  as400AmountFcfa Int?
+  as400Validated Boolean @default(false)
+  as400ValidatedAt DateTime?
+
+  spoolFilePath String? @db.Text
+  screenSnapshotPath String? @db.Text
+  resultPayload Json?
+
+  errorCode String?
+  errorMessage String? @db.Text
+  humanReason String? @db.Text
+
+  availableForProcessingAt DateTime @default(now())
+  lockedAt DateTime?
+  lockedBy String?
+  startedAt DateTime?
+  completedAt DateTime?
+  failedAt DateTime?
+  cancelledAt DateTime?
+
+  createdById String?
+  createdBy AdminUser? @relation("As400RequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  updatedById String?
+  updatedBy AdminUser? @relation("As400RequestUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  logs As400InvoiceRequestLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, status, createdAt])
+  @@index([preorderId, createdAt])
+  @@index([status, availableForProcessingAt])
+  @@index([lockedAt])
+  @@index([createdById])
+  @@index([updatedById])
+}
+
+model As400InvoiceRequestLog {
+  id String @id @default(cuid())
+
+  requestId String
+  request As400InvoiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  level As400RequestLogLevel @default(INFO)
+  event String
+  message String? @db.Text
+  payload Json?
+
+  actorAdminId String?
+  actorAdmin AdminUser? @relation("As400RequestLogActor", fields: [actorAdminId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([level, createdAt])
+  @@index([actorAdminId])
 }
 
 model CashClosure {

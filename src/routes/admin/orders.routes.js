@@ -2,6 +2,7 @@ const express = require("express");
 const { Permission } = require("../../auth/permissions");
 const { requirePermission } = require("../../middlewares/rbac");
 const ordersController = require("../../controllers/admin/orders.controller");
+const as400GatewayController = require("../../controllers/admin/as400Gateway.controller");
 
 const router = express.Router();
 
@@ -44,6 +45,12 @@ router.post(
   "/:id/invoice",
   requirePermission(Permission.INVOICE_CREATE),
   ordersController.invoiceOrder,
+);
+
+router.post(
+  "/:id/as400-requests",
+  requirePermission(Permission.INVOICE_CREATE),
+  as400GatewayController.enqueueOrderRequest,
 );
 
 router.patch(
