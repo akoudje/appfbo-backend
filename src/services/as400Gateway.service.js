@@ -3,6 +3,23 @@ const prisma = require("../prisma");
 const ACTIVE_STATUSES = ["PENDING", "RUNNING", "WAITING_HUMAN"];
 const ALLOWED_MODES = new Set(["OBSERVATION", "ASSISTED", "AUTOMATIC"]);
 const ALLOWED_ACTIONS = new Set(["CREATE_AND_VALIDATE_INVOICE", "CHECK_INVOICE_STATUS"]);
+const DEFAULT_CONFIG = {
+  enabled: false,
+  defaultMode: "OBSERVATION",
+  allowObservation: true,
+  allowAssisted: false,
+  allowAutomatic: false,
+  workerId: null,
+  hllapiProfileName: null,
+  sessionName: null,
+  environmentLabel: null,
+  maxAttempts: 1,
+  lockTimeoutSeconds: 900,
+  pollIntervalSeconds: 30,
+  claimBatchSize: 1,
+  settingsJson: null,
+  lastHeartbeatAt: null,
+};
 
 function normalizeWorkerId(value) {
   const normalized = String(value || "").trim();
@@ -24,6 +41,62 @@ function normalizeOptionalAmount(value) {
 function normalizeEnum(value, allowed, fallback) {
   const normalized = String(value || "").trim().toUpperCase();
   return allowed.has(normalized) ? normalized : fallback;
+}
+
+function clampInt(value, fallback, min, max) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function isModeAllowed(config, mode) {
+  if (mode === "OBSERVATION") return config.allowObservation !== false;
+  if (mode === "ASSISTED") return Boolean(config.allowAssisted);
+  if (mode === "AUTOMATIC") return Boolean(config.allowAutomatic);
+  return false;
+}
+
+function serializeConfig(config, countryId) {
+  return {
+    ...DEFAULT_CONFIG,
+    ...(config || {}),
+    id: config?.id || null,
+    countryId: config?.countryId || countryId,
+  };
+}
+
+function normalizeConfigPayload(body = {}) {
+  const defaultMode = normalizeEnum(body.defaultMode, ALLOWED_MODES, "OBSERVATION");
+  const allowObservation =
+    body.allowObservation === undefined ? true : Boolean(body.allowObservation);
+  const allowAssisted = Boolean(body.allowAssisted);
+  const allowAutomatic = Boolean(body.allowAutomatic);
+
+  if (!isModeAllowed({ allowObservation, allowAssisted, allowAutomatic }, defaultMode)) {
+    const err = new Error(`Le mode par défaut ${defaultMode} doit être autorisé`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return {
+    enabled: Boolean(body.enabled),
+    defaultMode,
+    allowObservation,
+    allowAssisted,
+    allowAutomatic,
+    workerId: normalizeOptionalText(body.workerId),
+    hllapiProfileName: normalizeOptionalText(body.hllapiProfileName),
+    sessionName: normalizeOptionalText(body.sessionName),
+    environmentLabel: normalizeOptionalText(body.environmentLabel),
+    maxAttempts: clampInt(body.maxAttempts, 1, 1, 10),
+    lockTimeoutSeconds: clampInt(body.lockTimeoutSeconds, 900, 60, 7200),
+    pollIntervalSeconds: clampInt(body.pollIntervalSeconds, 30, 5, 3600),
+    claimBatchSize: clampInt(body.claimBatchSize, 1, 1, 20),
+    settingsJson:
+      body.settingsJson && typeof body.settingsJson === "object"
+        ? body.settingsJson
+        : undefined,
+  };
 }
 
 function buildIdempotencyKey({ countryId, preorderId, action }) {
@@ -98,6 +171,42 @@ async function addLog(tx, { requestId, level = "INFO", event, message, payload, 
   });
 }
 
+async function getConfig({ countryId }) {
+  const config = await prisma.as400GatewayConfig.findUnique({
+    where: { countryId },
+  });
+  return serializeConfig(config, countryId);
+}
+
+async function updateConfig({ countryId, actorAdminId, data }) {
+  const payload = normalizeConfigPayload(data || {});
+  const config = await prisma.as400GatewayConfig.upsert({
+    where: { countryId },
+    create: {
+      countryId,
+      ...payload,
+    },
+    update: payload,
+  });
+
+  return {
+    config: serializeConfig(config, countryId),
+    updatedById: actorAdminId || null,
+  };
+}
+
+async function heartbeatConfig({ countryId, workerId }) {
+  const config = await prisma.as400GatewayConfig.update({
+    where: { countryId },
+    data: {
+      lastHeartbeatAt: new Date(),
+      workerId: normalizeOptionalText(workerId) || undefined,
+    },
+  });
+
+  return serializeConfig(config, countryId);
+}
+
 async function listRequests({ countryId, status, preorderId, q, take = 50, skip = 0 }) {
   const where = { countryId };
   if (status) where.status = String(status).trim().toUpperCase();
@@ -138,10 +247,24 @@ async function getRequest({ countryId, id }) {
 }
 
 async function claimNextRequest({ countryId, actorAdminId, workerId, mode, action }) {
+  const config = await getConfig({ countryId });
+  if (!config.enabled) {
+    const err = new Error("Gateway AS400 désactivé pour ce pays");
+    err.statusCode = 409;
+    throw err;
+  }
+
   const normalizedMode = mode ? normalizeEnum(mode, ALLOWED_MODES, null) : null;
   const normalizedAction = action ? normalizeEnum(action, ALLOWED_ACTIONS, null) : null;
   const now = new Date();
   const lockedBy = normalizeWorkerId(workerId || actorAdminId);
+  const modeForClaim = normalizedMode || config.defaultMode;
+
+  if (!isModeAllowed(config, modeForClaim)) {
+    const err = new Error(`Mode AS400 non autorisé: ${modeForClaim}`);
+    err.statusCode = 400;
+    throw err;
+  }
 
   return prisma.$transaction(async (tx) => {
     const where = {
@@ -150,13 +273,13 @@ async function claimNextRequest({ countryId, actorAdminId, workerId, mode, actio
       availableForProcessingAt: { lte: now },
     };
 
-    if (normalizedMode) where.mode = normalizedMode;
+    where.mode = modeForClaim;
     if (normalizedAction) where.action = normalizedAction;
 
     const candidates = await tx.as400InvoiceRequest.findMany({
       where,
       orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
-      take: 5,
+      take: config.claimBatchSize || 1,
       select: { id: true, attempts: true, maxAttempts: true },
     });
 
@@ -206,8 +329,15 @@ async function enqueueInvoiceRequest({
   action = "CREATE_AND_VALIDATE_INVOICE",
   note,
 }) {
-  const normalizedMode = normalizeEnum(mode, ALLOWED_MODES, "OBSERVATION");
+  const config = await getConfig({ countryId });
+  const normalizedMode = normalizeEnum(mode, ALLOWED_MODES, config.defaultMode || "OBSERVATION");
   const normalizedAction = normalizeEnum(action, ALLOWED_ACTIONS, "CREATE_AND_VALIDATE_INVOICE");
+
+  if (!isModeAllowed(config, normalizedMode)) {
+    const err = new Error(`Mode AS400 non autorisé: ${normalizedMode}`);
+    err.statusCode = 400;
+    throw err;
+  }
 
   return prisma.$transaction(async (tx) => {
     const order = await tx.preorder.findFirst({
@@ -263,6 +393,7 @@ async function enqueueInvoiceRequest({
         mode: normalizedMode,
         status: "PENDING",
         idempotencyKey,
+        maxAttempts: config.maxAttempts || 1,
         requestedInvoiceReference: order.factureReference || null,
         requestedAmountFcfa: order.as400InvoiceTotalFcfa || order.totalFcfa || null,
         requestedPayload: buildRequestedPayload(order),
@@ -272,6 +403,7 @@ async function enqueueInvoiceRequest({
       update: {
         mode: normalizedMode,
         status: "PENDING",
+        maxAttempts: config.maxAttempts || 1,
         errorCode: null,
         errorMessage: null,
         humanReason: null,
@@ -503,6 +635,9 @@ async function failRequest({
 }
 
 module.exports = {
+  getConfig,
+  updateConfig,
+  heartbeatConfig,
   listRequests,
   getRequest,
   claimNextRequest,

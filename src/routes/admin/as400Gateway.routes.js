@@ -6,6 +6,24 @@ const as400GatewayController = require("../../controllers/admin/as400Gateway.con
 const router = express.Router();
 
 router.get(
+  "/config",
+  requirePermission(Permission.INVOICE_CREATE),
+  as400GatewayController.getConfig,
+);
+
+router.put(
+  "/config",
+  requirePermission(Permission.INVOICE_CREATE),
+  as400GatewayController.updateConfig,
+);
+
+router.post(
+  "/config/heartbeat",
+  requirePermission(Permission.INVOICE_CREATE),
+  as400GatewayController.heartbeatConfig,
+);
+
+router.get(
   "/requests",
   requirePermission(Permission.INVOICE_CREATE),
   as400GatewayController.listRequests,

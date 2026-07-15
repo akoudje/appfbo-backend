@@ -26,6 +26,46 @@ async function listRequests(req, res) {
   }
 }
 
+async function getConfig(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const config = await as400GatewayService.getConfig({ countryId });
+
+    res.json(config);
+  } catch (error) {
+    handleError(res, error, "Erreur configuration AS400");
+  }
+}
+
+async function updateConfig(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const result = await as400GatewayService.updateConfig({
+      countryId,
+      actorAdminId: req.user?.id,
+      data: req.body || {},
+    });
+
+    res.json(result.config);
+  } catch (error) {
+    handleError(res, error, "Erreur mise à jour configuration AS400");
+  }
+}
+
+async function heartbeatConfig(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const config = await as400GatewayService.heartbeatConfig({
+      countryId,
+      workerId: req.body?.workerId,
+    });
+
+    res.json(config);
+  } catch (error) {
+    handleError(res, error, "Erreur heartbeat AS400");
+  }
+}
+
 async function getRequest(req, res) {
   try {
     const countryId = pickCountryId(req);
@@ -180,6 +220,9 @@ async function failRequest(req, res) {
 }
 
 module.exports = {
+  getConfig,
+  updateConfig,
+  heartbeatConfig,
   listRequests,
   getRequest,
   enqueueRequest,

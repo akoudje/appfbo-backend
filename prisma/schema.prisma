@@ -472,6 +472,7 @@ model Country {
   payments                Payment[]
   paymentProviderAccounts PaymentProviderAccount[]
   paymentProviderRules    PaymentProviderRule[]
+  as400GatewayConfig      As400GatewayConfig?
   as400Requests           As400InvoiceRequest[]
   cashClosures            CashClosure[]
   customerOtpChallenges   CustomerOtpChallenge[]
@@ -1284,6 +1285,38 @@ model As400InvoiceRequestLog {
   @@index([requestId, createdAt])
   @@index([level, createdAt])
   @@index([actorAdminId])
+}
+
+model As400GatewayConfig {
+  id String @id @default(cuid())
+
+  countryId String @unique
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  enabled Boolean @default(false)
+  defaultMode As400AutomationMode @default(OBSERVATION)
+  allowObservation Boolean @default(true)
+  allowAssisted Boolean @default(false)
+  allowAutomatic Boolean @default(false)
+
+  workerId String?
+  hllapiProfileName String?
+  sessionName String?
+  environmentLabel String?
+
+  maxAttempts Int @default(1)
+  lockTimeoutSeconds Int @default(900)
+  pollIntervalSeconds Int @default(30)
+  claimBatchSize Int @default(1)
+
+  settingsJson Json?
+  lastHeartbeatAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, enabled])
+  @@index([lastHeartbeatAt])
 }
 
 model CashClosure {
