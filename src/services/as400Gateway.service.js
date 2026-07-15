@@ -4,6 +4,23 @@ const ACTIVE_STATUSES = ["PENDING", "RUNNING", "WAITING_HUMAN"];
 const ALLOWED_MODES = new Set(["OBSERVATION", "ASSISTED", "AUTOMATIC"]);
 const ALLOWED_ACTIONS = new Set(["CREATE_AND_VALIDATE_INVOICE", "CHECK_INVOICE_STATUS"]);
 
+function normalizeWorkerId(value) {
+  const normalized = String(value || "").trim();
+  return normalized || "admin-api";
+}
+
+function normalizeOptionalText(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function normalizeOptionalAmount(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const amount = Number(String(value).replace(/[^\d.-]/g, ""));
+  if (!Number.isFinite(amount)) return null;
+  return Math.round(amount);
+}
+
 function normalizeEnum(value, allowed, fallback) {
   const normalized = String(value || "").trim().toUpperCase();
   return allowed.has(normalized) ? normalized : fallback;
@@ -117,6 +134,67 @@ async function getRequest({ countryId, id }) {
   return prisma.as400InvoiceRequest.findFirst({
     where: { id, countryId },
     include: includeRequestDetails(),
+  });
+}
+
+async function claimNextRequest({ countryId, actorAdminId, workerId, mode, action }) {
+  const normalizedMode = mode ? normalizeEnum(mode, ALLOWED_MODES, null) : null;
+  const normalizedAction = action ? normalizeEnum(action, ALLOWED_ACTIONS, null) : null;
+  const now = new Date();
+  const lockedBy = normalizeWorkerId(workerId || actorAdminId);
+
+  return prisma.$transaction(async (tx) => {
+    const where = {
+      countryId,
+      status: "PENDING",
+      availableForProcessingAt: { lte: now },
+    };
+
+    if (normalizedMode) where.mode = normalizedMode;
+    if (normalizedAction) where.action = normalizedAction;
+
+    const candidates = await tx.as400InvoiceRequest.findMany({
+      where,
+      orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+      take: 5,
+      select: { id: true, attempts: true, maxAttempts: true },
+    });
+
+    for (const candidate of candidates) {
+      if (candidate.attempts >= candidate.maxAttempts) continue;
+
+      const claimed = await tx.as400InvoiceRequest.updateMany({
+        where: { id: candidate.id, countryId, status: "PENDING" },
+        data: {
+          status: "RUNNING",
+          attempts: { increment: 1 },
+          lockedAt: now,
+          lockedBy,
+          startedAt: now,
+          errorCode: null,
+          errorMessage: null,
+          updatedById: actorAdminId || null,
+        },
+      });
+
+      if (!claimed.count) continue;
+
+      await addLog(tx, {
+        requestId: candidate.id,
+        level: "INFO",
+        event: "CLAIMED",
+        message: `Demande AS400 prise en charge par ${lockedBy}.`,
+        payload: { workerId: lockedBy },
+        actorAdminId,
+      });
+
+      return tx.as400InvoiceRequest.findFirst({
+        where: { id: candidate.id, countryId },
+        include: includeRequestDetails(),
+      });
+    }
+
+    return null;
   });
 }
 
@@ -283,10 +361,154 @@ async function cancelRequest({ countryId, id, actorAdminId, reason }) {
   });
 }
 
+async function completeRequest({
+  countryId,
+  id,
+  actorAdminId,
+  workerId,
+  as400InvoiceReference,
+  as400OrderReference,
+  as400AmountFcfa,
+  as400Validated,
+  spoolFilePath,
+  screenSnapshotPath,
+  resultPayload,
+  message,
+}) {
+  const now = new Date();
+  const lockedBy = normalizeWorkerId(workerId || actorAdminId);
+  const invoiceReference = normalizeOptionalText(as400InvoiceReference);
+  const orderReference = normalizeOptionalText(as400OrderReference);
+  const amount = normalizeOptionalAmount(as400AmountFcfa);
+  const validated = as400Validated === undefined ? true : Boolean(as400Validated);
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.as400InvoiceRequest.updateMany({
+      where: { id, countryId, status: "RUNNING" },
+      data: {
+        status: "COMPLETED",
+        as400InvoiceReference: invoiceReference,
+        as400OrderReference: orderReference,
+        as400AmountFcfa: amount,
+        as400Validated: validated,
+        as400ValidatedAt: validated ? now : null,
+        spoolFilePath: normalizeOptionalText(spoolFilePath),
+        screenSnapshotPath: normalizeOptionalText(screenSnapshotPath),
+        resultPayload: resultPayload || undefined,
+        completedAt: now,
+        lockedAt: null,
+        lockedBy: null,
+        errorCode: null,
+        errorMessage: null,
+        updatedById: actorAdminId || null,
+      },
+    });
+
+    if (!updated.count) {
+      const err = new Error("Demande AS400 RUNNING introuvable");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    await addLog(tx, {
+      requestId: id,
+      level: "INFO",
+      event: "COMPLETED",
+      message: message || `Demande AS400 terminee par ${lockedBy}.`,
+      payload: {
+        workerId: lockedBy,
+        as400InvoiceReference: invoiceReference,
+        as400OrderReference: orderReference,
+        as400AmountFcfa: amount,
+        as400Validated: validated,
+      },
+      actorAdminId,
+    });
+
+    return tx.as400InvoiceRequest.findFirst({
+      where: { id, countryId },
+      include: includeRequestDetails(),
+    });
+  });
+}
+
+async function failRequest({
+  countryId,
+  id,
+  actorAdminId,
+  workerId,
+  errorCode,
+  errorMessage,
+  retry = false,
+  retryDelaySeconds = 300,
+  screenSnapshotPath,
+  resultPayload,
+}) {
+  const now = new Date();
+  const lockedBy = normalizeWorkerId(workerId || actorAdminId);
+
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.as400InvoiceRequest.findFirst({
+      where: { id, countryId, status: "RUNNING" },
+      select: { id: true, attempts: true, maxAttempts: true },
+    });
+
+    if (!request) {
+      const err = new Error("Demande AS400 RUNNING introuvable");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const canRetry = Boolean(retry) && request.attempts < request.maxAttempts;
+    const retryDelayMs = Math.max(Number(retryDelaySeconds) || 300, 0) * 1000;
+    const nextAvailableAt = new Date(now.getTime() + retryDelayMs);
+
+    await tx.as400InvoiceRequest.update({
+      where: { id },
+      data: {
+        status: canRetry ? "PENDING" : "FAILED",
+        errorCode: normalizeOptionalText(errorCode),
+        errorMessage: normalizeOptionalText(errorMessage) || "Erreur automate AS400",
+        screenSnapshotPath: normalizeOptionalText(screenSnapshotPath),
+        resultPayload: resultPayload || undefined,
+        availableForProcessingAt: canRetry ? nextAvailableAt : now,
+        failedAt: canRetry ? null : now,
+        lockedAt: null,
+        lockedBy: null,
+        updatedById: actorAdminId || null,
+      },
+    });
+
+    await addLog(tx, {
+      requestId: id,
+      level: "ERROR",
+      event: canRetry ? "FAILED_RETRY_SCHEDULED" : "FAILED",
+      message:
+        normalizeOptionalText(errorMessage) ||
+        (canRetry ? "Erreur AS400, nouvelle tentative programmee." : "Erreur AS400 definitive."),
+      payload: {
+        workerId: lockedBy,
+        errorCode: normalizeOptionalText(errorCode),
+        retry: canRetry,
+        retryDelaySeconds: canRetry ? retryDelaySeconds : null,
+      },
+      actorAdminId,
+    });
+
+    return tx.as400InvoiceRequest.findFirst({
+      where: { id, countryId },
+      include: includeRequestDetails(),
+    });
+  });
+}
+
 module.exports = {
   listRequests,
   getRequest,
+  claimNextRequest,
   enqueueInvoiceRequest,
   markWaitingHuman,
   cancelRequest,
+  completeRequest,
+  failRequest,
 };

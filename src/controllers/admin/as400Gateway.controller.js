@@ -80,6 +80,27 @@ async function enqueueOrderRequest(req, res) {
   }
 }
 
+async function claimNextRequest(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const request = await as400GatewayService.claimNextRequest({
+      countryId,
+      actorAdminId: req.user?.id,
+      workerId: req.body?.workerId,
+      mode: req.body?.mode,
+      action: req.body?.action,
+    });
+
+    if (!request) {
+      return res.status(204).send();
+    }
+
+    res.json(request);
+  } catch (error) {
+    handleError(res, error, "Erreur reservation demande AS400");
+  }
+}
+
 async function markWaitingHuman(req, res) {
   try {
     const countryId = pickCountryId(req);
@@ -112,11 +133,60 @@ async function cancelRequest(req, res) {
   }
 }
 
+async function completeRequest(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const request = await as400GatewayService.completeRequest({
+      countryId,
+      id: req.params.id,
+      actorAdminId: req.user?.id,
+      workerId: req.body?.workerId,
+      as400InvoiceReference: req.body?.as400InvoiceReference,
+      as400OrderReference: req.body?.as400OrderReference,
+      as400AmountFcfa: req.body?.as400AmountFcfa,
+      as400Validated: req.body?.as400Validated,
+      spoolFilePath: req.body?.spoolFilePath,
+      screenSnapshotPath: req.body?.screenSnapshotPath,
+      resultPayload: req.body?.resultPayload,
+      message: req.body?.message,
+    });
+
+    res.json(request);
+  } catch (error) {
+    handleError(res, error, "Erreur finalisation demande AS400");
+  }
+}
+
+async function failRequest(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const request = await as400GatewayService.failRequest({
+      countryId,
+      id: req.params.id,
+      actorAdminId: req.user?.id,
+      workerId: req.body?.workerId,
+      errorCode: req.body?.errorCode,
+      errorMessage: req.body?.errorMessage,
+      retry: req.body?.retry,
+      retryDelaySeconds: req.body?.retryDelaySeconds,
+      screenSnapshotPath: req.body?.screenSnapshotPath,
+      resultPayload: req.body?.resultPayload,
+    });
+
+    res.json(request);
+  } catch (error) {
+    handleError(res, error, "Erreur echec demande AS400");
+  }
+}
+
 module.exports = {
   listRequests,
   getRequest,
   enqueueRequest,
   enqueueOrderRequest,
+  claimNextRequest,
   markWaitingHuman,
   cancelRequest,
+  completeRequest,
+  failRequest,
 };

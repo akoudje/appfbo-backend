@@ -17,6 +17,12 @@ router.post(
   as400GatewayController.enqueueRequest,
 );
 
+router.post(
+  "/requests/claim-next",
+  requirePermission(Permission.INVOICE_CREATE),
+  as400GatewayController.claimNextRequest,
+);
+
 router.get(
   "/requests/:id",
   requirePermission(Permission.INVOICE_CREATE),
@@ -33,6 +39,18 @@ router.post(
   "/requests/:id/cancel",
   requirePermission(Permission.INVOICE_CREATE),
   as400GatewayController.cancelRequest,
+);
+
+router.post(
+  "/requests/:id/complete",
+  requirePermission(Permission.INVOICE_CREATE),
+  as400GatewayController.completeRequest,
+);
+
+router.post(
+  "/requests/:id/fail",
+  requirePermission(Permission.INVOICE_CREATE),
+  as400GatewayController.failRequest,
 );
 
 module.exports = router;
