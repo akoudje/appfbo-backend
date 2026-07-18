@@ -2189,6 +2189,7 @@ async function resendConfirmationSms(req, res) {
   try {
     const { id } = req.params;
     const globalAdmin = isGlobalAdminRole(req.user?.role);
+    const requestedChannel = String(req.body?.channel || "").trim().toUpperCase();
     const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone);
     const emailOverride = normalizeOptionalNotificationEmail(req.body?.email);
 
@@ -2301,6 +2302,18 @@ async function resendConfirmationSms(req, res) {
       });
     }
 
+    if (!destination && requestedChannel !== "EMAIL") {
+      return res.status(400).json({
+        message: "Aucun numéro destinataire disponible pour renvoyer le SMS.",
+      });
+    }
+
+    if (requestedChannel === "EMAIL" && !emailDestination) {
+      return res.status(400).json({
+        message: "Aucune adresse email client disponible pour renvoyer la notification.",
+      });
+    }
+
     const sendResult = await sendPreorderNotification({
       preorder: payloadOrder,
       purpose,
@@ -2308,6 +2321,9 @@ async function resendConfirmationSms(req, res) {
       actorName,
       toPhone: destination,
       toEmail: emailDestination,
+      forceChannel: ["SMS", "WHATSAPP", "EMAIL"].includes(requestedChannel)
+        ? requestedChannel
+        : null,
     });
 
     if (sendResult?.skipped) {
