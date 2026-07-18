@@ -434,10 +434,13 @@ function buildOrdersListWhere(req, overrides = {}) {
     where.status = "CANCELLED";
     where.paymentStatus = "PAID";
     where.billingWorkStatus = "ESCALATED";
-    where.OR = [
-      { paymentProvider: "WAVE" },
-      { preorderPaymentMode: "WAVE" },
-    ];
+    where.AND = where.AND || [];
+    where.AND.push({
+      OR: [
+        { paymentProvider: "WAVE" },
+        { preorderPaymentMode: "WAVE" },
+      ],
+    });
   }
 
   if (String(assignedToMe) === "true") {
@@ -453,32 +456,35 @@ function buildOrdersListWhere(req, overrides = {}) {
   if (q && String(q).trim()) {
     const qs = String(q).trim();
     const fboSearchTerms = buildFboSearchTerms(qs);
-    where.OR = [
-      ...fboSearchTerms.map((term) => ({
-        fboNumero: { contains: term, mode: "insensitive" },
-      })),
-      { fboNomComplet: { contains: qs, mode: "insensitive" } },
-      { factureReference: { contains: qs, mode: "insensitive" } },
-      { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
-      { preorderNumber: { contains: qs, mode: "insensitive" } },
-      { parcelNumber: { contains: qs, mode: "insensitive" } },
-      {
-        activePayment: {
-          attempts: {
-            some: {
-              providerPayerPhone: { contains: qs, mode: "insensitive" },
+    where.AND = where.AND || [];
+    where.AND.push({
+      OR: [
+        ...fboSearchTerms.map((term) => ({
+          fboNumero: { contains: term, mode: "insensitive" },
+        })),
+        { fboNomComplet: { contains: qs, mode: "insensitive" } },
+        { factureReference: { contains: qs, mode: "insensitive" } },
+        { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
+        { preorderNumber: { contains: qs, mode: "insensitive" } },
+        { parcelNumber: { contains: qs, mode: "insensitive" } },
+        {
+          activePayment: {
+            attempts: {
+              some: {
+                providerPayerPhone: { contains: qs, mode: "insensitive" },
+              },
             },
           },
         },
-      },
-      {
-        cashierTransactions: {
-          some: {
-            receiptNumber: { contains: qs, mode: "insensitive" },
+        {
+          cashierTransactions: {
+            some: {
+              receiptNumber: { contains: qs, mode: "insensitive" },
+            },
           },
         },
-      },
-    ];
+      ],
+    });
   }
 
   const from = dateFrom ? normalizeDateStart(String(dateFrom)) : null;
