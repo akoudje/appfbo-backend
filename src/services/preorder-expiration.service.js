@@ -14,6 +14,15 @@ const FINAL_PAYMENT_STATUSES = new Set([
   "FAILED",
 ]);
 
+const SUCCESSFUL_EMAIL_MESSAGE_STATUSES = ["SENT", "DELIVERED", "READ"];
+
+// Une commande dont le SMS/WhatsApp initial a échoué ne doit bloquer
+// l'auto-annulation que si le client n'a reçu AUCUNE notification: si
+// l'email est parti avec succès, il a bien été informé.
+function hasSuccessfulEmailNotification(messages = []) {
+  return Array.isArray(messages) && messages.length > 0;
+}
+
 function compactText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -225,6 +234,14 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     include: {
       items: true,
       activePayment: true,
+      messages: {
+        where: {
+          channel: "EMAIL",
+          status: { in: SUCCESSFUL_EMAIL_MESSAGE_STATUSES },
+        },
+        take: 1,
+        select: { id: true },
+      },
       country: {
         select: {
           id: true,
@@ -251,7 +268,10 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
   if (!["INVOICED", "PAYMENT_PENDING"].includes(status) || paymentStatus === "PAID") {
     return { ok: false, reason: "PREORDER_NOT_ELIGIBLE", preorder: order };
   }
-  if (String(order.lastWhatsappStatus || "").toUpperCase() === "FAILED") {
+  if (
+    String(order.lastWhatsappStatus || "").toUpperCase() === "FAILED" &&
+    !hasSuccessfulEmailNotification(order.messages)
+  ) {
     return { ok: false, reason: "INITIAL_PAYMENT_NOTIFICATION_FAILED", preorder: order };
   }
   if (
@@ -329,6 +349,14 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
       include: {
         items: true,
         activePayment: true,
+        messages: {
+          where: {
+            channel: "EMAIL",
+            status: { in: SUCCESSFUL_EMAIL_MESSAGE_STATUSES },
+          },
+          take: 1,
+          select: { id: true },
+        },
       },
     });
 
@@ -344,7 +372,10 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     ) {
       return null;
     }
-    if (String(current.lastWhatsappStatus || "").toUpperCase() === "FAILED") {
+    if (
+      String(current.lastWhatsappStatus || "").toUpperCase() === "FAILED" &&
+      !hasSuccessfulEmailNotification(current.messages)
+    ) {
       return null;
     }
     if (
@@ -686,6 +717,14 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
       OR: [
         { lastWhatsappStatus: null },
         { lastWhatsappStatus: { not: "FAILED" } },
+        {
+          messages: {
+            some: {
+              channel: "EMAIL",
+              status: { in: SUCCESSFUL_EMAIL_MESSAGE_STATUSES },
+            },
+          },
+        },
       ],
       NOT: {
         AND: [
