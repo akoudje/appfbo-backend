@@ -21,6 +21,10 @@ const {
   resolveDeliveryModeForPayment,
   validateCountryOrderOptions,
 } = require("../services/country-order-options.service");
+const {
+  fetchFboDirectoryProfile,
+  isFboDirectoryTemporarilyUnavailable,
+} = require("../services/fboDirectory.service");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1]
   .map((phone) => String(phone || "").trim())
@@ -28,11 +32,6 @@ const BILLING_WHATSAPPS = [process.env.BILLING_WA_1]
 const PREORDER_SUBMISSION_DISABLED_MESSAGE =
   process.env.PREORDER_SUBMISSION_DISABLED_MESSAGE ||
   "Les soumissions de précommandes sont temporairement suspendues.";
-const FBO_SERVICE_URL = String(process.env.FBO_SERVICE_URL || "").trim().replace(/\/+$/, "");
-const FBO_SERVICE_INTERNAL_TOKEN = String(
-  process.env.FBO_SERVICE_INTERNAL_TOKEN || "",
-).trim();
-const FBO_SERVICE_TIMEOUT_MS = Number(process.env.FBO_SERVICE_TIMEOUT_MS || 8000);
 const FBO_CHECK_RATE_LIMIT_WINDOW_MS = Number(process.env.FBO_CHECK_RATE_LIMIT_WINDOW_MS || 60000);
 const FBO_CHECK_RATE_LIMIT_MAX = Number(process.env.FBO_CHECK_RATE_LIMIT_MAX || 30);
 const fboCheckRateLimitBuckets = new Map();
@@ -233,62 +232,6 @@ function normalizeFboDirectoryProfile(payload) {
     ).trim(),
     grade: normalizeGrade(payload.grade),
   };
-}
-
-async function fetchFboDirectoryProfile(numeroFbo) {
-  if (!FBO_SERVICE_URL) {
-    const err = new Error("Service FBO non configuré");
-    err.statusCode = 503;
-    throw err;
-  }
-
-  const headers = {};
-  if (FBO_SERVICE_INTERNAL_TOKEN) {
-    headers["x-internal-token"] = FBO_SERVICE_INTERNAL_TOKEN;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FBO_SERVICE_TIMEOUT_MS);
-  let response;
-
-  try {
-    response = await fetch(
-      `${FBO_SERVICE_URL}/fbo/check/${encodeURIComponent(numeroFbo)}`,
-      { headers, signal: controller.signal },
-    );
-  } catch (error) {
-    const err = new Error(
-      error?.name === "AbortError"
-        ? "Service FBO trop lent"
-        : "Service FBO indisponible",
-    );
-    err.statusCode = error?.name === "AbortError" ? 504 : 503;
-    err.cause = error;
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  const rawText = await response.text();
-  let payload = null;
-  try {
-    payload = rawText ? JSON.parse(rawText) : null;
-  } catch {
-    payload = null;
-  }
-
-  if (!response.ok) {
-    const err = new Error(payload?.error || "Service FBO indisponible");
-    err.statusCode = response.status || 502;
-    throw err;
-  }
-
-  return payload;
-}
-
-function isFboDirectoryTemporarilyUnavailable(error) {
-  const statusCode = Number(error?.statusCode || 0);
-  return statusCode === 502 || statusCode === 503 || statusCode === 504;
 }
 
 function isBillingNumber(phone = "") {

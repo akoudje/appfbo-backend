@@ -1,5 +1,17 @@
 const crypto = require("crypto");
 const prisma = require("../../prisma");
+const {
+  digitsOnly,
+  canonicalFboNumber,
+  normalizeGrade,
+  fetchFboDirectoryProfile,
+} = require("../../services/fboDirectory.service");
+
+// Grade par défaut pour une fiche FBO locale jamais vue auparavant, quand
+// FBO Service renvoie un grade qu'on ne sait pas classer. Ne sert qu'à
+// satisfaire la contrainte NOT NULL du modèle local Fbo ; l'attestation
+// elle-même n'affiche pas ce champ.
+const FALLBACK_GRADE = "CLIENT_PRIVILEGIE";
 
 // Signataires habilités à apparaître sur une attestation FBO officielle.
 // Le formulaire admin propose ces valeurs, mais c'est cette liste côté
@@ -25,37 +37,38 @@ function findAuthorizedSignatory(name, title) {
   );
 }
 
-function digitsOnly(value) {
-  return String(value || "").replace(/\D/g, "");
-}
-
 function normalizeFboNumber(value) {
   return digitsOnly(value);
 }
 
-// Fbo.numeroFbo est stocké groupé par tirets (ex: "071-420-291-4XX"), mais
-// un admin qui recherche par une partie du numéro (copiée depuis une commande,
-// une capture d'écran, etc.) ne tape pas forcément les tirets aux bonnes
-// positions. On compare donc sur le numéro réduit à ses seuls chiffres côté
-// base de données, ce qui retrouve le FBO quel que soit le formatage saisi.
-async function findFboIdsByDigits(digits) {
-  if (!digits || digits.length < 3) return [];
-  const rows = await prisma.$queryRaw`
-    SELECT "id" FROM "Fbo"
-    WHERE regexp_replace("numeroFbo", '\D', '', 'g') LIKE ${`%${digits}%`}
-    LIMIT 50
-  `;
-  return rows.map((row) => row.id);
-}
+// Le nom, la présence et le grade d'un FBO viennent exclusivement de FBO
+// Service (registre officiel) : jamais du texte local saisi lors d'une
+// commande. On maintient quand même une fiche Fbo locale minimale, car
+// FboDocument a une clé étrangère obligatoire dessus ; elle est
+// resynchronisée à chaque recherche pour rester le reflet de FBO Service.
+async function syncLocalFboFromDirectory(digits, profile) {
+  const canonical = canonicalFboNumber(digits);
+  const fullName = String(profile?.full_name || "").trim();
+  if (!canonical || !fullName) return null;
 
-function scopedFboWhere(req, extra = {}) {
-  return {
-    ...extra,
-    OR: [
-      { fboCountries: { some: { countryId: req.countryId } } },
-      { fboCountries: { none: {} } },
-    ],
-  };
+  const existing = await prisma.fbo.findUnique({ where: { numeroFbo: canonical } });
+  const grade = normalizeGrade(profile?.grade) || existing?.grade || FALLBACK_GRADE;
+
+  return prisma.fbo.upsert({
+    where: { numeroFbo: canonical },
+    update: {
+      nomComplet: fullName,
+      email: profile?.email || null,
+      grade,
+    },
+    create: {
+      numeroFbo: canonical,
+      nomComplet: fullName,
+      email: profile?.email || null,
+      grade,
+      pointDeVente: "",
+    },
+  });
 }
 
 function documentNumber() {
@@ -76,50 +89,75 @@ function serializeDocument(doc) {
   };
 }
 
+// Point d'entrée unique "numéro -> fiche FBO à jour", utilisé par la
+// recherche et par la création, pour ne jamais générer un document à
+// partir d'une fiche locale potentiellement périmée.
+async function resolveFboFromDirectory(rawNumero) {
+  const digits = digitsOnly(rawNumero);
+  if (digits.length !== 12) {
+    return {
+      ok: false,
+      statusCode: 400,
+      message: "Saisissez le numéro FBO complet (12 chiffres).",
+    };
+  }
+
+  let profile;
+  try {
+    profile = await fetchFboDirectoryProfile(digits);
+  } catch (error) {
+    return {
+      ok: false,
+      statusCode: error?.statusCode || 502,
+      message: error?.message || "Service FBO indisponible.",
+    };
+  }
+
+  if (!profile || profile.exists === false) {
+    return {
+      ok: false,
+      statusCode: 404,
+      message: "Aucun FBO trouvé pour ce numéro dans FBO Service.",
+    };
+  }
+
+  const fbo = await syncLocalFboFromDirectory(digits, profile);
+  if (!fbo) {
+    return {
+      ok: false,
+      statusCode: 502,
+      message: "Réponse FBO Service incomplète pour ce numéro.",
+    };
+  }
+
+  return { ok: true, fbo, profile };
+}
+
 async function searchFbos(req, res) {
   try {
     const q = String(req.query.q || "").trim();
-    if (q.length < 2) return res.json({ data: [] });
+    if (!q) return res.json({ data: [] });
 
-    const numberMatchIds = await findFboIdsByDigits(normalizeFboNumber(q));
-
-    const fbos = await prisma.fbo.findMany({
-      where: scopedFboWhere(req, {
-        AND: [{
-          OR: [
-            { nomComplet: { contains: q, mode: "insensitive" } },
-            { email: { contains: q, mode: "insensitive" } },
-            ...(numberMatchIds.length ? [{ id: { in: numberMatchIds } }] : []),
-          ],
-        }],
-      }),
-      include: {
-        fboCountries: {
-          where: { countryId: req.countryId },
-          include: { country: { select: { id: true, code: true, name: true } } },
-          take: 1,
-        },
-        _count: { select: { documents: true } },
-      },
-      orderBy: [{ nomComplet: "asc" }],
-      take: 20,
-    });
-
-    // Un même FBO a parfois été enregistré plusieurs fois avec un numéro
-    // saisi différemment (tirets/espaces) sur des commandes distinctes,
-    // créant plusieurs fiches pour la même personne. On ne montre qu'une
-    // fiche par numéro normalisé pour éviter les doublons visuels, en
-    // gardant celle avec le plus d'historique de documents.
-    const byDigits = new Map();
-    for (const fbo of fbos) {
-      const key = normalizeFboNumber(fbo.numeroFbo) || fbo.id;
-      const existing = byDigits.get(key);
-      if (!existing || (fbo._count?.documents || 0) > (existing._count?.documents || 0)) {
-        byDigits.set(key, fbo);
-      }
+    const resolved = await resolveFboFromDirectory(q);
+    if (!resolved.ok) {
+      return res.status(resolved.statusCode).json({ data: [], message: resolved.message });
     }
 
-    return res.json({ data: [...byDigits.values()] });
+    // Une attestation valide existe peut-être déjà pour ce FBO : on la
+    // remonte pour éviter d'en régénérer une inutilement.
+    const activeDocument = await prisma.fboDocument.findFirst({
+      where: { fboId: resolved.fbo.id, countryId: req.countryId, status: "ISSUED" },
+      orderBy: { issuedAt: "desc" },
+    });
+
+    return res.json({
+      data: [
+        {
+          ...resolved.fbo,
+          activeDocument: serializeDocument(activeDocument),
+        },
+      ],
+    });
   } catch (error) {
     console.error("fboDocuments.searchFbos error:", error);
     return res.status(500).json({ message: "Erreur serveur (searchFbos)" });
@@ -161,7 +199,7 @@ async function listDocuments(req, res) {
 async function createDocument(req, res) {
   try {
     const {
-      fboId,
+      numeroFbo,
       city = "Abidjan",
       purpose,
       signatoryName = AUTHORIZED_SIGNATORIES[0].name,
@@ -175,19 +213,15 @@ async function createDocument(req, res) {
       });
     }
 
-    const fbo = await prisma.fbo.findFirst({
-      where: scopedFboWhere(req, { id: String(fboId || "") }),
-      include: {
-        fboCountries: {
-          where: { countryId: req.countryId },
-          include: { country: { select: { id: true, code: true, name: true } } },
-          take: 1,
-        },
-      },
-    });
-    if (!fbo) return res.status(404).json({ message: "FBO introuvable." });
+    // On revérifie toujours auprès de FBO Service au moment de la
+    // génération, plutôt que de faire confiance à un résultat de recherche
+    // potentiellement obtenu plusieurs minutes plus tôt.
+    const resolved = await resolveFboFromDirectory(numeroFbo);
+    if (!resolved.ok) {
+      return res.status(resolved.statusCode).json({ message: resolved.message });
+    }
+    const fbo = resolved.fbo;
 
-    const countryLink = fbo.fboCountries?.[0] || null;
     const doc = await prisma.fboDocument.create({
       data: {
         countryId: req.countryId,
@@ -198,15 +232,15 @@ async function createDocument(req, res) {
         fboFullName: fbo.nomComplet,
         fboEmail: fbo.email || null,
         fboGrade: fbo.grade || null,
-        fboPointDeVente: countryLink?.pointDeVente || fbo.pointDeVente || null,
+        fboPointDeVente: null,
         city: String(city || "Abidjan").trim(),
         purpose: purpose ? String(purpose).trim() : null,
         signatoryName: authorizedSignatory.name,
         signatoryTitle: authorizedSignatory.title,
         issuedById: req.user?.id || null,
         metadata: {
-          countryCode: countryLink?.country?.code || null,
-          countryName: countryLink?.country?.name || null,
+          countryCode: req.country?.code || null,
+          countryName: req.country?.name || null,
         },
       },
       include: {
