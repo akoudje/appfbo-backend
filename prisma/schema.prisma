@@ -288,6 +288,11 @@ enum FboDocumentStatus {
   CANCELLED
 }
 
+enum SignatoryCivility {
+  M
+  MME
+}
+
 enum MemorialTributeStatus {
   PENDING
   PUBLISHED
@@ -717,6 +722,7 @@ model FboDocument {
   purpose String? @db.Text
   signatoryName String
   signatoryTitle String
+  signatoryCivility SignatoryCivility @default(MME)
   issuedAt DateTime @default(now())
 
   issuedById String?

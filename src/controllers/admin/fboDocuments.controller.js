@@ -16,9 +16,11 @@ const FALLBACK_GRADE = "CLIENT_PRIVILEGIE";
 // Signataires habilités à apparaître sur une attestation FBO officielle.
 // Le formulaire admin propose ces valeurs, mais c'est cette liste côté
 // serveur qui fait foi: on ne fait jamais confiance à un nom/titre de
-// signataire envoyé librement par le client.
+// signataire envoyé librement par le client. La civilité (M/MME) sert à
+// accorder le texte de l'attestation ("Madame"/"Monsieur", "soussigné(e)").
 const AUTHORIZED_SIGNATORIES = [
-  { name: "AHOU YAO EPSE KOFFI", title: "DIRECTRICE DES OPERATIONS" },
+  { name: "AHOU YAO EPSE KOFFI", title: "DIRECTRICE DES OPERATIONS", civility: "MME" },
+  { name: "KRA KOFFI", title: "DIRECTEUR FINANCIER", civility: "M" },
 ];
 
 function normalizeSignatoryKey(value) {
@@ -133,6 +135,10 @@ async function resolveFboFromDirectory(rawNumero) {
   return { ok: true, fbo, profile };
 }
 
+async function listSignatories(req, res) {
+  return res.json({ data: AUTHORIZED_SIGNATORIES });
+}
+
 async function searchFbos(req, res) {
   try {
     const q = String(req.query.q || "").trim();
@@ -237,6 +243,7 @@ async function createDocument(req, res) {
         purpose: purpose ? String(purpose).trim() : null,
         signatoryName: authorizedSignatory.name,
         signatoryTitle: authorizedSignatory.title,
+        signatoryCivility: authorizedSignatory.civility,
         issuedById: req.user?.id || null,
         metadata: {
           countryCode: req.country?.code || null,
@@ -284,6 +291,7 @@ async function cancelDocument(req, res) {
 }
 
 module.exports = {
+  listSignatories,
   searchFbos,
   listDocuments,
   createDocument,
