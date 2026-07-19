@@ -1,6 +1,30 @@
 const crypto = require("crypto");
 const prisma = require("../../prisma");
 
+// Signataires habilités à apparaître sur une attestation FBO officielle.
+// Le formulaire admin propose ces valeurs, mais c'est cette liste côté
+// serveur qui fait foi: on ne fait jamais confiance à un nom/titre de
+// signataire envoyé librement par le client.
+const AUTHORIZED_SIGNATORIES = [
+  { name: "AHOU YAO EPSE KOFFI", title: "DIRECTRICE DES OPERATIONS" },
+];
+
+function normalizeSignatoryKey(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function findAuthorizedSignatory(name, title) {
+  const normalizedName = normalizeSignatoryKey(name);
+  const normalizedTitle = normalizeSignatoryKey(title);
+  return (
+    AUTHORIZED_SIGNATORIES.find(
+      (entry) =>
+        normalizeSignatoryKey(entry.name) === normalizedName &&
+        normalizeSignatoryKey(entry.title) === normalizedTitle,
+    ) || null
+  );
+}
+
 function digitsOnly(value) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -9,16 +33,19 @@ function normalizeFboNumber(value) {
   return digitsOnly(value);
 }
 
-function fboNumberSearchTerms(value) {
-  const raw = String(value || "").trim();
-  const numeric = normalizeFboNumber(raw);
-  const terms = new Set([raw]);
-  if (numeric) {
-    terms.add(numeric);
-    const grouped = numeric.match(/.{1,3}/g)?.join("-");
-    if (grouped) terms.add(grouped);
-  }
-  return [...terms].filter(Boolean);
+// Fbo.numeroFbo est stocké groupé par tirets (ex: "071-420-291-4XX"), mais
+// un admin qui recherche par une partie du numéro (copiée depuis une commande,
+// une capture d'écran, etc.) ne tape pas forcément les tirets aux bonnes
+// positions. On compare donc sur le numéro réduit à ses seuls chiffres côté
+// base de données, ce qui retrouve le FBO quel que soit le formatage saisi.
+async function findFboIdsByDigits(digits) {
+  if (!digits || digits.length < 3) return [];
+  const rows = await prisma.$queryRaw`
+    SELECT "id" FROM "Fbo"
+    WHERE regexp_replace("numeroFbo", '\D', '', 'g') LIKE ${`%${digits}%`}
+    LIMIT 50
+  `;
+  return rows.map((row) => row.id);
 }
 
 function scopedFboWhere(req, extra = {}) {
@@ -54,17 +81,15 @@ async function searchFbos(req, res) {
     const q = String(req.query.q || "").trim();
     if (q.length < 2) return res.json({ data: [] });
 
-    const numberTerms = fboNumberSearchTerms(q);
+    const numberMatchIds = await findFboIdsByDigits(normalizeFboNumber(q));
+
     const fbos = await prisma.fbo.findMany({
       where: scopedFboWhere(req, {
         AND: [{
           OR: [
-          { nomComplet: { contains: q, mode: "insensitive" } },
-          { email: { contains: q, mode: "insensitive" } },
-          ...numberTerms.flatMap((term) => ([
-            { numeroFbo: { contains: term } },
-            { numeroFbo: { endsWith: term } },
-          ])),
+            { nomComplet: { contains: q, mode: "insensitive" } },
+            { email: { contains: q, mode: "insensitive" } },
+            ...(numberMatchIds.length ? [{ id: { in: numberMatchIds } }] : []),
           ],
         }],
       }),
@@ -80,7 +105,21 @@ async function searchFbos(req, res) {
       take: 20,
     });
 
-    return res.json({ data: fbos });
+    // Un même FBO a parfois été enregistré plusieurs fois avec un numéro
+    // saisi différemment (tirets/espaces) sur des commandes distinctes,
+    // créant plusieurs fiches pour la même personne. On ne montre qu'une
+    // fiche par numéro normalisé pour éviter les doublons visuels, en
+    // gardant celle avec le plus d'historique de documents.
+    const byDigits = new Map();
+    for (const fbo of fbos) {
+      const key = normalizeFboNumber(fbo.numeroFbo) || fbo.id;
+      const existing = byDigits.get(key);
+      if (!existing || (fbo._count?.documents || 0) > (existing._count?.documents || 0)) {
+        byDigits.set(key, fbo);
+      }
+    }
+
+    return res.json({ data: [...byDigits.values()] });
   } catch (error) {
     console.error("fboDocuments.searchFbos error:", error);
     return res.status(500).json({ message: "Erreur serveur (searchFbos)" });
@@ -125,9 +164,16 @@ async function createDocument(req, res) {
       fboId,
       city = "Abidjan",
       purpose,
-      signatoryName = "AHOU YAO EPSE KOFFI",
-      signatoryTitle = "DIRECTRICE DES OPERATIONS",
+      signatoryName = AUTHORIZED_SIGNATORIES[0].name,
+      signatoryTitle = AUTHORIZED_SIGNATORIES[0].title,
     } = req.body || {};
+
+    const authorizedSignatory = findAuthorizedSignatory(signatoryName, signatoryTitle);
+    if (!authorizedSignatory) {
+      return res.status(400).json({
+        message: "Signataire non autorisé pour ce type de document.",
+      });
+    }
 
     const fbo = await prisma.fbo.findFirst({
       where: scopedFboWhere(req, { id: String(fboId || "") }),
@@ -155,8 +201,8 @@ async function createDocument(req, res) {
         fboPointDeVente: countryLink?.pointDeVente || fbo.pointDeVente || null,
         city: String(city || "Abidjan").trim(),
         purpose: purpose ? String(purpose).trim() : null,
-        signatoryName: String(signatoryName || "").trim(),
-        signatoryTitle: String(signatoryTitle || "").trim(),
+        signatoryName: authorizedSignatory.name,
+        signatoryTitle: authorizedSignatory.title,
         issuedById: req.user?.id || null,
         metadata: {
           countryCode: countryLink?.country?.code || null,

@@ -39,6 +39,8 @@ const Permission = {
   PREPARATION_UPDATE: "PREPARATION_UPDATE",
 
   EXPORT_READ: "EXPORT_READ",
+
+  FBO_DOCUMENT_ISSUE: "FBO_DOCUMENT_ISSUE",
 };
 
 const ROLE_PERMISSIONS = {
@@ -59,6 +61,7 @@ const ROLE_PERMISSIONS = {
     Permission.PAYMENT_VALIDATE,
     Permission.PREPARATION_UPDATE,
     Permission.EXPORT_READ,
+    Permission.FBO_DOCUMENT_ISSUE,
   ],
 
   [AdminRole.SALES_DIRECTOR]: [
