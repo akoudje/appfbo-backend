@@ -1091,6 +1091,10 @@ model Preorder {
   @@index([fulfilledById])
   @@index([cancelledById])
   @@index([factureReference])
+  // Index unique partiel (countryId, lower(trim(factureReference))) pour les commandes
+  // créées à partir du 2026-07-21, posé en SQL brut (voir migration
+  // 20260721000000_as400_reference_unique_going_forward) car Prisma ne modélise pas
+  // les index partiels/filtrés dans le DSL du schéma.
   @@index([paymentExpiresAt])
   @@index([paymentCollectionCode])
   @@index([activePaymentId])

@@ -276,14 +276,6 @@ async function findAs400ReferenceDuplicate(req, reference, currentOrderId) {
   return serializeAs400Duplicate(duplicate);
 }
 
-function shouldConfirmAs400Duplicate(body = {}) {
-  return (
-    body.confirmDuplicateAs400Reference === true ||
-    body.confirmDuplicate === true ||
-    String(body.confirmDuplicateAs400Reference || "").toLowerCase() === "true"
-  );
-}
-
 function canRegularizeFulfillment(role) {
   const normalized = String(role || "").trim().toUpperCase();
   return (
@@ -1200,7 +1192,6 @@ async function invoiceOrder(req, res) {
       note,
       fboGrade,
       invoiceAmountFcfa,
-      confirmDuplicateAs400Reference,
     } =
       req.body || {};
 
@@ -1212,11 +1203,11 @@ async function invoiceOrder(req, res) {
       normalizedInvoiceRef,
       id,
     );
-    if (duplicate && !shouldConfirmAs400Duplicate({ confirmDuplicateAs400Reference })) {
+    if (duplicate) {
       return res.status(409).json({
         code: "AS400_REFERENCE_DUPLICATE",
         message:
-          "Cette référence AS400 est déjà utilisée sur une autre commande. Vérifiez avant de confirmer la facturation.",
+          "Cette référence AS400 est déjà utilisée sur une autre commande. Modifiez d'abord la référence de cette commande avant de la réutiliser ici.",
         duplicate,
       });
     }
@@ -1247,6 +1238,14 @@ async function invoiceOrder(req, res) {
     return res.json(result.preorder);
   } catch (e) {
     console.error("invoiceOrder error:", e);
+
+    if (e.code === "P2002" && String(e.meta?.target || "").includes("factureReference")) {
+      return res.status(409).json({
+        code: "AS400_REFERENCE_DUPLICATE",
+        message:
+          "Cette référence AS400 est déjà utilisée sur une autre commande. Modifiez d'abord la référence de cette commande avant de la réutiliser ici.",
+      });
+    }
 
     if (e.message === "PREORDER_NOT_FOUND") {
       return res.status(404).json({ message: "Commande introuvable" });
@@ -1306,12 +1305,7 @@ async function correctAs400Invoice(req, res) {
   const actorAdminId = req.user?.id || null;
 
   try {
-    const {
-      factureReference,
-      invoiceAmountFcfa,
-      note,
-      confirmDuplicateAs400Reference,
-    } = req.body || {};
+    const { factureReference, invoiceAmountFcfa, note } = req.body || {};
     const normalizedInvoiceRef = normalizeInvoiceReference(factureReference);
     const normalizedAmountFcfa = normalizeInvoiceAmountInput(invoiceAmountFcfa);
 
@@ -1358,11 +1352,11 @@ async function correctAs400Invoice(req, res) {
       normalizedInvoiceRef,
       id,
     );
-    if (duplicate && !shouldConfirmAs400Duplicate({ confirmDuplicateAs400Reference })) {
+    if (duplicate) {
       return res.status(409).json({
         code: "AS400_REFERENCE_DUPLICATE",
         message:
-          "Cette référence AS400 est déjà utilisée sur une autre commande. Confirmez uniquement si c'est volontaire.",
+          "Cette référence AS400 est déjà utilisée sur une autre commande. Modifiez d'abord la référence de cette commande avant de la réutiliser ici.",
         duplicate,
       });
     }
@@ -1457,6 +1451,14 @@ async function correctAs400Invoice(req, res) {
     });
   } catch (e) {
     console.error("correctAs400Invoice error:", e);
+
+    if (e.code === "P2002" && String(e.meta?.target || "").includes("factureReference")) {
+      return res.status(409).json({
+        code: "AS400_REFERENCE_DUPLICATE",
+        message:
+          "Cette référence AS400 est déjà utilisée sur une autre commande. Modifiez d'abord la référence de cette commande avant de la réutiliser ici.",
+      });
+    }
 
     if (e.message === "INVALID_INVOICE_AMOUNT") {
       return res.status(400).json({
