@@ -112,7 +112,24 @@ function buildMailerSendFrom(cfg) {
   return { email: cfg.fromEmail, name: cfg.fromName };
 }
 
-async function sendWithMailerSend({ to, subject, body, html = null, metadata = {} }) {
+function buildMailerSendAttachments(attachments = []) {
+  return attachments
+    .map((attachment) => {
+      const content = attachment?.content;
+      if (!content) return null;
+      const base64 = Buffer.isBuffer(content)
+        ? content.toString("base64")
+        : Buffer.from(String(content), "utf8").toString("base64");
+      return {
+        content: base64,
+        filename: String(attachment?.filename || "piece-jointe"),
+        disposition: "attachment",
+      };
+    })
+    .filter(Boolean);
+}
+
+async function sendWithMailerSend({ to, subject, body, html = null, metadata = {}, attachments = [] }) {
   const cfg = getMailerSendConfig();
   if (!cfg.apiKey) {
     return {
@@ -136,12 +153,14 @@ async function sendWithMailerSend({ to, subject, body, html = null, metadata = {
   }
 
   try {
+    const mailerSendAttachments = buildMailerSendAttachments(attachments);
     const payload = {
       from: buildMailerSendFrom(cfg),
       to: [{ email: to }],
       subject: String(subject || "").trim() || "Notification commande FOREVER",
       text: String(body || ""),
       ...(html ? { html: String(html) } : {}),
+      ...(mailerSendAttachments.length ? { attachments: mailerSendAttachments } : {}),
       personalization: [
         {
           email: to,
@@ -283,7 +302,7 @@ function ensureTransporter() {
   return transporter;
 }
 
-async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
+async function sendEmail({ to, subject, body, html = null, metadata = {}, attachments = [] }) {
   const normalizedTo = normalizeEmail(to);
   if (!normalizedTo) {
     return {
@@ -315,6 +334,7 @@ async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
       body,
       html,
       metadata,
+      attachments,
     });
   }
 
@@ -335,6 +355,7 @@ async function sendEmail({ to, subject, body, html = null, metadata = {} }) {
         subject: String(subject || "").trim() || "Notification commande FOREVER",
         text: String(body || ""),
         html: html ? String(html) : undefined,
+        attachments: attachments.length ? attachments : undefined,
         headers: {
           "X-AppFbo-PreorderId": String(metadata?.preorderId || ""),
           "X-AppFbo-TicketOrderId": String(metadata?.ticketOrderId || ""),

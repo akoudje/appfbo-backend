@@ -50,6 +50,21 @@ function otpResendCooldownSeconds() {
   return value;
 }
 
+// Durée plancher de réponse pour /auth/otp/request : sans ça, un compte
+// inexistant répond quasi instantanément (aucun envoi SMS/email) alors
+// qu'un compte existant attend le retour de l'API SMS/email — un écart de
+// latence mesurable qui permet de deviner quels numéros FBO existent même
+// si le message renvoyé est identique dans les deux cas.
+function otpRequestMinResponseMs() {
+  const value = Number.parseInt(process.env.CUSTOMER_OTP_MIN_RESPONSE_MS || "1500", 10);
+  if (!Number.isFinite(value) || value < 0) return 1500;
+  return value;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isProduction() {
   return String(process.env.NODE_ENV || "").toLowerCase() === "production";
 }
@@ -190,14 +205,26 @@ async function resolveFboAndDestinations({ countryId, countryCode, numeroFbo, re
 }
 
 async function requestOtp(req, res) {
+  const startedAt = Date.now();
+  // Répond toujours après un délai plancher identique, que le compte existe
+  // ou non. Sans ça, un numéro FBO inconnu renvoie quasi instantanément
+  // (aucun appel réseau) alors qu'un numéro valide attend le retour de
+  // l'API SMS/email — un écart de latence mesurable qui révèle quels
+  // numéros existent même si le corps de la réponse est identique.
+  async function respond(status, payload) {
+    const remaining = otpRequestMinResponseMs() - (Date.now() - startedAt);
+    if (remaining > 0) await sleep(remaining);
+    return res.status(status).json(payload);
+  }
+
   try {
     const countryId = req.country?.id || req.countryId;
     const { numeroFbo, channel, phone } = req.body || {};
     if (!countryId) {
-      return res.status(400).json({ message: "Country required" });
+      return respond(400, { message: "Country required" });
     }
     if (!numeroFbo || !String(numeroFbo).trim()) {
-      return res.status(400).json({ message: "numeroFbo requis" });
+      return respond(400, { message: "numeroFbo requis" });
     }
 
     const resolved = await resolveFboAndDestinations({
@@ -209,7 +236,7 @@ async function requestOtp(req, res) {
     });
 
     if (!resolved) {
-      return res.json(buildGenericOtpRequestResponse({
+      return respond(200, buildGenericOtpRequestResponse({
         channel: channel || "",
       }));
     }
@@ -220,7 +247,7 @@ async function requestOtp(req, res) {
     });
 
     if (resolved.hasNoReachableChannel) {
-      return res.status(409).json({
+      return respond(409, {
         ok: false,
         message: OTP_RESEND_UNAVAILABLE_MESSAGE,
         channel: "",
@@ -250,7 +277,7 @@ async function requestOtp(req, res) {
         cooldownSeconds - Math.ceil(elapsedMs / 1000),
       );
       if (retryAfterSeconds > 0) {
-        return res.status(429).json({
+        return respond(429, {
           ok: false,
           message: `Un code a déjà été envoyé récemment. Attendez ${retryAfterSeconds}s avant de redemander un nouveau code.`,
           channel: activeChallenge.channel || resolved.channel || "",
@@ -329,7 +356,7 @@ async function requestOtp(req, res) {
       .join(" • ");
 
     if (!successes.length || !usedChannel) {
-      return res.status(502).json({
+      return respond(502, {
         message: "Impossible d'envoyer le code OTP",
         errorCode: failures?.[0]?.errorCode || "OTP_SEND_FAILED",
         failures,
@@ -367,7 +394,7 @@ async function requestOtp(req, res) {
       });
     });
 
-    return res.json({
+    return respond(200, {
       ...buildGenericOtpRequestResponse({
         channel: usedChannel,
         destinationMasked,
@@ -380,7 +407,7 @@ async function requestOtp(req, res) {
     });
   } catch (e) {
     console.error("requestOtp error:", e);
-    return res.status(500).json({ message: "Erreur serveur (requestOtp)" });
+    return respond(500, { message: "Erreur serveur (requestOtp)" });
   }
 }
 
@@ -469,7 +496,9 @@ async function verifyOtp(req, res) {
 
     return res.json({
       ok: true,
-      token,
+      // Le JWT n'est plus renvoyé dans le corps de la réponse : il vit
+      // uniquement dans le cookie httpOnly posé ci-dessus, pour qu'aucun
+      // script côté client ne puisse jamais le lire (protection XSS).
       profile: {
         fboId: fbo.id,
         numeroFbo: fbo.numeroFbo,

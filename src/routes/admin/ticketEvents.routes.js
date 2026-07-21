@@ -97,6 +97,31 @@ router.get(
 );
 
 router.get(
+  "/:id/summary",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.getEventSummary,
+);
+
+router.get(
+  "/:id/orders/export",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.exportEventOrders,
+);
+
+router.get(
+  "/:id/summary/export",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.exportEventPaymentReport,
+);
+
+router.post(
+  "/:id/orders/bulk-restitution-email",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.uploadRestitutionFileMiddleware,
+  ticketEventsController.sendRestitutionEmail,
+);
+
+router.get(
   "/:id",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.getEvent,
