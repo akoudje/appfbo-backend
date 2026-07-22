@@ -434,6 +434,8 @@ async function createDraft(req, res) {
           id: true,
           preorderNumber: true,
           status: true,
+          fboNomComplet: true,
+          fboGrade: true,
         },
       });
 
@@ -442,6 +444,8 @@ async function createDraft(req, res) {
           preorderId: existingDraft.id,
           preorderNumber: existingDraft.preorderNumber,
           status: existingDraft.status,
+          fboNomComplet: existingDraft.fboNomComplet,
+          fboGrade: existingDraft.fboGrade,
           reused: true,
         });
       }
@@ -609,6 +613,8 @@ async function createDraft(req, res) {
       preorderNumber: preorder.preorderNumber,
       status: preorder.status,
       directoryLookupWarning,
+      fboNomComplet: preorder.fboNomComplet,
+      fboGrade: preorder.fboGrade,
     });
   } catch (e) {
     if (e?.code === "P2002") {
@@ -617,13 +623,15 @@ async function createDraft(req, res) {
       if (countryId && clientDraftKey) {
         const existingDraft = await prisma.preorder.findFirst({
           where: { countryId, clientDraftKey },
-          select: { id: true, preorderNumber: true, status: true },
+          select: { id: true, preorderNumber: true, status: true, fboNomComplet: true, fboGrade: true },
         });
         if (existingDraft) {
           return res.json({
             preorderId: existingDraft.id,
             preorderNumber: existingDraft.preorderNumber,
             status: existingDraft.status,
+            fboNomComplet: existingDraft.fboNomComplet,
+            fboGrade: existingDraft.fboGrade,
             reused: true,
           });
         }
