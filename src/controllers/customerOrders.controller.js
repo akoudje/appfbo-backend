@@ -8,8 +8,10 @@ const {
   validateCountryOrderOptions,
 } = require("../services/country-order-options.service");
 const { buildPublicBankProofContext } = require("./customerBankProof.controller");
+const { sendPreorderNotification } = require("../services/preorder-notifications.service");
 
 const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
+const CUSTOMER_CANCELLABLE_STATUSES = ["DRAFT", "SUBMITTED"];
 
 function canonicalFboNumber(raw = "") {
   const digits = String(raw || "").replace(/\D/g, "");
@@ -215,6 +217,101 @@ async function getMyOrder(req, res) {
   } catch (e) {
     console.error("getMyOrder error:", e);
     return res.status(500).json({ message: "Erreur serveur (getMyOrder)" });
+  }
+}
+
+function buildCustomerCancelMessage(order) {
+  const preorderNumber = String(
+    order?.preorderNumber || order?.paymentCollectionCode || order?.id || "-",
+  ).trim();
+  return `Votre precommande ${preorderNumber} a ete annulee a votre demande depuis l'espace client.`
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function cancelMyOrder(req, res) {
+  try {
+    const fboId = req.customer?.fboId;
+    const numeroFbo = canonicalFboNumber(req.customer?.numeroFbo || "");
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: {
+        id,
+        country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
+        OR: [
+          { fboId },
+          ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
+        ],
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (order.status === "CANCELLED") {
+      return res.json({ ok: true, alreadyDone: true, status: order.status });
+    }
+
+    if (!CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)) {
+      return res.status(400).json({
+        message:
+          "Cette commande a déjà été facturée ou traitée : elle ne peut plus être annulée depuis l'espace client. Contactez le support si besoin.",
+      });
+    }
+
+    const cancelReason =
+      reason && String(reason).trim()
+        ? String(reason).trim()
+        : "Annulée par le client depuis l'espace client.";
+    const now = new Date();
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: now,
+          cancelReason,
+          cancelledById: null,
+        },
+      });
+
+      await tx.preorderLog.create({
+        data: {
+          preorderId: order.id,
+          action: "CANCEL",
+          note: cancelReason,
+          meta: {
+            fromStatus: order.status,
+            toStatus: "CANCELLED",
+            actor: "CUSTOMER",
+          },
+          actorAdminId: null,
+        },
+      });
+
+      return saved;
+    });
+
+    try {
+      const preorderForNotification = { ...order, ...updated };
+      await sendPreorderNotification({
+        preorder: preorderForNotification,
+        purpose: "CUSTOMER_CANCEL",
+        message: buildCustomerCancelMessage(preorderForNotification),
+        actorName: "CUSTOMER_PORTAL_CANCEL",
+      });
+    } catch (notifyError) {
+      console.error("cancelMyOrder notification failed:", notifyError?.message || notifyError);
+    }
+
+    return res.json({ ok: true, status: updated.status, order: updated });
+  } catch (e) {
+    console.error("cancelMyOrder error:", e);
+    return res.status(500).json({ message: "Erreur serveur (cancelMyOrder)" });
   }
 }
 
@@ -426,5 +523,6 @@ async function reorderMyOrder(req, res) {
 module.exports = {
   listMyOrders,
   getMyOrder,
+  cancelMyOrder,
   reorderMyOrder,
 };

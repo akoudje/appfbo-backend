@@ -51,6 +51,7 @@ router.post("/me/notifications/read", requireCustomerAuth, customerNotifications
 router.post("/me/notifications/read-all", requireCustomerAuth, customerNotificationsController.markAllMyNotificationsRead);
 router.get("/me/orders/:id", requireCustomerAuth, customerOrdersController.getMyOrder);
 router.post("/me/orders/:id/reorder", requireCustomerAuth, customerOrdersController.reorderMyOrder);
+router.post("/me/orders/:id/cancel", requireCustomerAuth, customerOrdersController.cancelMyOrder);
 router.get(
   "/me/orders/:id/bank-proofs/:proofId/file",
   requireCustomerAuth,
