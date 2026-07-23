@@ -368,19 +368,15 @@ async function createDraft(req, res) {
         error: "Nom complet et grade sont requis pour continuer",
       });
     }
+    // Le consentement n'est plus exigé à la création du brouillon : consulter le
+    // catalogue avec son numéro FBO ne nécessite pas d'accord préalable. Il est
+    // en revanche obligatoire à la soumission finale (voir submit()).
     const consentAccepted = isExplicitConsentAccepted(personalDataConsentAccepted);
     const consentVersion =
       String(personalDataConsentVersion || DATA_PROTECTION_CONSENT_VERSION).trim() ||
       DATA_PROTECTION_CONSENT_VERSION;
     const hasEmailField = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
     const normalizedEmail = normalizeEmail(email);
-
-    if (!consentAccepted) {
-      return res.status(400).json({
-        error: "Consentement au traitement des données personnelles requis",
-        code: "PERSONAL_DATA_CONSENT_REQUIRED",
-      });
-    }
 
     if (normalizedEmail === "__INVALID_EMAIL__") {
       return res.status(400).json({
@@ -562,8 +558,8 @@ async function createDraft(req, res) {
 
           preorderPaymentMode: normalizedPaymentMode,
           deliveryMode: normalizedDeliveryMode,
-          personalDataConsentAccepted: true,
-          personalDataConsentAcceptedAt: new Date(),
+          personalDataConsentAccepted: consentAccepted,
+          personalDataConsentAcceptedAt: consentAccepted ? new Date() : null,
           personalDataConsentVersion: consentVersion,
 
           status: "DRAFT",
@@ -593,7 +589,7 @@ async function createDraft(req, res) {
             preorderDateKey,
             countryId,
             countryCode,
-            personalDataConsentAccepted: true,
+            personalDataConsentAccepted: consentAccepted,
             personalDataConsentVersion: consentVersion,
             placedByFboNumero:
               normalizedPlacedByFboNumero &&
@@ -915,7 +911,15 @@ async function getSummary(req, res) {
 
 async function submit(req, res) {
   const preorderId = req.params.id;
-  const { phoneRaw, phoneNormalized, email, paymentMode } = req.body || {};
+  const {
+    phoneRaw,
+    phoneNormalized,
+    email,
+    paymentMode,
+    deliveryMode,
+    personalDataConsentAccepted,
+    personalDataConsentVersion,
+  } = req.body || {};
   const countryId = req.country.id;
   const clientSubmissionKey = getClientIdempotencyKey(req, "clientSubmissionKey");
 
@@ -1011,16 +1015,22 @@ async function submit(req, res) {
       });
     }
 
-    if (!preorder.deliveryMode) {
-      return res
-        .status(400)
-        .json({ error: "Le mode de livraison est obligatoire." });
-    }
-
     if (!isNonEmptyString(preorder.fboNumero) || !preorder.fboGrade) {
       return res
         .status(400)
         .json({ error: "Les informations FBO sont incomplètes." });
+    }
+
+    // Le consentement n'est plus exigé à la création du brouillon (voir
+    // createDraft()) : il est obligatoire ici, à la soumission finale.
+    const requestedConsentAccepted = isExplicitConsentAccepted(personalDataConsentAccepted);
+    const effectiveConsentAccepted = Boolean(preorder.personalDataConsentAccepted) || requestedConsentAccepted;
+
+    if (!effectiveConsentAccepted) {
+      return res.status(400).json({
+        error: "Consentement au traitement des données personnelles requis",
+        code: "PERSONAL_DATA_CONSENT_REQUIRED",
+      });
     }
 
     const hasEmailField = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
@@ -1039,10 +1049,22 @@ async function submit(req, res) {
       String(preorder.preorderPaymentMode || "").trim().toUpperCase() ||
       null;
 
+    // Le mode de livraison n'est plus collecté à l'identification : il peut
+    // arriver ici pour la première fois, depuis le récapitulatif.
+    const requestedDeliveryMode = deliveryMode
+      ? String(deliveryMode).trim().toUpperCase()
+      : preorder.deliveryMode;
+
     const normalizedDeliveryMode = resolveDeliveryModeForPayment(
       effectivePaymentMode,
-      preorder.deliveryMode,
+      requestedDeliveryMode,
     );
+
+    if (!normalizedDeliveryMode) {
+      return res
+        .status(400)
+        .json({ error: "Le mode de livraison est obligatoire." });
+    }
 
     const optionValidation = validateCountryOrderOptions({
       settings: preorder.country?.settings,
@@ -1064,8 +1086,13 @@ async function submit(req, res) {
       (normalizedPaymentMode &&
         normalizedPaymentMode !==
           String(preorder.preorderPaymentMode || "").trim().toUpperCase()) ||
-      normalizedDeliveryMode !== preorder.deliveryMode
+      normalizedDeliveryMode !== preorder.deliveryMode ||
+      (requestedConsentAccepted && !preorder.personalDataConsentAccepted)
     ) {
+      const consentVersion =
+        String(personalDataConsentVersion || DATA_PROTECTION_CONSENT_VERSION).trim() ||
+        DATA_PROTECTION_CONSENT_VERSION;
+
       const updatedPreorder = await prisma.preorder.update({
         where: { id: preorder.id },
         data: {
@@ -1074,12 +1101,20 @@ async function submit(req, res) {
             ? { preorderPaymentMode: normalizedPaymentMode }
             : {}),
           deliveryMode: normalizedDeliveryMode,
+          ...(requestedConsentAccepted && !preorder.personalDataConsentAccepted
+            ? {
+                personalDataConsentAccepted: true,
+                personalDataConsentAcceptedAt: new Date(),
+                personalDataConsentVersion: consentVersion,
+              }
+            : {}),
         },
       });
 
       preorder.fboEmail = updatedPreorder.fboEmail;
       preorder.preorderPaymentMode = updatedPreorder.preorderPaymentMode;
       preorder.deliveryMode = updatedPreorder.deliveryMode;
+      preorder.personalDataConsentAccepted = updatedPreorder.personalDataConsentAccepted;
     }
 
     const smsTo = normalizePhoneForCountry(
