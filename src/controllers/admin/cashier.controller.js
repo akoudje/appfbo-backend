@@ -562,6 +562,65 @@ async function getWorkspace(req, res) {
   }
 }
 
+async function getPaidToday(req, res) {
+  try {
+    const { date } = req.query;
+    const dayStart = normalizeDateStart(date) || normalizeDateStart(new Date());
+    const dayEnd = normalizeDateEnd(date) || normalizeDateEnd(new Date());
+
+    const where = scopeWhere(req, {
+      paymentStatus: "PAID",
+      paidAt: { gte: dayStart, lte: dayEnd },
+    });
+
+    const includeShape = {
+      country: {
+        select: { code: true, name: true },
+      },
+      activePayment: {
+        include: {
+          attempts: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+          },
+        },
+      },
+      manualPaymentValidatedBy: {
+        select: { id: true, fullName: true, email: true, role: true },
+      },
+      cashierTransactions: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        include: {
+          cashier: { select: { id: true, fullName: true, email: true, role: true } },
+        },
+      },
+    };
+
+    const orders = await prisma.preorder.findMany({
+      where,
+      include: includeShape,
+      orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
+      take: 1000,
+    });
+
+    const rows = orders.map(buildOrderSummary);
+
+    return res.json({
+      ok: true,
+      date: dayStart.toISOString().slice(0, 10),
+      total: rows.length,
+      totalAmountFcfa: sumAmount(rows, "amountReceivedFcfa"),
+      rows,
+    });
+  } catch (error) {
+    console.error("cashier getPaidToday error:", error);
+    return res.status(500).json({
+      message: error.message || "Erreur serveur (cashier paid-today)",
+    });
+  }
+}
+
 async function launchPreparation(req, res) {
   try {
     const { id } = req.params;
@@ -778,6 +837,7 @@ async function reportAs400CertificationMissing(req, res) {
 
 module.exports = {
   getWorkspace,
+  getPaidToday,
   launchPreparation,
   reportAs400CertificationMissing,
 };

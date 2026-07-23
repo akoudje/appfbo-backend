@@ -11,6 +11,12 @@ router.get(
   cashierController.getWorkspace,
 );
 
+router.get(
+  "/paid-today",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  cashierController.getPaidToday,
+);
+
 router.post(
   "/orders/:id/prepare",
   requirePermission(Permission.PAYMENT_VALIDATE),
