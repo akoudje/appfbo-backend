@@ -489,7 +489,11 @@ async function verifyOtp(req, res) {
     res.cookie("cpt", token, {
       httpOnly: true,
       secure: isProd,
-      sameSite: isProd ? "strict" : "lax",
+      // Le frontend (Vercel) et le backend (Render) sont deux domaines
+      // différents : un cookie SameSite=Strict/Lax n'est jamais renvoyé sur
+      // ces requêtes cross-site, ce qui déconnectait l'utilisateur aussitôt
+      // après une connexion réussie. "None" exige "secure" (déjà vrai en prod).
+      sameSite: isProd ? "none" : "lax",
       maxAge: cookieMaxAge,
       path: "/api/customer",
     });
@@ -518,7 +522,7 @@ function logout(req, res) {
   res.clearCookie("cpt", {
     httpOnly: true,
     secure: isProd,
-    sameSite: isProd ? "strict" : "lax",
+    sameSite: isProd ? "none" : "lax",
     path: "/api/customer",
   });
   return res.json({ ok: true });
