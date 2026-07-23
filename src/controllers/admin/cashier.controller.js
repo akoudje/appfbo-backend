@@ -629,7 +629,13 @@ async function launchPreparation(req, res) {
     const order = await prisma.preorder.findFirst({
       where: scopeWhere(req, { id }),
       include: {
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: { id: true, nom: true, sku: true },
+            },
+          },
+        },
         messages: {
           orderBy: { createdAt: "desc" },
           take: 5,
@@ -675,7 +681,50 @@ async function launchPreparation(req, res) {
     const updatedOrder = await prisma.$transaction(async (tx) => {
       const parcelNumber = order.parcelNumber || generateParcelNumber(order);
 
+      // Le stock est réservé dès le lancement de la préparation, pas à la fin
+      // (voir "Marquer colis prêt") : une fois le colis entamé, son stock ne
+      // doit plus pouvoir être consommé par une autre commande.
       for (const item of order.items || []) {
+        const updatedStock = await tx.countryProduct.updateMany({
+          where: {
+            countryId: order.countryId,
+            productId: item.productId,
+            actif: true,
+            stockQty: { gte: item.qty },
+          },
+          data: {
+            stockQty: { decrement: item.qty },
+          },
+        });
+
+        if (updatedStock.count !== 1) {
+          const err = new Error(
+            `Stock insuffisant pour ${
+              item.productNameSnapshot || item.product?.nom || item.productId
+            }`,
+          );
+          err.statusCode = 409;
+          throw err;
+        }
+
+        await tx.stockMovement.create({
+          data: {
+            productId: item.productId,
+            countryId: order.countryId,
+            preorderId: order.id,
+            type: "DEBIT",
+            reason: "PREPARE_ORDER",
+            qty: item.qty,
+            note: "Sortie de stock au lancement de la préparation (réservée pour cette commande)",
+            meta: {
+              preorderId: order.id,
+              productId: item.productId,
+              qty: item.qty,
+            },
+            createdById: actorAdminId,
+          },
+        });
+
         await tx.preparationChecklistItem.upsert({
           where: {
             preorderId_preorderItemId: {
@@ -700,6 +749,7 @@ async function launchPreparation(req, res) {
           packingNote: packingNote
             ? String(packingNote).trim()
             : order.packingNote,
+          stockDeductedAt: now,
         },
       });
 
@@ -765,7 +815,7 @@ async function launchPreparation(req, res) {
     });
   } catch (error) {
     console.error("launchPreparation error:", error);
-    return res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       message: error.message || "Erreur serveur (launchPreparation)",
     });
   }

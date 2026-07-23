@@ -2791,74 +2791,6 @@ async function prepareOrder(req, res) {
         .json({ message: "Impossible de préparer une commande vide." });
     }
 
-    if (order.stockDeductedAt) {
-      const now = new Date();
-      const parcelNumber = order.parcelNumber || generateParcelNumber(order);
-      const pickupSecretCode =
-        order.pickupSecretCode ||
-        String(Math.floor(100000 + Math.random() * 900000));
-      const actorName = actorLabel(req);
-
-      const updated = await prisma.$transaction(async (tx) => {
-        const saved = await tx.preorder.update({
-          where: { id: order.id },
-          data: {
-            status: "READY",
-            parcelNumber,
-            preparedAt: order.preparedAt || now,
-            pickupSecretCode,
-            packingNote: packingNote
-              ? String(packingNote).trim()
-              : order.packingNote,
-            preparedById: order.preparedById || req.user?.id || null,
-          },
-        });
-
-        await addLogTx(
-          tx,
-          id,
-          "PREPARE",
-          packingNote || "Colis prêt",
-          {
-            fromStatus: order.status,
-            toStatus: "READY",
-            stockDeducted: false,
-            stockAlreadyDeducted: true,
-            parcelNumber,
-            pickupSecretCode,
-          },
-          req.user?.id || null,
-        );
-
-        return saved;
-      });
-
-      try {
-        await sendPreorderNotification({
-          preorder: {
-            ...order,
-            ...updated,
-            parcelNumber,
-            pickupSecretCode,
-          },
-          purpose: "ORDER_READY",
-          message: buildOrderReadySmsMessage({
-            preorder: {
-              ...order,
-              ...updated,
-              parcelNumber,
-            },
-            pickupSecretCode,
-          }),
-          actorName,
-        });
-      } catch (smsError) {
-        console.error("prepareOrder already-deducted sms error:", smsError);
-      }
-
-      return res.json(updated);
-    }
-
     const unresolvedBlockingAnomalies = await prisma.preparationAnomaly.count({
       where: {
         preorderId: order.id,
@@ -2898,48 +2830,54 @@ async function prepareOrder(req, res) {
       order.pickupSecretCode ||
       String(Math.floor(100000 + Math.random() * 900000));
     const actorName = actorLabel(req);
+    // Le stock est normalement déjà réservé au lancement de la préparation
+    // (voir cashier.controller.js launchPreparation). On ne le décompte ici
+    // que par sécurité, pour les commandes déjà en cours avant ce changement.
+    const stockAlreadyDeducted = Boolean(order.stockDeductedAt);
 
     const updated = await prisma.$transaction(async (tx) => {
-      for (const item of order.items) {
-        const updatedStock = await tx.countryProduct.updateMany({
-          where: {
-            countryId: order.countryId,
-            productId: item.productId,
-            actif: true,
-            stockQty: { gte: item.qty },
-          },
-          data: {
-            stockQty: { decrement: item.qty },
-          },
-        });
-
-        if (updatedStock.count !== 1) {
-          const err = new Error(
-            `Stock insuffisant pour ${
-              item.productNameSnapshot || item.product?.nom || item.productId
-            }`,
-          );
-          err.statusCode = 409;
-          throw err;
-        }
-
-        await tx.stockMovement.create({
-          data: {
-            productId: item.productId,
-            countryId: order.countryId,
-            preorderId: order.id,
-            type: "DEBIT",
-            reason: "PREPARE_ORDER",
-            qty: item.qty,
-            note: "Sortie de stock lors de la préparation commande",
-            meta: {
-              preorderId: order.id,
+      if (!stockAlreadyDeducted) {
+        for (const item of order.items) {
+          const updatedStock = await tx.countryProduct.updateMany({
+            where: {
+              countryId: order.countryId,
               productId: item.productId,
-              qty: item.qty,
+              actif: true,
+              stockQty: { gte: item.qty },
             },
-            createdById: req.user?.id || null,
-          },
-        });
+            data: {
+              stockQty: { decrement: item.qty },
+            },
+          });
+
+          if (updatedStock.count !== 1) {
+            const err = new Error(
+              `Stock insuffisant pour ${
+                item.productNameSnapshot || item.product?.nom || item.productId
+              }`,
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          await tx.stockMovement.create({
+            data: {
+              productId: item.productId,
+              countryId: order.countryId,
+              preorderId: order.id,
+              type: "DEBIT",
+              reason: "PREPARE_ORDER",
+              qty: item.qty,
+              note: "Sortie de stock lors de la préparation commande",
+              meta: {
+                preorderId: order.id,
+                productId: item.productId,
+                qty: item.qty,
+              },
+              createdById: req.user?.id || null,
+            },
+          });
+        }
       }
 
       const saved = await tx.preorder.update({
@@ -2965,7 +2903,8 @@ async function prepareOrder(req, res) {
         {
           fromStatus: order.status,
           toStatus: "READY",
-          stockDeducted: true,
+          stockDeducted: !stockAlreadyDeducted,
+          stockAlreadyDeducted,
           parcelNumber,
           pickupSecretCode,
         },
