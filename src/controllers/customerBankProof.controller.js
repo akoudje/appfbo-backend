@@ -943,4 +943,5 @@ module.exports = {
   getPublicBankProofContextByOrderId,
   submitPublicBankProof,
   submitPublicBankProofByOrderId,
+  buildPublicBankProofContext,
 };

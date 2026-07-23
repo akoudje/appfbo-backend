@@ -7,6 +7,7 @@ const {
   resolveDeliveryModeForPayment,
   validateCountryOrderOptions,
 } = require("../services/country-order-options.service");
+const { buildPublicBankProofContext } = require("./customerBankProof.controller");
 
 const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
 
@@ -143,6 +144,20 @@ async function getMyOrder(req, res) {
           select: {
             code: true,
             name: true,
+            settings: {
+              select: {
+                ecobankPayMerchantName: true,
+                ecobankPayMerchantId: true,
+                ecobankPayTerminalName: true,
+                ecobankPayTerminalId: true,
+                ecobankPayQrImageUrl: true,
+                ecobankPayInstructions: true,
+                piSpiAlias: true,
+                piSpiMerchantName: true,
+                piSpiQrImageUrl: true,
+                piSpiInstructions: true,
+              },
+            },
           },
         },
         items: {
@@ -187,7 +202,16 @@ async function getMyOrder(req, res) {
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
-    return res.json(attachCustomerPaymentWindow(order));
+
+    const relationType = order.fboNumero === numeroFbo ? "SELF" : "PLACED_FOR_OTHER";
+    const paymentContext = buildPublicBankProofContext(order);
+
+    return res.json({
+      ...attachCustomerPaymentWindow(order),
+      relationType,
+      ecobankPay: paymentContext.ecobankPay,
+      piSpi: paymentContext.piSpi,
+    });
   } catch (e) {
     console.error("getMyOrder error:", e);
     return res.status(500).json({ message: "Erreur serveur (getMyOrder)" });
