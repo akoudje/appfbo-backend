@@ -54,63 +54,74 @@ function attachCustomerPaymentWindow(order) {
   };
 }
 
+const ORDERS_PAGE_SIZE = 20;
+
 async function listMyOrders(req, res) {
   try {
     const fboId = req.customer?.fboId;
     const numeroFbo = canonicalFboNumber(req.customer?.numeroFbo || "");
-    const rows = await prisma.preorder.findMany({
-      where: {
-        country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
-        // Les brouillons (DRAFT) sont des paniers de "recommander" pas
-        // encore finalisés : ce ne sont pas de vraies commandes.
-        status: { not: "DRAFT" },
-        OR: [
-          { fboId },
-          ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
-        ],
-      },
-      select: {
-        id: true,
-        country: {
-          select: {
-            code: true,
-            name: true,
+    const page = Math.max(1, Number.parseInt(req.query?.page, 10) || 1);
+    const skip = (page - 1) * ORDERS_PAGE_SIZE;
+
+    const where = {
+      country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
+      // Les brouillons (DRAFT) sont des paniers de "recommander" pas
+      // encore finalisés : ce ne sont pas de vraies commandes.
+      status: { not: "DRAFT" },
+      OR: [
+        { fboId },
+        ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
+      ],
+    };
+
+    const [rows, total] = await Promise.all([
+      prisma.preorder.findMany({
+        where,
+        select: {
+          id: true,
+          country: {
+            select: {
+              code: true,
+              name: true,
+            },
+          },
+          preorderNumber: true,
+          status: true,
+          paymentStatus: true,
+          preorderPaymentMode: true,
+          fboNumero: true,
+          fboNomComplet: true,
+          placedByFboNumero: true,
+          placedByFboName: true,
+          placedByHomeCountryCode: true,
+          totalFcfa: true,
+          factureReference: true,
+          paymentCollectionCode: true,
+          invoicedAt: true,
+          paymentExpiresAt: true,
+          parcelNumber: true,
+          bankPaymentStatus: true,
+          bankPaymentDueAt: true,
+          createdAt: true,
+          updatedAt: true,
+          bankPaymentProofs: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              submittedAt: true,
+              fileUrl: true,
+              rejectionReason: true,
+            },
           },
         },
-        preorderNumber: true,
-        status: true,
-        paymentStatus: true,
-        preorderPaymentMode: true,
-        fboNumero: true,
-        fboNomComplet: true,
-        placedByFboNumero: true,
-        placedByFboName: true,
-        placedByHomeCountryCode: true,
-        totalFcfa: true,
-        factureReference: true,
-        paymentCollectionCode: true,
-        invoicedAt: true,
-        paymentExpiresAt: true,
-        parcelNumber: true,
-        bankPaymentStatus: true,
-        bankPaymentDueAt: true,
-        createdAt: true,
-        updatedAt: true,
-        bankPaymentProofs: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: {
-            id: true,
-            status: true,
-            submittedAt: true,
-            fileUrl: true,
-            rejectionReason: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    });
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: ORDERS_PAGE_SIZE,
+      }),
+      prisma.preorder.count({ where }),
+    ]);
 
     return res.json({
       data: rows.map((row) => {
@@ -122,6 +133,10 @@ async function listMyOrders(req, res) {
           latestBankProof: row.bankPaymentProofs?.[0] || null,
         });
       }),
+      total,
+      page,
+      pageSize: ORDERS_PAGE_SIZE,
+      hasMore: skip + rows.length < total,
     });
   } catch (e) {
     console.error("listMyOrders error:", e);
