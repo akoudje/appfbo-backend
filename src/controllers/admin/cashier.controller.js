@@ -564,13 +564,16 @@ async function getWorkspace(req, res) {
 
 async function getPaidToday(req, res) {
   try {
-    const { date } = req.query;
+    const { date, ids } = req.query;
     const dayStart = normalizeDateStart(date) || normalizeDateStart(new Date());
     const dayEnd = normalizeDateEnd(date) || normalizeDateEnd(new Date());
+    const idList = typeof ids === "string"
+      ? ids.split(",").map((v) => v.trim()).filter(Boolean)
+      : [];
 
     const where = scopeWhere(req, {
       paymentStatus: "PAID",
-      paidAt: { gte: dayStart, lte: dayEnd },
+      ...(idList.length ? { id: { in: idList } } : { paidAt: { gte: dayStart, lte: dayEnd } }),
     });
 
     const includeShape = {
