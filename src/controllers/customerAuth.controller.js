@@ -579,6 +579,10 @@ async function dashboard(req, res) {
 
     const where = {
       country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
+      // Les brouillons (DRAFT) sont des paniers de "recommander" pas encore
+      // finalisés : ce ne sont pas de vraies commandes, elles ne doivent pas
+      // apparaître dans l'espace client.
+      status: { not: "DRAFT" },
       OR: [
         { fboId: fbo.id },
         ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
@@ -601,11 +605,11 @@ async function dashboard(req, res) {
         where: { ...where, status: { in: ACTIVE_ORDER_STATUSES } },
       }),
       prisma.preorder.count({
-        where: { country: where.country, fboId: fbo.id },
+        where: { country: where.country, status: { not: "DRAFT" }, fboId: fbo.id },
       }),
       numeroFbo
         ? prisma.preorder.count({
-            where: { country: where.country, placedByFboNumero: numeroFbo },
+            where: { country: where.country, status: { not: "DRAFT" }, placedByFboNumero: numeroFbo },
           })
         : 0,
       prisma.preorder.count({

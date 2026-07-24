@@ -11,7 +11,7 @@ const { buildPublicBankProofContext } = require("./customerBankProof.controller"
 const { sendPreorderNotification } = require("../services/preorder-notifications.service");
 
 const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
-const CUSTOMER_CANCELLABLE_STATUSES = ["DRAFT", "SUBMITTED"];
+const CUSTOMER_CANCELLABLE_STATUSES = ["SUBMITTED"];
 
 function canonicalFboNumber(raw = "") {
   const digits = String(raw || "").replace(/\D/g, "");
@@ -61,6 +61,9 @@ async function listMyOrders(req, res) {
     const rows = await prisma.preorder.findMany({
       where: {
         country: { code: { in: CIV_ZONE_COUNTRY_CODES } },
+        // Les brouillons (DRAFT) sont des paniers de "recommander" pas
+        // encore finalisés : ce ne sont pas de vraies commandes.
+        status: { not: "DRAFT" },
         OR: [
           { fboId },
           ...(numeroFbo ? [{ placedByFboNumero: numeroFbo }] : []),
