@@ -90,6 +90,10 @@ function buildOrderSummary(order) {
     fboNumero: order.fboNumero,
     totalFcfa: order.totalFcfa,
     amountExpectedFcfa: expectedAmount,
+    // Montant certifié AS400 (fixé à la facturation) : c'est la référence
+    // "officielle" utilisée par le rapport commercial ; on l'expose ici pour
+    // que la réconciliation AS400 de la caisse affiche le même total.
+    as400InvoiceTotalFcfa: Number(order.as400InvoiceTotalFcfa || order.totalFcfa || 0) || 0,
     paidAt: order.paidAt,
     invoicedAt: order.invoicedAt,
     preparationLaunchedAt: order.preparationLaunchedAt,
@@ -613,7 +617,10 @@ async function getPaidToday(req, res) {
       ok: true,
       date: dayStart.toISOString().slice(0, 10),
       total: rows.length,
-      totalAmountFcfa: sumAmount(rows, "amountReceivedFcfa"),
+      // Aligné sur le montant certifié AS400 (même référence que le rapport
+      // commercial) plutôt que sur le montant reçu en caisse, pour éviter
+      // les écarts entre les deux vues.
+      totalAmountFcfa: rows.reduce((sum, row) => sum + Number(row.as400InvoiceTotalFcfa || 0), 0),
       rows,
     });
   } catch (error) {
