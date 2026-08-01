@@ -827,11 +827,39 @@ model Product {
   preorderItems  PreorderItem[]
   stockMovements StockMovement[]
   countryProducts CountryProduct[]
+  packagings ProductPackaging[]
 
   @@index([actif])
   @@index([nom])
   @@index([category])
   @@index([countryId])
+}
+
+// Unité de vente/conditionnement d'un produit (pack de 6, carton de 12, carton de 36...).
+// Le SKU du produit reste le même pour toutes ses unités de caisse : ce qui distingue
+// un conditionnement des autres, c'est le couple (productId, label), pas le SKU.
+model ProductPackaging {
+  id String @id @default(cuid())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  label           String // ex: "Unité", "Pack de 6", "Carton de 12", "Carton de 36"
+  unitsPerPackage Int    // nombre d'unités de base contenues dans ce conditionnement
+
+  // Code-barres propre à ce conditionnement (EAN-13 unité / EAN-14 carton...), distinct du SKU produit
+  barcode String? @unique
+
+  // Prix du conditionnement ; si non renseigné, dérivé de Product.prixBaseFcfa * unitsPerPackage
+  prixFcfa Int?
+
+  actif Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, label])
+  @@index([productId])
 }
 
 model CountryProduct {
