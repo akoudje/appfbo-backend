@@ -310,6 +310,10 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
       gradePrices: {
         where: { countryId: preorder.countryId },
       },
+      packagings: {
+        where: { actif: true },
+        orderBy: { unitsPerPackage: "asc" },
+      },
     },
   });
 
@@ -347,6 +351,13 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
 
         cc: Number(product.cc || 0),
         poidsKg: Number(product.poidsKg || 0),
+
+        packagings: (product.packagings || []).map((p) => ({
+          id: p.id,
+          label: p.label,
+          unitsPerPackage: p.unitsPerPackage,
+          barcode: p.barcode || null,
+        })),
       };
     })
     .filter(Boolean);
@@ -394,6 +405,11 @@ async function computePreorderTotals(preorderId, countryId) {
     computedItems.push({
       productId: it.productId,
       qty: line.qty,
+
+      productPackagingId: it.productPackagingId || null,
+      packagingLabelSnapshot: it.packagingLabelSnapshot || null,
+      packagingUnitsPerPackage: it.packagingUnitsPerPackage || null,
+      packagingQty: it.packagingQty || null,
 
       productSkuSnapshot: product.sku || null,
       productNameSnapshot: product.nom || null,
@@ -500,6 +516,11 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
     computedItems.push({
       productId: it.productId,
       qty: line.qty,
+
+      productPackagingId: it.productPackagingId || null,
+      packagingLabelSnapshot: it.packagingLabelSnapshot || null,
+      packagingUnitsPerPackage: it.packagingUnitsPerPackage || null,
+      packagingQty: it.packagingQty || null,
 
       productSkuSnapshot: product.sku || null,
       productNameSnapshot: product.nom || null,

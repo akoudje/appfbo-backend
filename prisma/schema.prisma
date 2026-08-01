@@ -858,6 +858,8 @@ model ProductPackaging {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  preorderItems PreorderItem[]
+
   @@unique([productId, label])
   @@index([productId])
 }
@@ -1428,6 +1430,15 @@ model PreorderItem {
 
   qty Int @default(1)
 
+  // Conditionnement choisi au moment de la commande (pack de 6, carton de 12...).
+  // qty reste toujours exprimé en unités de base ; ces champs ne sont qu'un snapshot
+  // de l'unité de vente utilisée pour arriver à cette quantité.
+  productPackagingId       String?
+  productPackaging         ProductPackaging? @relation(fields: [productPackagingId], references: [id], onDelete: SetNull)
+  packagingLabelSnapshot   String?
+  packagingUnitsPerPackage Int?
+  packagingQty             Int?
+
   productSkuSnapshot  String?
   productNameSnapshot String?
 
@@ -1450,6 +1461,7 @@ model PreorderItem {
 
   @@unique([preorderId, productId])
   @@index([productId])
+  @@index([productPackagingId])
 }
 
 model PreparationChecklistItem {

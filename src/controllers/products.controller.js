@@ -90,6 +90,17 @@ async function listProducts(req, res) {
               maxQtyPerOrder: true,
             },
           },
+          packagings: {
+            where: { actif: true },
+            orderBy: { unitsPerPackage: "asc" },
+            select: {
+              id: true,
+              label: true,
+              unitsPerPackage: true,
+              barcode: true,
+              prixFcfa: true,
+            },
+          },
         },
       }),
     ]);
@@ -139,6 +150,17 @@ async function getProductById(req, res) {
             stockQty: true,
             actif: true,
             maxQtyPerOrder: true,
+          },
+        },
+        packagings: {
+          where: { actif: true },
+          orderBy: { unitsPerPackage: "asc" },
+          select: {
+            id: true,
+            label: true,
+            unitsPerPackage: true,
+            barcode: true,
+            prixFcfa: true,
           },
         },
 

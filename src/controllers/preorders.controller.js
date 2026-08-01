@@ -734,6 +734,7 @@ async function setItems(req, res) {
       .map((it) => ({
         productId: String(it.productId || "").trim(),
         qty: Math.max(0, parseInt(it.qty || 0, 10) || 0),
+        productPackagingId: String(it.productPackagingId || "").trim() || null,
       }))
       .filter((it) => it.productId && it.qty > 0);
 
@@ -777,13 +778,61 @@ async function setItems(req, res) {
       }
     }
 
+    // Un conditionnement (pack/carton) choisi transforme "qty" (nombre de conditionnements)
+    // en quantité d'unités de base, qui reste la seule unité stockée/utilisée pour le stock et la tarification.
+    const packagingIds = [
+      ...new Set(requestedItems.map((it) => it.productPackagingId).filter(Boolean)),
+    ];
+    const packagingsById = new Map();
+
+    if (packagingIds.length > 0) {
+      const packagings = await prisma.productPackaging.findMany({
+        where: { id: { in: packagingIds }, actif: true },
+      });
+      for (const packaging of packagings) {
+        packagingsById.set(packaging.id, packaging);
+      }
+    }
+
+    for (const it of requestedItems) {
+      if (!it.productPackagingId) continue;
+      const packaging = packagingsById.get(it.productPackagingId);
+      if (!packaging || packaging.productId !== it.productId) {
+        return res.status(400).json({
+          error: "Conditionnement invalide pour un des produits sélectionnés",
+        });
+      }
+    }
+
     const normalized = requestedItems.map((it) => {
       const product = productsById.get(it.productId);
       const limit = resolveMaxQtyForProduct(product, globalMaxQtyPerProduct);
+      const packaging = it.productPackagingId
+        ? packagingsById.get(it.productPackagingId)
+        : null;
+
+      if (!packaging) {
+        return {
+          productId: it.productId,
+          qty: Math.min(it.qty, limit),
+          productPackagingId: null,
+          packagingLabelSnapshot: null,
+          packagingUnitsPerPackage: null,
+          packagingQty: null,
+        };
+      }
+
+      // Clamp au nombre de conditionnements entiers pour que packagingQty * unitsPerPackage reste == qty
+      const maxPackagingQty = Math.max(1, Math.floor(limit / packaging.unitsPerPackage));
+      const packagingQty = Math.min(it.qty, maxPackagingQty);
 
       return {
         productId: it.productId,
-        qty: Math.min(it.qty, limit),
+        qty: packagingQty * packaging.unitsPerPackage,
+        productPackagingId: packaging.id,
+        packagingLabelSnapshot: packaging.label,
+        packagingUnitsPerPackage: packaging.unitsPerPackage,
+        packagingQty,
       };
     });
 
@@ -796,6 +845,11 @@ async function setItems(req, res) {
             preorderId,
             productId: it.productId,
             qty: it.qty,
+
+            productPackagingId: it.productPackagingId,
+            packagingLabelSnapshot: it.packagingLabelSnapshot,
+            packagingUnitsPerPackage: it.packagingUnitsPerPackage,
+            packagingQty: it.packagingQty,
 
             productSkuSnapshot: null,
             productNameSnapshot: null,

@@ -210,6 +210,9 @@ function productSelectForCountry(countryId, extra = {}) {
         prixFcfa: true,
       },
     },
+    packagings: {
+      orderBy: { unitsPerPackage: "asc" },
+    },
   };
 }
 
