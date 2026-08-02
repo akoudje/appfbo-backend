@@ -1362,11 +1362,23 @@ async function correctAs400Invoice(req, res) {
     }
 
     const now = new Date();
+    // Comme à la facturation initiale (invoiceAndSendPreorder.service.js),
+    // le montant saisi ici couvre produits + timbre ; livraison et
+    // emballage (déjà figés sur la commande) s'ajoutent toujours par-dessus
+    // et ne sont jamais écrasés par la correction du facturier. Si aucun
+    // montant n'est fourni (correction de la seule référence), le total
+    // existant est conservé tel quel.
+    const nextTotalFcfa =
+      normalizedAmountFcfa !== null
+        ? normalizedAmountFcfa +
+          Number(order.fraisLivraisonFcfa || 0) +
+          Number(order.emballageFcfa || 0)
+        : Number(order.totalFcfa || order.as400InvoiceTotalFcfa || 0);
     const paymentPricing = computePaymentPricing({
       preorderPaymentMode: order.preorderPaymentMode,
       paymentMode: order.paymentMode,
       paymentProvider: order.paymentProvider,
-      orderTotalFcfa: normalizedAmountFcfa,
+      orderTotalFcfa: nextTotalFcfa,
     });
 
     await prisma.$transaction(async (tx) => {
@@ -1387,8 +1399,8 @@ async function correctAs400Invoice(req, res) {
         where: { id: order.id },
         data: {
           factureReference: normalizedInvoiceRef,
-          as400InvoiceTotalFcfa: normalizedAmountFcfa,
-          totalFcfa: normalizedAmountFcfa,
+          as400InvoiceTotalFcfa: nextTotalFcfa,
+          totalFcfa: nextTotalFcfa,
           activePaymentId: null,
           paymentStatus: "UNPAID",
           status:
@@ -1409,9 +1421,9 @@ async function correctAs400Invoice(req, res) {
           previousFactureReference: order.factureReference || null,
           nextFactureReference: normalizedInvoiceRef,
           previousAs400InvoiceTotalFcfa: order.as400InvoiceTotalFcfa || null,
-          nextAs400InvoiceTotalFcfa: normalizedAmountFcfa,
+          nextAs400InvoiceTotalFcfa: nextTotalFcfa,
           previousTotalFcfa: order.totalFcfa || null,
-          nextTotalFcfa: normalizedAmountFcfa,
+          nextTotalFcfa,
           previousActivePaymentId: order.activePaymentId || null,
           previousActivePaymentAmountExpectedFcfa:
             order.activePayment?.amountExpectedFcfa || null,

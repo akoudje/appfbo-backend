@@ -229,8 +229,18 @@ async function buildInvoicePreview({
   const invoiceAmountOverrideFcfa = normalizeInvoiceAmountOverride(
     invoiceAmountOverrideInput,
   );
+  // Le "Montant AS400" saisi par le facturier couvre les produits + le
+  // timbre d'état (déjà intégré côté AS400) — pas la livraison ni
+  // l'emballage, qui sont des frais propres à l'app et inconnus d'AS400.
+  // On les ajoute donc systématiquement, sans jamais pouvoir être écrasés
+  // par la saisie du facturier.
+  const as400BaseTotalFcfa =
+    invoiceAmountOverrideFcfa ??
+    pricingSummary.totals.totalProduitsFcfa + pricingSummary.totals.timbreEtatFcfa;
   const effectiveInvoiceTotalFcfa =
-    invoiceAmountOverrideFcfa ?? pricingSummary.totals.totalFcfa;
+    as400BaseTotalFcfa +
+    pricingSummary.totals.fraisLivraisonFcfa +
+    pricingSummary.totals.emballageFcfa;
 
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: preorder.preorderPaymentMode,
@@ -504,8 +514,15 @@ async function invoiceAndSendPreorder({
   const invoiceAmountOverrideFcfa = normalizeInvoiceAmountOverride(
     invoiceAmountOverrideInput,
   );
+  // Voir buildInvoicePreview() : le montant AS400 couvre produits + timbre,
+  // livraison et emballage s'ajoutent toujours par-dessus.
+  const as400BaseTotalFcfa =
+    invoiceAmountOverrideFcfa ??
+    pricingSummary.totals.totalProduitsFcfa + pricingSummary.totals.timbreEtatFcfa;
   const effectiveInvoiceTotalFcfa =
-    invoiceAmountOverrideFcfa ?? pricingSummary.totals.totalFcfa;
+    as400BaseTotalFcfa +
+    pricingSummary.totals.fraisLivraisonFcfa +
+    pricingSummary.totals.emballageFcfa;
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: existingPreorder.preorderPaymentMode,
     paymentMode: existingPreorder.paymentMode,
