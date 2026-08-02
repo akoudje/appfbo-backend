@@ -141,6 +141,7 @@ async function getCountrySettings(req, res) {
         countryId: true,
         minCartFcfa: true,
         maxQtyPerProduct: true,
+        packagingFeeFcfa: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
         publicAnnouncementEnabled: true,
@@ -203,6 +204,7 @@ async function getCountrySettings(req, res) {
         countryCode: req.country?.code || null,
         minCartFcfa: 100,
         maxQtyPerProduct: 10,
+        packagingFeeFcfa: 100,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: null,
         publicAnnouncementEnabled: false,
@@ -285,6 +287,7 @@ async function updateCountrySettings(req, res) {
     const {
       minCartFcfa,
       maxQtyPerProduct,
+      packagingFeeFcfa,
       preorderSubmissionEnabled,
       preorderSubmissionDisabledMessage,
       publicAnnouncementEnabled,
@@ -353,6 +356,14 @@ async function updateCountrySettings(req, res) {
         return res.status(400).json({ message: "maxQtyPerProduct invalide" });
       }
       data.maxQtyPerProduct = parsed;
+    }
+
+    if (packagingFeeFcfa !== undefined) {
+      const parsed = Number.parseInt(packagingFeeFcfa, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({ message: "packagingFeeFcfa invalide" });
+      }
+      data.packagingFeeFcfa = parsed;
     }
 
     if (preorderSubmissionEnabled !== undefined) {
@@ -614,6 +625,8 @@ async function updateCountrySettings(req, res) {
             data.minCartFcfa !== undefined ? data.minCartFcfa : 100,
           maxQtyPerProduct:
             data.maxQtyPerProduct !== undefined ? data.maxQtyPerProduct : 10,
+          packagingFeeFcfa:
+            data.packagingFeeFcfa !== undefined ? data.packagingFeeFcfa : 100,
           preorderSubmissionEnabled:
             data.preorderSubmissionEnabled !== undefined
               ? data.preorderSubmissionEnabled
@@ -709,6 +722,7 @@ async function updateCountrySettings(req, res) {
         countryId: true,
         minCartFcfa: true,
         maxQtyPerProduct: true,
+        packagingFeeFcfa: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
         publicAnnouncementEnabled: true,

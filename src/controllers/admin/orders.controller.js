@@ -1828,6 +1828,7 @@ async function replaceBillingOrderItem(req, res) {
           totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
+          emballageFcfa: summary.totals.emballageFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
           as400InvoiceTotalFcfa: summary.totals.totalFcfa || 0,
           computedGradeTotalFcfa: summary.totals.totalFcfa || 0,

@@ -56,8 +56,14 @@ function computeStateStampFcfa({ countryCode, taxableAmountFcfa }) {
   return 5000;
 }
 
-function computePackagingFeeFcfa() {
-  return 0;
+// Frais d'emballage fixe par précommande, configurable par pays (règles
+// commerciales de l'admin-app, CountrySettings.packagingFeeFcfa). 100 FCFA
+// par défaut si le pays n'a pas encore de CountrySettings en base.
+// TODO: tarification dynamique (quantité/poids/volume) — non retenue pour
+// l'instant, on se limite volontairement à un forfait fixe.
+function computePackagingFeeFcfa({ packagingFeeFcfa } = {}) {
+  const fee = Number(packagingFeeFcfa);
+  return Number.isFinite(fee) && fee >= 0 ? Math.round(fee) : 100;
 }
 
 function applyDiscount(prixBaseFcfa, discountPercent) {
@@ -444,8 +450,7 @@ async function computePreorderTotals(preorderId, countryId) {
   });
 
   const emballageFcfa = computePackagingFeeFcfa({
-    countryCode: preorder.country?.code,
-    totalProduitsFcfa,
+    packagingFeeFcfa: preorder.country?.settings?.packagingFeeFcfa,
   });
   const taxableAmountFcfa = totalProduitsFcfa + fraisLivraisonFcfa + emballageFcfa;
   const timbreEtatFcfa = computeStateStampFcfa({
@@ -555,8 +560,7 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
   });
 
   const emballageFcfa = computePackagingFeeFcfa({
-    countryCode: preorder.country?.code,
-    totalProduitsFcfa,
+    packagingFeeFcfa: preorder.country?.settings?.packagingFeeFcfa,
   });
   const taxableAmountFcfa = totalProduitsFcfa + fraisLivraisonFcfa + emballageFcfa;
   const timbreEtatFcfa = computeStateStampFcfa({

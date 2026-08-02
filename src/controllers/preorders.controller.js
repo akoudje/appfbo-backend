@@ -95,6 +95,7 @@ function serializeExistingPreorder(preorder) {
       totalPoidsKg: Number(preorder.totalPoidsKg || 0),
       totalProduitsFcfa: Number(preorder.totalProduitsFcfa || 0),
       fraisLivraisonFcfa: Number(preorder.fraisLivraisonFcfa || 0),
+      emballageFcfa: Number(preorder.emballageFcfa || 0),
       totalFcfa: Number(preorder.totalFcfa || 0),
     },
     smsTo: preorder.factureWhatsappTo || null,
@@ -884,6 +885,7 @@ async function setItems(req, res) {
           ),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
+          emballageFcfa: summary.totals.emballageFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
         },
       });
@@ -1287,6 +1289,7 @@ async function submit(req, res) {
           totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
           totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
           fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
+          emballageFcfa: summary.totals.emballageFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
           factureWhatsappTo: smsTo,
           whatsappMessage: smsMessage,

@@ -566,6 +566,7 @@ async function invoiceAndSendPreorder({
         ),
         totalProduitsFcfa: pricingSummary.totals.totalProduitsFcfa || 0,
         fraisLivraisonFcfa: pricingSummary.totals.fraisLivraisonFcfa || 0,
+        emballageFcfa: pricingSummary.totals.emballageFcfa || 0,
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
 
         // file facturier

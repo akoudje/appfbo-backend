@@ -65,6 +65,7 @@ function buildPreorderWhatsAppMessage({ preorder, items = [], totals = {} }) {
   lines.push(`Totaux :`);
   lines.push(`Produits : ${formatFcfa(totals.totalProduitsFcfa)}`);
   lines.push(`Livraison : ${formatFcfa(totals.fraisLivraisonFcfa)}`);
+  lines.push(`Emballage : ${formatFcfa(totals.emballageFcfa)}`);
   lines.push(`TOTAL : ${formatFcfa(totals.totalFcfa)}`);
 
   return lines.join("\n");

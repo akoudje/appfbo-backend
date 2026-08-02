@@ -527,6 +527,7 @@ model CountrySettings {
 
   minCartFcfa Int @default(0)
   maxQtyPerProduct Int @default(10)
+  packagingFeeFcfa Int @default(100)
   preorderSubmissionEnabled Boolean @default(true)
   preorderSubmissionDisabledMessage String? @db.Text
   publicAnnouncementEnabled Boolean @default(false)
@@ -975,6 +976,7 @@ model Preorder {
   totalPoidsKg       Decimal @default(0.000) @db.Decimal(12, 3)
   totalProduitsFcfa  Int     @default(0)
   fraisLivraisonFcfa Int     @default(0)
+  emballageFcfa      Int     @default(0)
   totalFcfa          Int     @default(0)
   indicativeTotalFcfa Int?
   computedGradeTotalFcfa Int?
