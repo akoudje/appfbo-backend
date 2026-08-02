@@ -35,7 +35,10 @@ const PREORDER_SUBMISSION_DISABLED_MESSAGE =
 const FBO_CHECK_RATE_LIMIT_WINDOW_MS = Number(process.env.FBO_CHECK_RATE_LIMIT_WINDOW_MS || 60000);
 const FBO_CHECK_RATE_LIMIT_MAX = Number(process.env.FBO_CHECK_RATE_LIMIT_MAX || 30);
 const fboCheckRateLimitBuckets = new Map();
-const DATA_PROTECTION_CONSENT_VERSION = "preorder-step1-v1";
+// Doit rester identique à DATA_PROTECTION_CONSENT_VERSION côté frontend
+// (usePreorderStore.js / Step3Recap.jsx) : le consentement est collecté au
+// récapitulatif, pas à la création du brouillon.
+const DATA_PROTECTION_CONSENT_VERSION = "preorder-recap-v1";
 const DEFAULT_POINT_DE_VENTE_BY_COUNTRY = {
   CIV: "ABIDJAN",
   BFA: "OUAGADOUGOU",

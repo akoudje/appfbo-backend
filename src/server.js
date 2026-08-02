@@ -32,6 +32,9 @@ const {
   startExpiredInvoiceAutoCancelScheduler,
 } = require("./services/preorder-expiration.service");
 const {
+  startDraftRetentionScheduler,
+} = require("./services/preorder-draft-retention.service");
+const {
   startNotificationDispatchScheduler,
 } = require("./services/notification-dispatch.service");
 
@@ -270,4 +273,5 @@ app.listen(PORT, "0.0.0.0", () => {
 });
 
 startExpiredInvoiceAutoCancelScheduler();
+startDraftRetentionScheduler();
 startNotificationDispatchScheduler();
