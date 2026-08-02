@@ -21,8 +21,12 @@ function parsePositiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+// Désactivé par défaut (opt-in explicite) : un premier passage en prod
+// purgerait plusieurs milliers de DRAFT historiques d'un coup (constaté :
+// 6193 lignes de plus de 30 jours). Ne pas activer sans avoir d'abord
+// vérifié/exporté ces brouillons si des statistiques d'abandon en dépendent.
 function isPurgeEnabled() {
-  return String(process.env.PREORDER_DRAFT_PURGE_ENABLED ?? "true").toLowerCase() !== "false";
+  return String(process.env.PREORDER_DRAFT_PURGE_ENABLED ?? "false").toLowerCase() === "true";
 }
 
 function getDraftRetentionDays() {
