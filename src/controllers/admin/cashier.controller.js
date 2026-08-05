@@ -146,15 +146,6 @@ function buildOrderSummary(order) {
             : null,
         }
       : null,
-    logs: Array.isArray(order.logs)
-      ? order.logs.map((log) => ({
-          id: log.id,
-          action: log.action,
-          note: log.note,
-          meta: log.meta || null,
-          createdAt: log.createdAt,
-        }))
-      : [],
     latestAttempt: latestAttempt
       ? {
           id: latestAttempt.id,
@@ -166,8 +157,6 @@ function buildOrderSummary(order) {
           providerLaunchUrl: latestAttempt.providerLaunchUrl,
           completedAt: latestAttempt.completedAt,
           createdAt: latestAttempt.createdAt,
-          requestPayloadJson: latestAttempt.requestPayloadJson || null,
-          normalizedPayloadJson: latestAttempt.normalizedPayloadJson || null,
         }
       : null,
     activePayment: order.activePayment
@@ -395,6 +384,11 @@ async function getWorkspace(req, res) {
     };
     const validationWhere = allowConsolidated ? baseValidationWhere : personalValidationWhere;
 
+    // N'inclut que les champs réellement consommés par CashierWorkspacePage
+    // (voir buildOrderSummary ci-dessous) : ni les logs d'activité (jamais
+    // affichés dans cette liste), ni les payloads bruts des tentatives de
+    // paiement (gros blobs JSON de debug gateway), pour ne pas alourdir 5
+    // requêtes en parallèle × jusqu'à 500 lignes.
     const includeShape = {
       country: {
         select: { code: true, name: true },
@@ -404,6 +398,21 @@ async function getWorkspace(req, res) {
           attempts: {
             orderBy: { createdAt: "desc" },
             take: 1,
+            select: {
+              id: true,
+              providerSessionId: true,
+              providerTransactionId: true,
+              providerPayerPhone: true,
+              providerStatusLabel: true,
+              checkoutUrl: true,
+              providerLaunchUrl: true,
+              completedAt: true,
+              createdAt: true,
+              // Nécessaires uniquement pour le repli de getPayerPhone() ci-dessus ;
+              // jamais renvoyés au frontend (voir buildOrderSummary).
+              requestPayloadJson: true,
+              normalizedPayloadJson: true,
+            },
           },
         },
       },
@@ -422,17 +431,6 @@ async function getWorkspace(req, res) {
       },
       preparationLaunchedBy: {
         select: { id: true, fullName: true, role: true },
-      },
-      logs: {
-        orderBy: { createdAt: "desc" },
-        take: 8,
-        select: {
-          id: true,
-          action: true,
-          note: true,
-          meta: true,
-          createdAt: true,
-        },
       },
     };
 
@@ -589,6 +587,21 @@ async function getPaidToday(req, res) {
           attempts: {
             orderBy: { createdAt: "desc" },
             take: 1,
+            select: {
+              id: true,
+              providerSessionId: true,
+              providerTransactionId: true,
+              providerPayerPhone: true,
+              providerStatusLabel: true,
+              checkoutUrl: true,
+              providerLaunchUrl: true,
+              completedAt: true,
+              createdAt: true,
+              // Nécessaires uniquement pour le repli de getPayerPhone() ci-dessus ;
+              // jamais renvoyés au frontend (voir buildOrderSummary).
+              requestPayloadJson: true,
+              normalizedPayloadJson: true,
+            },
           },
         },
       },
