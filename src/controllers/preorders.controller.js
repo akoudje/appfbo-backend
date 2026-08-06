@@ -423,7 +423,7 @@ async function createDraft(req, res) {
       });
     }
 
-    const clientDraftKey = getClientIdempotencyKey(req, "clientDraftKey");
+    let clientDraftKey = getClientIdempotencyKey(req, "clientDraftKey");
     if (clientDraftKey) {
       const existingDraft = await prisma.preorder.findFirst({
         where: {
@@ -434,20 +434,31 @@ async function createDraft(req, res) {
           id: true,
           preorderNumber: true,
           status: true,
+          fboNumero: true,
           fboNomComplet: true,
           fboGrade: true,
         },
       });
 
       if (existingDraft) {
-        return res.json({
-          preorderId: existingDraft.id,
-          preorderNumber: existingDraft.preorderNumber,
-          status: existingDraft.status,
-          fboNomComplet: existingDraft.fboNomComplet,
-          fboGrade: existingDraft.fboGrade,
-          reused: true,
-        });
+        if (existingDraft.fboNumero === normalizedNumeroFbo) {
+          return res.json({
+            preorderId: existingDraft.id,
+            preorderNumber: existingDraft.preorderNumber,
+            status: existingDraft.status,
+            fboNomComplet: existingDraft.fboNomComplet,
+            fboGrade: existingDraft.fboGrade,
+            reused: true,
+          });
+        }
+
+        // La clé d'idempotency correspond à un brouillon existant mais pour un
+        // AUTRE numéro FBO (client qui a réutilisé une ancienne clé après être
+        // revenu à l'étape 1 changer d'identité — voir usePreorderStore.js
+        // createDraft()). On ne le réutilise pas, et on ne peut pas non plus
+        // recréer avec la même clé (contrainte unique countryId+clientDraftKey)
+        // : on en dérive une nouvelle pour ce nouveau brouillon.
+        clientDraftKey = `${clientDraftKey}:refbo:${Date.now()}`;
       }
     }
 
