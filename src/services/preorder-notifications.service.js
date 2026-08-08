@@ -373,6 +373,26 @@ function escapeHtml(value = "") {
     .replace(/'/g, "&#39;");
 }
 
+// Une ligne "Code XXX: valeur" (code de retrait, code encaissement...) est un
+// code que le client doit noter/présenter — on la sort du paragraphe pour la
+// mettre en évidence dans un encart, plutôt que la noyer dans du texte plat.
+const CODE_LINE_PATTERN = /^(Code[^:]{0,40}):\s*(.+)$/i;
+
+function buildHighlightBoxHtml({ label, value }) {
+  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 16px;">
+    <tr>
+      <td style="background:#fff7d6;border:1px solid #f0cf57;border-radius:10px;padding:14px 18px;text-align:center;">
+        <div style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#8d7a5c;">${escapeHtml(
+          label,
+        )}</div>
+        <div style="font-size:28px;font-weight:800;letter-spacing:0.06em;color:#111111;font-family:'Courier New',Courier,monospace;">${escapeHtml(
+          value,
+        )}</div>
+      </td>
+    </tr>
+  </table>`;
+}
+
 function textToHtmlParagraphs(value = "") {
   const blocks = String(value || "")
     .split(/\n{2,}/)
@@ -380,12 +400,34 @@ function textToHtmlParagraphs(value = "") {
     .filter(Boolean);
 
   return blocks
-    .map(
-      (block) =>
-        `<p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;">${escapeHtml(
-          block,
-        ).replace(/\n/g, "<br/>")}</p>`,
-    )
+    .map((block) => {
+      const lines = block.split("\n");
+      const pieces = [];
+      let textBuffer = [];
+
+      const flushText = () => {
+        if (!textBuffer.length) return;
+        pieces.push(
+          `<p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;">${escapeHtml(
+            textBuffer.join("\n"),
+          ).replace(/\n/g, "<br/>")}</p>`,
+        );
+        textBuffer = [];
+      };
+
+      for (const line of lines) {
+        const match = line.match(CODE_LINE_PATTERN);
+        if (match) {
+          flushText();
+          pieces.push(buildHighlightBoxHtml({ label: match[1].trim(), value: match[2].trim() }));
+        } else {
+          textBuffer.push(line);
+        }
+      }
+      flushText();
+
+      return pieces.join("");
+    })
     .join("");
 }
 

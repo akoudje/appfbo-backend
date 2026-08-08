@@ -46,9 +46,14 @@ function getOrangeEnvName(baseName, countryCode = "CIV") {
 function buildPreorderSmsMessage({ preorder, totals }) {
   const total = Number(totals?.totalFcfa ?? preorder?.totalFcfa ?? 0);
   const totalFmt = new Intl.NumberFormat("fr-FR").format(total);
+  const customer = String(preorder?.fboNomComplet || "").trim();
   const candidates = [
-    `Précommande bien reçue. Nous préparons votre facture et revenons vers vous rapidement.`,
-    `Précommande reçue. Facture en préparation.`,
+    customer
+      ? `Bonjour ${customer}, précommande bien reçue. Nous préparons votre facture et revenons vers vous rapidement.`
+      : `Précommande bien reçue. Nous préparons votre facture et revenons vers vous rapidement.`,
+    customer
+      ? `Bonjour ${customer}, précommande reçue. Facture en préparation.`
+      : `Précommande reçue. Facture en préparation.`,
     `Précommande reçue.`,
   ];
 
