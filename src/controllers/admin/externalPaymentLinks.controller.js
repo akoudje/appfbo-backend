@@ -4,9 +4,31 @@ const { sendSms } = require("../../services/sms.service");
 const externalWavePaymentService = require("../../services/external-wave-payment.service");
 
 const ALLOWED_STATUSES = new Set(["DRAFT", "ACTIVE", "PAID", "CANCELLED", "EXPIRED"]);
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 
 function generateToken() {
   return crypto.randomBytes(24).toString("base64url");
+}
+
+function normalizePagination(query = {}) {
+  const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
+  const pageSize = Math.min(
+    MAX_PAGE_SIZE,
+    Math.max(1, Number.parseInt(query.pageSize, 10) || DEFAULT_PAGE_SIZE),
+  );
+  return { page, pageSize, skip: (page - 1) * pageSize, take: pageSize };
+}
+
+function normalizeExpiresAt(body = {}) {
+  const explicit = normalizeOptionalText(body.expiresAt);
+  if (explicit) {
+    const date = new Date(explicit);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const hours = Number.parseFloat(body.expiresInHours);
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+  return new Date(Date.now() + hours * 60 * 60 * 1000);
 }
 
 function normalizeText(value, fallback = "") {
@@ -182,16 +204,38 @@ async function listLinks(req, res) {
       ];
     }
 
-    const links = await prisma.externalPaymentLink.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }],
-      take: 200,
-      include: {
-        createdBy: { select: { id: true, fullName: true, email: true } },
-        updatedBy: { select: { id: true, fullName: true, email: true } },
+    const { page, pageSize, skip, take } = normalizePagination(req.query);
+
+    const [total, activeCount, paidAgg, links] = await Promise.all([
+      prisma.externalPaymentLink.count({ where }),
+      prisma.externalPaymentLink.count({ where: { ...where, status: "ACTIVE" } }),
+      prisma.externalPaymentLink.aggregate({
+        where: { ...where, status: "PAID" },
+        _count: { _all: true },
+        _sum: { amountFcfa: true },
+      }),
+      prisma.externalPaymentLink.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }],
+        skip,
+        take,
+        include: {
+          createdBy: { select: { id: true, fullName: true, email: true } },
+          updatedBy: { select: { id: true, fullName: true, email: true } },
+        },
+      }),
+    ]);
+    return res.json({
+      data: links.map((link) => serialize(link, req)),
+      total,
+      page,
+      pageSize,
+      stats: {
+        activeCount,
+        paidCount: paidAgg._count._all,
+        paidAmountFcfa: paidAgg._sum.amountFcfa || 0,
       },
     });
-    return res.json({ data: links.map((link) => serialize(link, req)) });
   } catch (error) {
     console.error("externalPaymentLinks.listLinks error:", error);
     return res.status(500).json({ message: "Erreur serveur (listLinks)" });
@@ -240,7 +284,7 @@ async function createLink(req, res) {
         title: normalizeOptionalText(body.title),
         description: normalizeOptionalText(body.description),
         instructions: normalizeOptionalText(body.instructions),
-        expiresAt: null,
+        expiresAt: normalizeExpiresAt(body),
         createdById: req.user?.id || null,
         updatedById: req.user?.id || null,
       },
