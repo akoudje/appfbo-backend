@@ -4,8 +4,22 @@ const { sendSms } = require("../../services/sms.service");
 const externalWavePaymentService = require("../../services/external-wave-payment.service");
 
 const ALLOWED_STATUSES = new Set(["DRAFT", "ACTIVE", "PAID", "CANCELLED", "EXPIRED"]);
+const ALLOWED_SOURCES = new Set(["ADMIN", "QR_FORM"]);
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
+const EXPIRY_SOON_HOURS = 2;
+
+function parseDateBoundary(value, endOfDay = false) {
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) return null;
+  const date = new Date(`${normalized}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isTruthyFlag(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
 
 function generateToken() {
   return crypto.randomBytes(24).toString("base64url");
@@ -184,13 +198,59 @@ async function nextReference(countryId) {
   return `${prefix}-${String(count + 1).padStart(4, "0")}`;
 }
 
+async function listCreators(req, res) {
+  try {
+    const rows = await prisma.externalPaymentLink.findMany({
+      where: { countryId: req.countryId, createdById: { not: null } },
+      distinct: ["createdById"],
+      select: { createdBy: { select: { id: true, fullName: true, email: true } } },
+    });
+    const creators = rows
+      .map((row) => row.createdBy)
+      .filter(Boolean)
+      .sort((a, b) => (a.fullName || a.email || "").localeCompare(b.fullName || b.email || ""));
+    return res.json({ data: creators });
+  } catch (error) {
+    console.error("externalPaymentLinks.listCreators error:", error);
+    return res.status(500).json({ message: "Erreur serveur (listCreators)" });
+  }
+}
+
 async function listLinks(req, res) {
   try {
-    const { q, status } = req.query;
+    const { q, status, source, createdBy, createdFrom, createdTo } = req.query;
+    const watchOnly = isTruthyFlag(req.query.watch);
     const where = { countryId: req.countryId };
-    if (status && ALLOWED_STATUSES.has(String(status).toUpperCase())) {
+
+    if (watchOnly) {
+      // "À surveiller" prime sur le filtre de statut : uniquement les liens
+      // actifs déjà expirés ou sur le point de l'être.
+      where.status = "ACTIVE";
+      where.expiresAt = {
+        not: null,
+        lte: new Date(Date.now() + EXPIRY_SOON_HOURS * 60 * 60 * 1000),
+      };
+    } else if (status && ALLOWED_STATUSES.has(String(status).toUpperCase())) {
       where.status = String(status).toUpperCase();
     }
+
+    if (source && ALLOWED_SOURCES.has(String(source).toUpperCase())) {
+      where.source = String(source).toUpperCase();
+    }
+
+    if (createdBy && String(createdBy).trim()) {
+      where.createdById = String(createdBy).trim();
+    }
+
+    const createdFromDate = parseDateBoundary(createdFrom, false);
+    const createdToDate = parseDateBoundary(createdTo, true);
+    if (createdFromDate || createdToDate) {
+      where.createdAt = {
+        ...(createdFromDate ? { gte: createdFromDate } : {}),
+        ...(createdToDate ? { lte: createdToDate } : {}),
+      };
+    }
+
     if (q && String(q).trim()) {
       const term = String(q).trim();
       where.OR = [
@@ -617,6 +677,7 @@ async function attachToOrder(req, res) {
 module.exports = {
   getQrConfig,
   listLinks,
+  listCreators,
   createLink,
   resendSms,
   syncWave,
