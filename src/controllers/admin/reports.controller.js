@@ -173,10 +173,6 @@ function toNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function sumAmount(rows = [], field = "totalFcfa") {
-  return rows.reduce((total, row) => total + toNumber(row?.[field]), 0);
-}
-
 function formatAdmin(admin) {
   if (!admin) return null;
   return {
@@ -271,10 +267,27 @@ function effectivePaidAt(order) {
   return order?.manualPaymentValidatedAt || order?.paidAt || null;
 }
 
-function summarizeRows(rows = [], amountField = "totalFcfa") {
+// Les listes détaillées (rows) sont plafonnées à 2000 lignes pour rester
+// exploitables à l'écran/à l'export. Les totaux affichés (compteurs,
+// montants) ne doivent en revanche jamais dépendre de ce plafond : on les
+// calcule séparément via un aggregate() SQL non borné, avec exactement le
+// même where que la requête findMany correspondante.
+async function aggregateTotals(where, amountField) {
+  const result = await prisma.preorder.aggregate({
+    where,
+    _count: { _all: true },
+    _sum: { [amountField]: true },
+  });
   return {
-    count: rows.length,
-    amountFcfa: sumAmount(rows, amountField),
+    count: result?._count?._all || 0,
+    amountFcfa: toNumber(result?._sum?.[amountField]),
+  };
+}
+
+function withTruncationFlag(totals, rows) {
+  return {
+    ...totals,
+    rowsTruncated: rows.length < totals.count,
   };
 }
 
@@ -445,6 +458,41 @@ async function getDailySalesReport(req, res) {
       cashierId: normalizeFilterId(req.query?.cashierId),
     };
 
+    const submittedWhere = base(applyCommonFilters({ submittedAt: { gte: start, lte: end } }, filters));
+    const invoicedWhere = base(applyCommonFilters({
+      invoicedAt: { gte: start, lte: end },
+      ...(filters.invoicerId ? { invoicedById: filters.invoicerId } : {}),
+    }, filters));
+    const paidWhere = base(applyCommonFilters({
+      paymentStatus: "PAID",
+      ...(filters.cashierId ? { manualPaymentValidatedById: filters.cashierId } : {}),
+      OR: [
+        { manualPaymentValidatedAt: { gte: start, lte: end } },
+        { paidAt: { gte: start, lte: end } },
+      ],
+    }, filters));
+    const cancelledWhere = base(applyCommonFilters({ cancelledAt: { gte: start, lte: end } }, filters));
+    const launchedWhere = base(applyCommonFilters({ preparationLaunchedAt: { gte: start, lte: end } }, filters));
+    const preparedWhere = base(applyCommonFilters({ preparedAt: { gte: start, lte: end } }, filters));
+    const fulfilledWhere = base(applyCommonFilters({ fulfilledAt: { gte: start, lte: end } }, filters));
+    const pendingSubmittedWhere = base(applyCommonFilters({
+      submittedAt: { lte: end },
+      invoicedAt: null,
+      status: { not: "CANCELLED" },
+    }, filters));
+    const pendingInvoicedWhere = base(applyCommonFilters({
+      invoicedAt: { lte: end },
+      paymentStatus: { not: "PAID" },
+      status: { not: "CANCELLED" },
+    }, filters));
+    const pendingPaidWhere = base(applyCommonFilters({
+      paymentStatus: "PAID",
+      preparationLaunchedAt: null,
+      status: { not: "CANCELLED" },
+      ...(filters.cashierId ? { manualPaymentValidatedById: filters.cashierId } : {}),
+      OR: [{ paidAt: { lte: end } }, { manualPaymentValidatedAt: { lte: end } }],
+    }, filters));
+
     const [
       submittedRaw,
       invoicedRaw,
@@ -456,91 +504,87 @@ async function getDailySalesReport(req, res) {
       pendingSubmittedRaw,
       pendingInvoicedRaw,
       pendingPaidRaw,
+      submittedTotals,
+      invoicedTotals,
+      paidTotals,
+      cancelledTotals,
+      launchedTotals,
+      preparedTotals,
+      fulfilledTotals,
+      pendingSubmittedTotals,
+      pendingInvoicedTotals,
+      pendingPaidTotals,
     ] = await Promise.all([
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({ submittedAt: { gte: start, lte: end } }, filters)),
+        where: submittedWhere,
         include: includeShape,
         orderBy: [{ submittedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({
-          invoicedAt: { gte: start, lte: end },
-          ...(filters.invoicerId ? { invoicedById: filters.invoicerId } : {}),
-        }, filters)),
+        where: invoicedWhere,
         include: includeShape,
         orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({
-          paymentStatus: "PAID",
-          ...(filters.cashierId ? { manualPaymentValidatedById: filters.cashierId } : {}),
-          OR: [
-            { manualPaymentValidatedAt: { gte: start, lte: end } },
-            { paidAt: { gte: start, lte: end } },
-          ],
-        }, filters)),
+        where: paidWhere,
         include: includeShape,
         orderBy: [{ paidAt: "asc" }, { manualPaymentValidatedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({ cancelledAt: { gte: start, lte: end } }, filters)),
+        where: cancelledWhere,
         include: includeShape,
         orderBy: [{ cancelledAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({ preparationLaunchedAt: { gte: start, lte: end } }, filters)),
+        where: launchedWhere,
         include: includeShape,
         orderBy: [{ preparationLaunchedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({ preparedAt: { gte: start, lte: end } }, filters)),
+        where: preparedWhere,
         include: includeShape,
         orderBy: [{ preparedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({ fulfilledAt: { gte: start, lte: end } }, filters)),
+        where: fulfilledWhere,
         include: includeShape,
         orderBy: [{ fulfilledAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({
-          submittedAt: { lte: end },
-          invoicedAt: null,
-          status: { not: "CANCELLED" },
-        }, filters)),
+        where: pendingSubmittedWhere,
         include: includeShape,
         orderBy: [{ submittedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({
-          invoicedAt: { lte: end },
-          paymentStatus: { not: "PAID" },
-          status: { not: "CANCELLED" },
-        }, filters)),
+        where: pendingInvoicedWhere,
         include: includeShape,
         orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
       prisma.preorder.findMany({
-        where: base(applyCommonFilters({
-          paymentStatus: "PAID",
-          preparationLaunchedAt: null,
-          status: { not: "CANCELLED" },
-          ...(filters.cashierId ? { manualPaymentValidatedById: filters.cashierId } : {}),
-          OR: [{ paidAt: { lte: end } }, { manualPaymentValidatedAt: { lte: end } }],
-        }, filters)),
+        where: pendingPaidWhere,
         include: includeShape,
         orderBy: [{ paidAt: "asc" }, { manualPaymentValidatedAt: "asc" }, { createdAt: "asc" }],
         take: 2000,
       }),
+      aggregateTotals(submittedWhere, "totalFcfa"),
+      aggregateTotals(invoicedWhere, "as400InvoiceTotalFcfa"),
+      aggregateTotals(paidWhere, "as400InvoiceTotalFcfa"),
+      aggregateTotals(cancelledWhere, "as400InvoiceTotalFcfa"),
+      aggregateTotals(launchedWhere, "as400InvoiceTotalFcfa"),
+      aggregateTotals(preparedWhere, "as400InvoiceTotalFcfa"),
+      aggregateTotals(fulfilledWhere, "as400InvoiceTotalFcfa"),
+      aggregateTotals(pendingSubmittedWhere, "totalFcfa"),
+      aggregateTotals(pendingInvoicedWhere, "as400InvoiceTotalFcfa"),
+      aggregateTotals(pendingPaidWhere, "as400InvoiceTotalFcfa"),
     ]);
 
     const submittedRows = submittedRaw.map(buildOrderRow);
@@ -574,10 +618,10 @@ async function getDailySalesReport(req, res) {
       ),
     ]);
     const currentSnapshot = {
-      submitted: summarizeRows(submittedRows, "totalFcfa"),
-      invoiced: summarizeRows(invoicedRows, "as400InvoiceTotalFcfa"),
-      paid: summarizeRows(paidRows, "as400InvoiceTotalFcfa"),
-      cancelled: summarizeRows(cancelledRows, "as400InvoiceTotalFcfa"),
+      submitted: submittedTotals,
+      invoiced: invoicedTotals,
+      paid: paidTotals,
+      cancelled: cancelledTotals,
     };
 
     return res.json({
@@ -594,46 +638,46 @@ async function getDailySalesReport(req, res) {
         previousEnd: previousDay.end.toISOString(),
       },
       submitted: {
-        ...summarizeRows(submittedRows, "totalFcfa"),
+        ...withTruncationFlag(submittedTotals, submittedRows),
         byPaymentMode: groupBy(submittedRows, (row) => paymentModeLabel(row.preorderPaymentMode)),
         byDeliveryMode: groupBy(submittedRows, (row) => String(row.deliveryMode || "NON_RENSEIGNE")),
         rows: submittedRows,
       },
       invoiced: {
-        ...summarizeRows(invoicedRows, "as400InvoiceTotalFcfa"),
+        ...withTruncationFlag(invoicedTotals, invoicedRows),
         fromPreviousDays: previousDayInvoiced.length,
         fromSameDay: invoicedRows.length - previousDayInvoiced.length,
         byInvoicer: groupByAdmin(invoicedRows, (row) => row.invoicedBy, "as400InvoiceTotalFcfa"),
         rows: invoicedRows,
       },
       paid: {
-        ...summarizeRows(paidRows, "as400InvoiceTotalFcfa"),
+        ...withTruncationFlag(paidTotals, paidRows),
         byPaymentMode: groupBy(paidRows, (row) => paymentModeLabel(row.preorderPaymentMode), "as400InvoiceTotalFcfa"),
         byCashier: groupByAdmin(paidRows, (row) => row.cashier, "as400InvoiceTotalFcfa"),
         rows: paidRows,
       },
       cancelled: {
-        ...summarizeRows(cancelledRows, "as400InvoiceTotalFcfa"),
+        ...withTruncationFlag(cancelledTotals, cancelledRows),
         byReason: groupBy(cancelledRows, (row) => cancellationReasonLabel(row.cancelReason), "as400InvoiceTotalFcfa"),
         byActor: groupByAdmin(cancelledRows, (row) => row.cancelledBy, "as400InvoiceTotalFcfa"),
         rows: cancelledRows,
       },
       preparation: {
-        launched: { ...summarizeRows(launchedRows, "as400InvoiceTotalFcfa"), rows: launchedRows },
-        prepared: { ...summarizeRows(preparedRows, "as400InvoiceTotalFcfa"), rows: preparedRows },
-        fulfilled: { ...summarizeRows(fulfilledRows, "as400InvoiceTotalFcfa"), rows: fulfilledRows },
+        launched: { ...withTruncationFlag(launchedTotals, launchedRows), rows: launchedRows },
+        prepared: { ...withTruncationFlag(preparedTotals, preparedRows), rows: preparedRows },
+        fulfilled: { ...withTruncationFlag(fulfilledTotals, fulfilledRows), rows: fulfilledRows },
       },
       pending: {
         submittedNotInvoiced: {
-          ...summarizeRows(pendingSubmittedRows, "totalFcfa"),
+          ...withTruncationFlag(pendingSubmittedTotals, pendingSubmittedRows),
           rows: pendingSubmittedRows,
         },
         invoicedNotPaid: {
-          ...summarizeRows(pendingInvoicedRows, "as400InvoiceTotalFcfa"),
+          ...withTruncationFlag(pendingInvoicedTotals, pendingInvoicedRows),
           rows: pendingInvoicedRows,
         },
         paidNotLaunched: {
-          ...summarizeRows(pendingPaidRows, "as400InvoiceTotalFcfa"),
+          ...withTruncationFlag(pendingPaidTotals, pendingPaidRows),
           rows: pendingPaidRows,
         },
       },
