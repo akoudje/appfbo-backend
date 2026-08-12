@@ -198,27 +198,9 @@ async function nextReference(countryId) {
   return `${prefix}-${String(count + 1).padStart(4, "0")}`;
 }
 
-async function listCreators(req, res) {
-  try {
-    const rows = await prisma.externalPaymentLink.findMany({
-      where: { countryId: req.countryId, createdById: { not: null } },
-      distinct: ["createdById"],
-      select: { createdBy: { select: { id: true, fullName: true, email: true } } },
-    });
-    const creators = rows
-      .map((row) => row.createdBy)
-      .filter(Boolean)
-      .sort((a, b) => (a.fullName || a.email || "").localeCompare(b.fullName || b.email || ""));
-    return res.json({ data: creators });
-  } catch (error) {
-    console.error("externalPaymentLinks.listCreators error:", error);
-    return res.status(500).json({ message: "Erreur serveur (listCreators)" });
-  }
-}
-
 async function listLinks(req, res) {
   try {
-    const { q, status, source, createdBy, createdFrom, createdTo } = req.query;
+    const { q, status, source, createdFrom, createdTo } = req.query;
     const watchOnly = isTruthyFlag(req.query.watch);
     const where = { countryId: req.countryId };
 
@@ -236,10 +218,6 @@ async function listLinks(req, res) {
 
     if (source && ALLOWED_SOURCES.has(String(source).toUpperCase())) {
       where.source = String(source).toUpperCase();
-    }
-
-    if (createdBy && String(createdBy).trim()) {
-      where.createdById = String(createdBy).trim();
     }
 
     const createdFromDate = parseDateBoundary(createdFrom, false);
@@ -677,7 +655,6 @@ async function attachToOrder(req, res) {
 module.exports = {
   getQrConfig,
   listLinks,
-  listCreators,
   createLink,
   resendSms,
   syncWave,
