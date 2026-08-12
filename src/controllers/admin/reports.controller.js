@@ -1,6 +1,11 @@
 const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 
+// Plafond du détail par commande (tableaux, export, répartitions) par
+// section. Les totaux (count/amountFcfa) ne dépendent jamais de ce plafond,
+// voir aggregateTotals plus bas.
+const DETAIL_ROWS_LIMIT = 10000;
+
 function parseReportDate(value) {
   const raw = String(value || "").trim();
   const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -85,8 +90,18 @@ function resolveReportPeriod(query = {}) {
   const date = parseIsoDate(query.date) || new Date().toISOString().slice(0, 10);
 
   if (periodType === "custom") {
-    const fromIso = parseIsoDate(query.dateFrom) || date;
+    const fromIso = parseIsoDate(query.dateFrom);
     const toIso = parseIsoDate(query.dateTo) || fromIso;
+    if (!fromIso || !toIso) {
+      // Mieux vaut échouer bruyamment qu'accepter silencieusement la date
+      // du jour à la place d'une plage personnalisée invalide/incomplète :
+      // un export/rapport "faux mais silencieux" est bien pire qu'une erreur.
+      const err = new Error(
+        "Période personnalisée : dates de début et de fin requises (dateFrom/dateTo).",
+      );
+      err.statusCode = 400;
+      throw err;
+    }
     const safeFrom = fromIso <= toIso ? fromIso : toIso;
     const safeTo = fromIso <= toIso ? toIso : fromIso;
     const days = inclusiveDayCount(safeFrom, safeTo);
@@ -519,61 +534,61 @@ async function getDailySalesReport(req, res) {
         where: submittedWhere,
         include: includeShape,
         orderBy: [{ submittedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: invoicedWhere,
         include: includeShape,
         orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: paidWhere,
         include: includeShape,
         orderBy: [{ paidAt: "asc" }, { manualPaymentValidatedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: cancelledWhere,
         include: includeShape,
         orderBy: [{ cancelledAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: launchedWhere,
         include: includeShape,
         orderBy: [{ preparationLaunchedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: preparedWhere,
         include: includeShape,
         orderBy: [{ preparedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: fulfilledWhere,
         include: includeShape,
         orderBy: [{ fulfilledAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: pendingSubmittedWhere,
         include: includeShape,
         orderBy: [{ submittedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: pendingInvoicedWhere,
         include: includeShape,
         orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       prisma.preorder.findMany({
         where: pendingPaidWhere,
         include: includeShape,
         orderBy: [{ paidAt: "asc" }, { manualPaymentValidatedAt: "asc" }, { createdAt: "asc" }],
-        take: 2000,
+        take: DETAIL_ROWS_LIMIT,
       }),
       aggregateTotals(submittedWhere, "totalFcfa"),
       aggregateTotals(invoicedWhere, "as400InvoiceTotalFcfa"),
@@ -628,6 +643,7 @@ async function getDailySalesReport(req, res) {
       ok: true,
       date: iso,
       countryId,
+      detailRowsLimit: DETAIL_ROWS_LIMIT,
       filters,
       period: {
         type: reportPeriod.type,
