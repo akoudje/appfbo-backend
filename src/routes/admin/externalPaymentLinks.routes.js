@@ -20,12 +20,6 @@ router.get(
   controller.getQrConfig,
 );
 
-router.get(
-  "/creators",
-  requireExternalPaymentLinksManage,
-  controller.listCreators,
-);
-
 router.post(
   "/",
   requireExternalPaymentLinksManage,
