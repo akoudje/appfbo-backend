@@ -462,6 +462,15 @@ async function getMonthlySnapshot(req, start, end, filters = {}) {
 }
 
 async function getDailySalesReport(req, res) {
+  // Express génère un ETag par défaut sur toute réponse JSON ; sans en-tête
+  // explicite, le navigateur peut mettre ce rapport en cache et le resservir
+  // indéfiniment (304) pour une URL identique (même period/date), y compris
+  // après une correction déployée côté backend. C'est un rapport dynamique :
+  // jamais de cache.
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+
   try {
     const countryId = pickCountryId(req);
     const reportPeriod = resolveReportPeriod(req.query || {});
