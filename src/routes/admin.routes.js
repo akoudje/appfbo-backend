@@ -29,6 +29,8 @@ const {
   startWork,
   releaseWork,
   escalateWork,
+  resolveAs400CertificationDispute,
+  resolveEscalation,
 } = require("../controllers/billingQueue.controller");
 
 const ordersController = require("../controllers/admin/orders.controller");
@@ -122,6 +124,18 @@ router.post(
   "/billing/:id/escalate",
   requirePermission(Permission.INVOICE_CREATE),
   escalateWork,
+);
+
+router.post(
+  "/billing/:id/as400-certification/resolve",
+  requirePermission(Permission.INVOICE_CREATE),
+  resolveAs400CertificationDispute,
+);
+
+router.post(
+  "/billing/:id/escalate/resolve",
+  requirePermission(Permission.INVOICE_CREATE),
+  resolveEscalation,
 );
 
 router.use("/stats", statsRoutes);

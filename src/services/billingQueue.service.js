@@ -508,6 +508,16 @@ function normalizeAs400Amount(value) {
   return Math.round(parsed);
 }
 
+// Détermine le statut de travail vers lequel un dossier doit revenir une fois
+// son contentieux clôturé. On ne peut pas se contenter de restaurer l'ancien
+// statut car il n'est pas conservé sur la précommande ; on retombe donc sur un
+// statut cohérent avec l'état courant du dossier.
+function resolveTargetBillingStatus(preorder) {
+  if (preorder.paymentStatus === "PAID") return "COMPLETED";
+  if (preorder.assignedInvoicerId) return "IN_PROGRESS";
+  return "RELEASED";
+}
+
 async function escalateBillingWork({
   preorderId,
   userId,
@@ -645,7 +655,10 @@ async function resolveAs400CertificationDispute({
         as400CertificationResolvedAt: now,
         as400CertificationResolvedById: userId || null,
         as400CertificationNote: resolutionNote,
-        billingWorkStatus: preorder.paymentStatus === "PAID" ? "COMPLETED" : preorder.billingWorkStatus,
+        billingWorkStatus:
+          preorder.billingWorkStatus === "ESCALATED"
+            ? resolveTargetBillingStatus(preorder)
+            : preorder.billingWorkStatus,
         billingLastActivityAt: now,
       },
     });
@@ -674,6 +687,70 @@ async function resolveAs400CertificationDispute({
   return updated;
 }
 
+// Clôture un contentieux générique (dossier escaladé via le bouton "Escalader",
+// sans type AS400). Contrairement à resolveAs400CertificationDispute, aucune
+// référence/montant n'est requis : on remet simplement le dossier en circuit.
+async function resolveBillingEscalation({ preorderId, userId, countryId, note }) {
+  const preorder = await prisma.preorder.findFirst({
+    where: {
+      id: preorderId,
+      countryId,
+    },
+  });
+
+  if (!preorder) throw new Error("PREORDER_NOT_FOUND");
+
+  if (preorder.billingWorkStatus !== "ESCALATED") {
+    throw new Error("PREORDER_NOT_ESCALATED");
+  }
+
+  const hasOpenAs400Dispute =
+    preorder.billingEscalationType === AS400_CERTIFICATION_MISSING_TYPE &&
+    AS400_CERTIFICATION_OPEN_STATUSES.includes(preorder.as400CertificationStatus || "");
+
+  if (hasOpenAs400Dispute) {
+    const err = new Error(
+      "Ce dossier a un contentieux AS400 ouvert : utilisez la reprise AS400 pour le clôturer.",
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const now = new Date();
+  const resolutionNote = String(note || "").trim() || "Contentieux clôturé, dossier repris.";
+  const nextBillingWorkStatus = resolveTargetBillingStatus(preorder);
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const saved = await tx.preorder.update({
+      where: { id: preorder.id },
+      data: {
+        billingWorkStatus: nextBillingWorkStatus,
+        billingEscalationType: null,
+        billingLastActivityAt: now,
+        internalNote: resolutionNote,
+      },
+    });
+
+    await tx.preorderLog.create({
+      data: {
+        preorderId: preorder.id,
+        action: "RESOLVE_BILLING_ESCALATION",
+        note: resolutionNote,
+        actorAdminId: userId || null,
+        meta: {
+          previousBillingWorkStatus: "ESCALATED",
+          nextBillingWorkStatus,
+          previousBillingEscalationType: preorder.billingEscalationType || null,
+        },
+      },
+    });
+
+    return saved;
+  });
+
+  return updated;
+}
+
 module.exports = {
   claimNextPreorderForInvoicer,
   autoAssignQueuedPreorder,
@@ -681,6 +758,7 @@ module.exports = {
   releaseBillingWork,
   escalateBillingWork,
   resolveAs400CertificationDispute,
+  resolveBillingEscalation,
   releaseExpiredAssignments,
   isBillingActiveStatus,
   AS400_CERTIFICATION_MISSING_TYPE,

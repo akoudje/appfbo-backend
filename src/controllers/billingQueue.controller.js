@@ -172,10 +172,47 @@ async function resolveAs400CertificationDispute(req, res) {
   }
 }
 
+async function resolveEscalation(req, res) {
+  try {
+    const userId = req.user?.id;
+    const countryId = req.country?.id || req.countryId;
+    const { id } = req.params;
+    const { note } = req.body || {};
+
+    if (!userId) {
+      return res.status(401).json({ message: "Utilisateur non authentifié" });
+    }
+
+    const result = await billingQueueService.resolveBillingEscalation({
+      preorderId: id,
+      userId,
+      countryId,
+      note,
+    });
+
+    publishRealtimeEvent({
+      countryId,
+      eventKey: "billing_escalation_resolved",
+      orderId: id,
+      meta: {
+        billingWorkStatus: result?.billingWorkStatus || null,
+      },
+    });
+
+    return res.json(result);
+  } catch (e) {
+    console.error("resolveEscalation error:", e);
+    return res.status(e.statusCode || 400).json({
+      message: e.message || "Erreur resolveEscalation",
+    });
+  }
+}
+
 module.exports = {
   claimNext,
   startWork,
   releaseWork,
   escalateWork,
   resolveAs400CertificationDispute,
+  resolveEscalation,
 };
