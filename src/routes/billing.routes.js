@@ -16,6 +16,7 @@ const {
   releaseWork,
   escalateWork,
   resolveAs400CertificationDispute,
+  resolveEscalation,
 } = require("../controllers/billingQueue.controller");
 
 const router = express.Router();
@@ -50,6 +51,12 @@ router.post(
   "/:id/as400-certification/resolve",
   requirePermission(Permission.INVOICE_CREATE),
   resolveAs400CertificationDispute,
+);
+
+router.post(
+  "/:id/escalate/resolve",
+  requirePermission(Permission.INVOICE_CREATE),
+  resolveEscalation,
 );
 
 module.exports = router;
