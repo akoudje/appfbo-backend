@@ -3322,24 +3322,25 @@ async function fulfillOrder(req, res) {
       return saved;
     });
 
-    try {
-      await sendPreorderNotification({
+    // Envoi de la notification (SMS/email/push) en tâche de fond : ne pas faire attendre le
+    // client (et le rechargement de la file de préparation qui suit) le temps d'un aller-retour
+    // réseau vers le fournisseur email/push. Le SMS est de toute façon mis en file par le service.
+    sendPreorderNotification({
+      preorder: {
+        ...order,
+        ...updated,
+      },
+      purpose: "ORDER_FULFILLED",
+      message: buildOrderFulfilledSmsMessage({
         preorder: {
           ...order,
           ...updated,
         },
-        purpose: "ORDER_FULFILLED",
-        message: buildOrderFulfilledSmsMessage({
-          preorder: {
-            ...order,
-            ...updated,
-          },
-        }),
-        actorName,
-      });
-    } catch (smsError) {
+      }),
+      actorName,
+    }).catch((smsError) => {
       console.error("fulfillOrder sms error:", smsError);
-    }
+    });
 
     return res.json(updated);
   } catch (e) {
