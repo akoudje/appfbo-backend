@@ -1,6 +1,39 @@
 const prisma = require("../prisma");
 const { pickCountryId } = require("../helpers/countryScope");
 
+// Cache en mémoire, même principe que le cache pays de resolveCountry.js :
+// cette config change rarement (réglages admin, contenu marketing) mais est
+// lue à chaque chargement du storefront, donc coûteuse sous charge (2
+// requêtes DB par appel). Un TTL court absorbe les pics sans trop retarder
+// la propagation d'une mise à jour admin.
+const STOREFRONT_CONFIG_CACHE_TTL_MS = 30 * 1000;
+const storefrontConfigCache = new Map();
+
+function getCachedStorefrontConfig(countryId) {
+  const cached = storefrontConfigCache.get(countryId);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    storefrontConfigCache.delete(countryId);
+    return null;
+  }
+  return cached.payload;
+}
+
+function setCachedStorefrontConfig(countryId, payload) {
+  storefrontConfigCache.set(countryId, {
+    payload,
+    expiresAt: Date.now() + STOREFRONT_CONFIG_CACHE_TTL_MS,
+  });
+}
+
+function clearStorefrontConfigCache(countryId) {
+  if (countryId) {
+    storefrontConfigCache.delete(countryId);
+    return;
+  }
+  storefrontConfigCache.clear();
+}
+
 const DEFAULT_MARKETING = {
   slides: [
     { id: "slide-1", image: "/Slide1.png", active: true, title: "Slide 1", link: "" },
@@ -126,6 +159,11 @@ async function getStorefrontConfig(req, res) {
   try {
     const countryId = pickCountryId(req);
 
+    const cached = getCachedStorefrontConfig(countryId);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const [settings, marketing] = await Promise.all([
       prisma.countrySettings.findUnique({
         where: { countryId },
@@ -182,7 +220,7 @@ async function getStorefrontConfig(req, res) {
     const countryCode = req.country?.code || null;
     const isCiv = String(countryCode || "").trim().toUpperCase() === "CIV";
 
-    return res.json({
+    const payload = {
       countryCode,
       minCartFcfa: settings?.minCartFcfa ?? 100,
       maxQtyPerProduct: settings?.maxQtyPerProduct ?? 10,
@@ -250,7 +288,10 @@ async function getStorefrontConfig(req, res) {
         sidePanels: marketing?.sidePanelsJson || DEFAULT_MARKETING.sidePanels,
         publishing: marketing?.publishingJson || DEFAULT_MARKETING.publishing,
       },
-    });
+    };
+
+    setCachedStorefrontConfig(countryId, payload);
+    return res.json(payload);
   } catch (e) {
     console.error("getStorefrontConfig error:", e);
     return res.status(500).json({ message: "Erreur serveur (getStorefrontConfig)" });
@@ -259,4 +300,5 @@ async function getStorefrontConfig(req, res) {
 
 module.exports = {
   getStorefrontConfig,
+  clearStorefrontConfigCache,
 };
