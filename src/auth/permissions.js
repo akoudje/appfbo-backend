@@ -21,6 +21,7 @@ const Permission = {
   COUNTRY_READ: "COUNTRY_READ",
   COUNTRY_WRITE: "COUNTRY_WRITE",
   MARKETING_WRITE: "MARKETING_WRITE",
+  TICKET_CHECKIN: "TICKET_CHECKIN",
   USER_ADMIN: "USER_ADMIN",
 
   PRODUCT_READ: "PRODUCT_READ",
@@ -51,6 +52,7 @@ const ROLE_PERMISSIONS = {
   [AdminRole.OPERATIONS_DIRECTOR]: [
     Permission.COUNTRY_READ,
     Permission.MARKETING_WRITE,
+    Permission.TICKET_CHECKIN,
     Permission.USER_ADMIN,
     Permission.PRODUCT_READ,
     Permission.PRODUCT_WRITE,
@@ -67,6 +69,7 @@ const ROLE_PERMISSIONS = {
   [AdminRole.SALES_DIRECTOR]: [
     Permission.COUNTRY_READ,
     Permission.MARKETING_WRITE,
+    Permission.TICKET_CHECKIN,
     Permission.PRODUCT_READ,
     Permission.DISCOUNT_READ,
     Permission.DISCOUNT_WRITE,
@@ -97,6 +100,7 @@ const ROLE_PERMISSIONS = {
   [AdminRole.MARKETING_MANAGER]: [
     Permission.COUNTRY_READ,
     Permission.MARKETING_WRITE,
+    Permission.TICKET_CHECKIN,
     Permission.PRODUCT_READ,
     Permission.DISCOUNT_READ,
     Permission.EXPORT_READ,
@@ -105,6 +109,7 @@ const ROLE_PERMISSIONS = {
   [AdminRole.MARKETING_ASSISTANT]: [
     Permission.COUNTRY_READ,
     Permission.MARKETING_WRITE,
+    Permission.TICKET_CHECKIN,
     Permission.PRODUCT_READ,
     Permission.DISCOUNT_READ,
     Permission.EXPORT_READ,

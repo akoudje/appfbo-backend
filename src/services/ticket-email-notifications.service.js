@@ -1,5 +1,6 @@
 const { normalizeEmail, sendEmail } = require("./email.service");
 const { isSafePublicFrontendOrigin, publicFrontendBaseUrl } = require("./public-url.service");
+const { signTicketOrderAccessToken } = require("./ticket-order-ticketing.service");
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -30,7 +31,9 @@ function ticketOrderPublicUrl({ order, publicUrl }) {
     : publicFrontendBaseUrl();
   if (!base || !order?.orderNumber) return "";
   const countryCode = order.country?.code || "CIV";
-  return `${base}/tickets/${encodeURIComponent(order.orderNumber)}?country=${encodeURIComponent(countryCode)}`;
+  const token = signTicketOrderAccessToken(order.orderNumber);
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
+  return `${base}/tickets/${encodeURIComponent(order.orderNumber)}?country=${encodeURIComponent(countryCode)}${tokenParam}`;
 }
 
 function buildTicketEmailText({ order, tickets, ticketUrl }) {
