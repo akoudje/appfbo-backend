@@ -228,6 +228,9 @@ async function cancelOrder(req, res) {
     if (order.status === "PAID") {
       return res.status(400).json({ message: "Une commande payée ne peut pas être annulée ici." });
     }
+    if (order.status === "CANCELLED" || order.status === "EXPIRED") {
+      return res.status(400).json({ message: "Cette commande est déjà dans un état terminal." });
+    }
 
     const { note } = req.body || {};
     const updated = await prisma.$transaction(async (tx) => {
