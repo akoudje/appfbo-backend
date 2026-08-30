@@ -12,6 +12,7 @@ const {
 const { normalizeEmail } = require("../../../services/email.service");
 const { sendTicketOrderEmail } = require("../../../services/ticket-email-notifications.service");
 const { publicFrontendBaseUrl } = require("../../../services/public-url.service");
+const { expireStaleTicketOrders } = require("../../../services/ticket-order-expiration.service");
 const { digitsOnly, buildOrdersWhere } = require("./shared");
 
 async function listOrders(req, res) {
@@ -297,36 +298,20 @@ async function resendOrderTicketsEmail(req, res) {
   }
 }
 
+// Depuis l'ajout du scheduler automatique (ticket-order-expiration.service.js),
+// ce bouton admin n'est plus la seule ligne de défense contre les commandes
+// Wave restées PENDING_PAYMENT — mais il reste utile pour forcer un passage
+// immédiat (ex: juste avant de clôturer un événement). Délègue au même
+// service pour bénéficier du garde-fou "re-sync Wave avant d'annuler".
 async function expireOrders(req, res) {
   try {
     const { eventId } = req.body || {};
-    const where = {
+    const result = await expireStaleTicketOrders({
       countryId: req.countryId,
-      status: "PENDING_PAYMENT",
-      expiresAt: { lt: new Date() },
-    };
-    if (eventId) where.eventId = String(eventId);
-
-    const orders = await prisma.ticketOrder.findMany({
-      where,
-      select: { id: true },
-      take: 500,
+      eventId: eventId ? String(eventId) : null,
     });
-    const orderIds = orders.map((order) => order.id);
-    if (!orderIds.length) return res.json({ expired: 0 });
 
-    await prisma.$transaction([
-      prisma.ticket.updateMany({
-        where: { orderId: { in: orderIds }, status: "RESERVED" },
-        data: { status: "CANCELLED" },
-      }),
-      prisma.ticketOrder.updateMany({
-        where: { id: { in: orderIds } },
-        data: { status: "EXPIRED", paymentStatus: "EXPIRED" },
-      }),
-    ]);
-
-    return res.json({ expired: orderIds.length });
+    return res.json({ expired: result.expiredCount, skippedPaid: result.skippedPaidCount });
   } catch (error) {
     console.error("ticketEvents.expireOrders error:", error);
     return res.status(500).json({ message: "Erreur serveur (expireOrders)" });
