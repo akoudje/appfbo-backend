@@ -32,8 +32,8 @@ const {
   startExpiredInvoiceAutoCancelScheduler,
 } = require("./services/preorder-expiration.service");
 const {
-  startTicketOrderAutoExpireScheduler,
-} = require("./services/ticket-order-expiration.service");
+  startPickupOverdueScheduler,
+} = require("./services/pickup-overdue.service");
 const {
   startDraftRetentionScheduler,
 } = require("./services/preorder-draft-retention.service");
@@ -276,6 +276,6 @@ app.listen(PORT, "0.0.0.0", () => {
 });
 
 startExpiredInvoiceAutoCancelScheduler();
-startTicketOrderAutoExpireScheduler();
+startPickupOverdueScheduler();
 startDraftRetentionScheduler();
 startNotificationDispatchScheduler();

@@ -12,6 +12,11 @@ router.get(
   requirePermission(Permission.EXPORT_READ),
   ordersController.getSubmittedOrdersExport,
 );
+router.get(
+  "/pickup-overdue",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.listOverduePickups,
+);
 router.get("/:id/messages", requirePermission(Permission.PREORDER_READ), ordersController.listOrderMessages);
 router.get(
   "/:id/bank-proofs/:proofId/file",
@@ -129,6 +134,12 @@ router.post(
   "/:id/preparation/anomalies/:anomalyId/resolve",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.resolvePreparationAnomaly,
+);
+
+router.post(
+  "/:id/pickup-penalty",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.applyPickupPenaltyHandler,
 );
 
 router.post(
