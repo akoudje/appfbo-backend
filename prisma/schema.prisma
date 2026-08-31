@@ -354,6 +354,10 @@ enum PreorderLogAction {
 
   STOCK_DEBIT
   STOCK_CREDIT
+
+  PICKUP_REMINDER_SENT
+  PICKUP_OVERDUE_FLAGGED
+  PICKUP_PENALTY_APPLIED
 }
 
 enum StockMovementType {
@@ -626,6 +630,7 @@ model AdminUser {
   preparedPreorders               Preorder[] @relation("PreorderPreparedBy")
   fulfilledPreorders              Preorder[] @relation("PreorderFulfilledBy")
   cancelledPreorders              Preorder[] @relation("PreorderCancelledBy")
+  pickupPenaltyAppliedPreorders   Preorder[] @relation("PreorderPickupPenaltyAppliedBy")
 
   stockMovements StockMovement[]
   preorderLogs   PreorderLog[]
@@ -1079,6 +1084,17 @@ model Preorder {
   pickupConfirmationNote String? @db.Text
   cancelReason     String? @db.Text
 
+  // Pénalité de non-retrait : appliquée manuellement par un admin depuis la
+  // liste des colis en retard (pickup-overdue.service.js signale, un humain
+  // valide le montant — pas de prélèvement automatique). Le montant n'est
+  // pour l'instant qu'enregistré ici, pas répercuté automatiquement sur
+  // totalFcfa/la facturation.
+  pickupPenaltyFcfa        Int?
+  pickupPenaltyNote        String?   @db.Text
+  pickupPenaltyAppliedAt   DateTime?
+  pickupPenaltyAppliedById String?
+  pickupPenaltyAppliedByAdmin AdminUser? @relation("PreorderPickupPenaltyAppliedBy", fields: [pickupPenaltyAppliedById], references: [id], onDelete: SetNull)
+
   stockDeductedAt DateTime?
   stockRestoredAt DateTime?
 
@@ -1139,6 +1155,8 @@ model Preorder {
   @@index([activePaymentId])
   @@index([bankPaymentStatus, bankPaymentDueAt])
   @@index([bankPaymentValidatedById])
+  @@index([pickupPenaltyAppliedById])
+  @@index([status, preparedAt])
 }
 
 model CustomerOtpChallenge {

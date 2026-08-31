@@ -21,9 +21,14 @@ const {
 const { normalizePhone } = require("../../services/sms.service");
 const { normalizeEmail } = require("../../services/email.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
+const {
+  getOverduePickups,
+  applyPickupPenalty,
+} = require("../../services/pickup-overdue.service");
 
 const {
   scopeWhere,
+  pickCountryId,
   safeFindUniqueScoped,
 } = require("../../helpers/countryScope");
 const {
@@ -594,6 +599,24 @@ async function listOrders(req, res) {
             },
           },
           _count: { select: { items: true } },
+          // Dernière notification "colis prêt" (code de retrait) : permet
+          // d'afficher son statut de livraison (SENT/DELIVERED/FAILED...)
+          // directement dans la file de préparation, comme pour les liens
+          // de paiement — sans avoir à ouvrir chaque commande.
+          messages: {
+            where: { purpose: "ORDER_READY" },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              channel: true,
+              status: true,
+              sentAt: true,
+              deliveredAt: true,
+              readAt: true,
+              failedAt: true,
+              errorMessage: true,
+            },
+          },
         },
       }),
     ]);
@@ -3178,6 +3201,38 @@ async function resolvePreparationAnomaly(req, res) {
   }
 }
 
+async function listOverduePickups(req, res) {
+  try {
+    const rows = await getOverduePickups({ countryId: pickCountryId(req) });
+    return res.json({ data: rows });
+  } catch (e) {
+    console.error("listOverduePickups error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (listOverduePickups)" });
+  }
+}
+
+async function applyPickupPenaltyHandler(req, res) {
+  try {
+    const { id } = req.params;
+    const { amountFcfa, note } = req.body || {};
+    const updated = await applyPickupPenalty({
+      preorderId: id,
+      countryId: pickCountryId(req),
+      amountFcfa,
+      note,
+      adminId: req.user?.id || null,
+    });
+    return res.json(updated);
+  } catch (e) {
+    console.error("applyPickupPenaltyHandler error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (applyPickupPenalty)" });
+  }
+}
+
 async function fulfillOrder(req, res) {
   try {
     const { id } = req.params;
@@ -3725,6 +3780,8 @@ module.exports = {
   createPreparationAnomaly,
   resolvePreparationAnomaly,
   prepareOrder,
+  listOverduePickups,
+  applyPickupPenaltyHandler,
   fulfillOrder,
   regularizeFulfillmentNoNotification,
   cancelOrder,

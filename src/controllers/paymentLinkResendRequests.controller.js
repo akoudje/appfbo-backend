@@ -460,6 +460,23 @@ async function listPickupCodeResendRequests(req, res) {
             factureWhatsappTo: true,
             status: true,
             paymentStatus: true,
+            // Dernière notification "colis prêt" (code de retrait) : pour
+            // afficher si le SMS/email initial a bien été livré, avant même
+            // le renvoi lié à cette demande.
+            messages: {
+              where: { purpose: "ORDER_READY" },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: {
+                channel: true,
+                status: true,
+                sentAt: true,
+                deliveredAt: true,
+                readAt: true,
+                failedAt: true,
+                errorMessage: true,
+              },
+            },
           },
         },
       },
