@@ -68,31 +68,31 @@ router.post(
 
 router.post(
   "/check-in",
-  requirePermission(Permission.MARKETING_WRITE),
+  requirePermission(Permission.TICKET_CHECKIN),
   ticketEventsController.checkInTicket,
 );
 
 router.post(
   "/check-in/sessions",
-  requirePermission(Permission.MARKETING_WRITE),
+  requirePermission(Permission.TICKET_CHECKIN),
   ticketEventsController.openCheckInSession,
 );
 
 router.post(
   "/check-in/sessions/:sessionId/close",
-  requirePermission(Permission.MARKETING_WRITE),
+  requirePermission(Permission.TICKET_CHECKIN),
   ticketEventsController.closeCheckInSession,
 );
 
 router.get(
   "/check-in/logs",
-  requirePermission(Permission.MARKETING_WRITE),
+  requirePermission(Permission.TICKET_CHECKIN),
   ticketEventsController.listCheckInLogs,
 );
 
 router.get(
   "/check-in/summary",
-  requirePermission(Permission.MARKETING_WRITE),
+  requirePermission(Permission.TICKET_CHECKIN),
   ticketEventsController.getCheckInSummary,
 );
 

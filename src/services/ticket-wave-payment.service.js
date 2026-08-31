@@ -4,6 +4,7 @@ const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper"
 const {
   ensureTicketsActivatedForPaidOrder,
   paidOrderTicketInclude,
+  signTicketOrderAccessToken,
 } = require("./ticket-order-ticketing.service");
 const { sendTicketOrderEmail } = require("./ticket-email-notifications.service");
 const { publicFrontendBaseUrl } = require("./public-url.service");
@@ -17,7 +18,9 @@ function isWaveSimulationEnabled() {
 }
 
 function buildTicketOrderUrl(orderNumber, countryCode = "CIV", req = null) {
-  return `${publicFrontendBaseUrl(req)}/tickets/${encodeURIComponent(orderNumber)}?country=${encodeURIComponent(countryCode || "CIV")}`;
+  const token = signTicketOrderAccessToken(orderNumber);
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : "";
+  return `${publicFrontendBaseUrl(req)}/tickets/${encodeURIComponent(orderNumber)}?country=${encodeURIComponent(countryCode || "CIV")}${tokenParam}`;
 }
 
 function buildWaveUrls(order, req = null) {

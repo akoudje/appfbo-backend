@@ -1,9 +1,13 @@
-const crypto = require("crypto");
 const prisma = require("../prisma");
 const ticketWavePaymentService = require("../services/ticket-wave-payment.service");
 const { normalizeEmail } = require("../services/email.service");
 const { sendTicketOrderEmail } = require("../services/ticket-email-notifications.service");
 const { publicFrontendBaseUrl } = require("../services/public-url.service");
+const {
+  ticketOrderNumber,
+  signTicketOrderAccessToken,
+  verifyTicketOrderAccessToken,
+} = require("../services/ticket-order-ticketing.service");
 
 function normalizeSlug(value) {
   return String(value || "")
@@ -19,10 +23,20 @@ function digitsOnly(value) {
   return String(value || "").replace(/\D/g, "");
 }
 
-function ticketOrderNumber() {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/\D/g, "");
-  const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
-  return `EVT-${stamp}-${suffix}`;
+// Preuve de possession : ces 3 endpoints renvoient des données propres à
+// l'acheteur (statut de paiement, tickets et leur qrToken) à partir du seul
+// orderNumber, sans authentification. On exige donc le token signé côté
+// serveur et distribué avec le orderNumber (redirection post-achat, retour
+// Wave, email de tickets) — connaître le orderNumber seul ne suffit plus.
+// Réponse volontairement identique au "commande introuvable" pour ne pas
+// laisser deviner si le orderNumber existe.
+function assertOrderAccessToken(req, res, orderNumber) {
+  const token = req.query?.token || req.body?.token;
+  if (!verifyTicketOrderAccessToken(orderNumber, token)) {
+    res.status(404).json({ message: "Commande billet introuvable" });
+    return false;
+  }
+  return true;
 }
 
 function isSalesOpen(event, now = new Date()) {
@@ -254,6 +268,7 @@ async function createTicketOrder(req, res) {
 
     return res.status(201).json({
       ...(payment.order || order),
+      accessToken: signTicketOrderAccessToken(order.orderNumber),
       checkoutUrl: payment.checkoutUrl || null,
       paymentInitiated: true,
       simulatedPayment: Boolean(payment.simulated),
@@ -266,10 +281,13 @@ async function createTicketOrder(req, res) {
 
 async function getTicketOrder(req, res) {
   try {
+    const orderNumber = String(req.params.orderNumber || "").trim().toUpperCase();
+    if (!assertOrderAccessToken(req, res, orderNumber)) return undefined;
+
     const order = await prisma.ticketOrder.findFirst({
       where: {
         countryId: req.countryId,
-        orderNumber: String(req.params.orderNumber || "").trim().toUpperCase(),
+        orderNumber,
       },
       include: {
         event: true,
@@ -341,9 +359,12 @@ async function recoverTicketOrder(req, res) {
 
 async function initiateTicketWavePayment(req, res) {
   try {
+    const orderNumber = String(req.params.orderNumber || "").trim().toUpperCase();
+    if (!assertOrderAccessToken(req, res, orderNumber)) return undefined;
+
     const result = await ticketWavePaymentService.initiateTicketWavePayment({
       req,
-      orderNumber: req.params.orderNumber,
+      orderNumber,
     });
     return res.json(result);
   } catch (error) {
@@ -356,9 +377,12 @@ async function initiateTicketWavePayment(req, res) {
 
 async function syncTicketWavePaymentStatus(req, res) {
   try {
+    const orderNumber = String(req.params.orderNumber || "").trim().toUpperCase();
+    if (!assertOrderAccessToken(req, res, orderNumber)) return undefined;
+
     const result = await ticketWavePaymentService.syncTicketWavePaymentStatus({
       req,
-      orderNumber: req.params.orderNumber,
+      orderNumber,
     });
     return res.json(result);
   } catch (error) {
