@@ -11,7 +11,10 @@
 // un prélèvement automatique.
 
 const prisma = require("../prisma");
-const { sendPreorderNotification } = require("./preorder-notifications.service");
+const {
+  sendPreorderNotification,
+  buildOrderReadySmsMessage,
+} = require("./preorder-notifications.service");
 const { publishRealtimeEvent } = require("./realtime-events.service");
 
 function parsePositiveInt(value, fallback) {
@@ -270,6 +273,96 @@ async function getOverduePickups({ countryId = null } = {}) {
   }));
 }
 
+const RELAUNCH_LOG_ACTIONS = [
+  "PICKUP_REMINDER_SENT",
+  "PICKUP_OVERDUE_FLAGGED",
+  "PICKUP_MANUAL_RELAUNCH",
+];
+
+function startOfToday(now = new Date()) {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+/**
+ * Relance manuelle (sélection unique ou groupée depuis l'UI, qui boucle
+ * cet appel) : renvoie la notification "colis prêt" à un client dont la
+ * commande est toujours READY. Garde-fou anti-spam : ignore silencieusement
+ * (result.relaunched = false) si une relance — automatique ou manuelle —
+ * a déjà eu lieu aujourd'hui pour cette commande, plutôt que de renvoyer
+ * une erreur qui casserait une boucle d'appels groupés côté UI.
+ */
+async function relaunchPickupOrder({ preorderId, countryId, adminName, adminId, now = new Date() }) {
+  const order = await prisma.preorder.findFirst({
+    where: { id: preorderId, ...(countryId ? { countryId } : {}) },
+    select: {
+      id: true,
+      countryId: true,
+      status: true,
+      preorderNumber: true,
+      parcelNumber: true,
+      fboNomComplet: true,
+      fboNumero: true,
+      factureWhatsappTo: true,
+      fboEmail: true,
+      pickupSecretCode: true,
+      preparedAt: true,
+    },
+  });
+  if (!order) {
+    const err = new Error("Commande introuvable");
+    err.statusCode = 404;
+    throw err;
+  }
+  if (order.status !== "READY") {
+    const err = new Error("Cette commande n'est plus en attente de retrait.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const todayStart = startOfToday(now);
+  const alreadyRelaunchedToday = await prisma.preorderLog.findFirst({
+    where: {
+      preorderId: order.id,
+      action: { in: RELAUNCH_LOG_ACTIONS },
+      createdAt: { gte: todayStart },
+    },
+    select: { id: true, action: true, createdAt: true },
+  });
+  if (alreadyRelaunchedToday) {
+    return {
+      relaunched: false,
+      reason: "ALREADY_RELAUNCHED_TODAY",
+      preorderNumber: order.preorderNumber,
+      lastRelaunchAt: alreadyRelaunchedToday.createdAt,
+    };
+  }
+
+  const result = await sendPreorderNotification({
+    preorder: order,
+    purpose: "ORDER_READY",
+    message: buildOrderReadySmsMessage({
+      preorder: order,
+      pickupSecretCode: order.pickupSecretCode || "-",
+    }),
+    actorName: adminName || "admin",
+  });
+
+  await prisma.preorderLog.create({
+    data: {
+      preorderId: order.id,
+      action: "PICKUP_MANUAL_RELAUNCH",
+      note: "Relance manuelle de retrait envoyée",
+      meta: {
+        channel: result?.channel || null,
+        sent: Boolean(result?.sent),
+      },
+      actorAdminId: adminId || null,
+    },
+  });
+
+  return { relaunched: true, preorderNumber: order.preorderNumber, channel: result?.channel || null };
+}
+
 /**
  * Enregistre une pénalité de non-retrait sur une commande — action
  * délibérée d'un admin, montant libre. N'ajuste pas totalFcfa/la
@@ -364,6 +457,7 @@ module.exports = {
   sendPickupReminders,
   flagOverduePickups,
   getOverduePickups,
+  relaunchPickupOrder,
   applyPickupPenalty,
   startPickupOverdueScheduler,
 };

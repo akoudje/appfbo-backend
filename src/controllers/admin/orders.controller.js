@@ -23,6 +23,7 @@ const { normalizeEmail } = require("../../services/email.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 const {
   getOverduePickups,
+  relaunchPickupOrder,
   applyPickupPenalty,
 } = require("../../services/pickup-overdue.service");
 
@@ -3213,6 +3214,24 @@ async function listOverduePickups(req, res) {
   }
 }
 
+async function relaunchPickupOrderHandler(req, res) {
+  try {
+    const { id } = req.params;
+    const result = await relaunchPickupOrder({
+      preorderId: id,
+      countryId: pickCountryId(req),
+      adminName: actorLabel(req),
+      adminId: req.user?.id || null,
+    });
+    return res.json(result);
+  } catch (e) {
+    console.error("relaunchPickupOrderHandler error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (relaunchPickupOrder)" });
+  }
+}
+
 async function applyPickupPenaltyHandler(req, res) {
   try {
     const { id } = req.params;
@@ -3781,6 +3800,7 @@ module.exports = {
   resolvePreparationAnomaly,
   prepareOrder,
   listOverduePickups,
+  relaunchPickupOrderHandler,
   applyPickupPenaltyHandler,
   fulfillOrder,
   regularizeFulfillmentNoNotification,

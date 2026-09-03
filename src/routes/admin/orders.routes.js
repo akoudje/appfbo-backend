@@ -137,6 +137,12 @@ router.post(
 );
 
 router.post(
+  "/:id/pickup-relaunch",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.relaunchPickupOrderHandler,
+);
+
+router.post(
   "/:id/pickup-penalty",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.applyPickupPenaltyHandler,
