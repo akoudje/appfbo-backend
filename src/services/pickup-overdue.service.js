@@ -117,7 +117,19 @@ async function sendPickupReminders({ now = new Date() } = {}) {
     try {
       const result = await sendPreorderNotification({
         preorder,
-        purpose: "REMINDER",
+        // "REMINDER" (et non "PICKUP_REMINDER") est déjà utilisé par le
+        // rappel de paiement de préfacture, avec un template SMS/email
+        // configuré en base par l'admin pour CE purpose — ce template
+        // configuré prend le pas sur le `message` fourni ici
+        // (resolveConfiguredTemplates ne retombe sur le message custom que
+        // si aucun template n'est configuré pour le purpose demandé). Avec
+        // purpose: "REMINDER", le rappel de retrait envoyait donc le
+        // template de rappel de paiement, dont les placeholders
+        // (paymentCollectionCode, totalFcfa, supportPhone) ne s'appliquent
+        // pas à ce flux : "Montant 0F", code dupliqué sur le numéro de
+        // commande, "Assistance:" vide. Voir aussi flagOverduePickups
+        // ci-dessous, même bug.
+        purpose: "PICKUP_REMINDER",
         message: buildPickupReminderMessage(preorder, overdueAt),
         actorName: "SYSTEM_PICKUP_REMINDER",
       });
@@ -188,7 +200,10 @@ async function flagOverduePickups({ now = new Date() } = {}) {
     try {
       const result = await sendPreorderNotification({
         preorder,
-        purpose: "REMINDER",
+        // Voir le commentaire équivalent dans sendPickupReminders : purpose
+        // distinct de "REMINDER" (déjà pris par le rappel de paiement, avec
+        // un template configuré qui écraserait ce message).
+        purpose: "PICKUP_OVERDUE",
         message:
           `Bonjour ${preorder.fboNomComplet || "Client"}, votre colis ${preorder.parcelNumber || preorder.preorderNumber} ` +
           `n'a toujours pas ete retire (${daysLate} jour${daysLate > 1 ? "s" : ""} apres mise a disposition). ` +
