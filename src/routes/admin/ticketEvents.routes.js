@@ -1,13 +1,18 @@
 const express = require("express");
 const { Permission } = require("../../auth/permissions");
-const { requirePermission } = require("../../middlewares/rbac");
+const { requirePermission, requireAnyPermission } = require("../../middlewares/rbac");
 const ticketEventsController = require("../../controllers/admin/ticketEvents.controller");
 
 const router = express.Router();
 
 router.get(
   "/",
-  requirePermission(Permission.MARKETING_WRITE),
+  // Point d'entrée obligatoire du ticket-checker-app (choix de l'événement
+  // avant ouverture de session de contrôle) : un compte n'ayant que
+  // TICKET_CHECKIN (sans MARKETING_WRITE — le cas d'usage même pour lequel
+  // cette permission dédiée existe) doit pouvoir lister les événements,
+  // sinon il ne peut jamais atteindre l'écran de scan.
+  requireAnyPermission([Permission.MARKETING_WRITE, Permission.TICKET_CHECKIN]),
   ticketEventsController.listEvents,
 );
 
