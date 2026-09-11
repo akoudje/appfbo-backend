@@ -127,6 +127,11 @@ async function createQrLink(req, res) {
       publicUrl: publicUrl(req, link.token),
     });
   } catch (error) {
+    if (error?.code === "P2002") {
+      return res.status(409).json({
+        message: "Un lien vient d'être généré pour cette référence, merci de réessayer.",
+      });
+    }
     if (error?.code === "P2022" || /column .*does not exist/i.test(String(error?.message || ""))) {
       return res.status(500).json({
         message:
