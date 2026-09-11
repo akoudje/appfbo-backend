@@ -70,10 +70,45 @@ function isExpired(link) {
   return link?.expiresAt && new Date(link.expiresAt).getTime() < Date.now();
 }
 
+const DEFAULT_CLOSED_MESSAGE =
+  "Le comptoir est actuellement fermé. Merci de réessayer pendant nos heures d'ouverture.";
+
+async function getRegisterStatus(countryId) {
+  const status = await prisma.cashRegisterStatus.findUnique({ where: { countryId } });
+  return status || { isOpen: true, closedMessage: null };
+}
+
+async function getQrStatus(req, res) {
+  try {
+    if (!hasQrAccess(req)) {
+      return res.status(403).json({ message: "Accès non autorisé." });
+    }
+    const status = await getRegisterStatus(req.countryId);
+    return res.json({
+      isOpen: status.isOpen,
+      closedMessage: status.isOpen ? null : status.closedMessage || DEFAULT_CLOSED_MESSAGE,
+    });
+  } catch (error) {
+    console.error("externalPaymentLinks.getQrStatus error:", error);
+    return res.status(500).json({ message: "Erreur serveur (getQrStatus)" });
+  }
+}
+
 async function createQrLink(req, res) {
   try {
     if (!hasQrAccess(req)) {
       return res.status(403).json({ message: "Accès non autorisé." });
+    }
+
+    // Interrupteur temporaire "caisse fermée" : le comptoir physique a
+    // annulé les liens en attente et ne veut plus en accepter de nouveaux
+    // tant qu'il n'a pas rouvert (voir cashRegisterStatus.controller.js).
+    const registerStatus = await getRegisterStatus(req.countryId);
+    if (!registerStatus.isOpen) {
+      return res.status(503).json({
+        message: registerStatus.closedMessage || DEFAULT_CLOSED_MESSAGE,
+        code: "CASH_REGISTER_CLOSED",
+      });
     }
 
     const invoiceReference = normalizeOptionalText(req.body?.invoiceReference);
@@ -240,6 +275,7 @@ async function syncWave(req, res) {
 }
 
 module.exports = {
+  getQrStatus,
   createQrLink,
   getPublicLink,
   initiateWave,
