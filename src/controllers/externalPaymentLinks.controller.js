@@ -1,6 +1,10 @@
 const prisma = require("../prisma");
 const crypto = require("crypto");
 const externalWavePaymentService = require("../services/external-wave-payment.service");
+const {
+  DEFAULT_CLOSED_MESSAGE,
+  getCashRegisterStatus,
+} = require("../services/cash-register-closure.service");
 
 function generateToken() {
   return crypto.randomBytes(24).toString("base64url");
@@ -70,20 +74,12 @@ function isExpired(link) {
   return link?.expiresAt && new Date(link.expiresAt).getTime() < Date.now();
 }
 
-const DEFAULT_CLOSED_MESSAGE =
-  "Le comptoir est actuellement fermé. Merci de réessayer pendant nos heures d'ouverture.";
-
-async function getRegisterStatus(countryId) {
-  const status = await prisma.cashRegisterStatus.findUnique({ where: { countryId } });
-  return status || { isOpen: true, closedMessage: null };
-}
-
 async function getQrStatus(req, res) {
   try {
     if (!hasQrAccess(req)) {
       return res.status(403).json({ message: "Accès non autorisé." });
     }
-    const status = await getRegisterStatus(req.countryId);
+    const status = await getCashRegisterStatus(req.countryId);
     return res.json({
       isOpen: status.isOpen,
       closedMessage: status.isOpen ? null : status.closedMessage || DEFAULT_CLOSED_MESSAGE,
@@ -103,7 +99,7 @@ async function createQrLink(req, res) {
     // Interrupteur temporaire "caisse fermée" : le comptoir physique a
     // annulé les liens en attente et ne veut plus en accepter de nouveaux
     // tant qu'il n'a pas rouvert (voir cashRegisterStatus.controller.js).
-    const registerStatus = await getRegisterStatus(req.countryId);
+    const registerStatus = await getCashRegisterStatus(req.countryId);
     if (!registerStatus.isOpen) {
       return res.status(503).json({
         message: registerStatus.closedMessage || DEFAULT_CLOSED_MESSAGE,

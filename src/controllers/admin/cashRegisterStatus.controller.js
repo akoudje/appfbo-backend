@@ -1,11 +1,18 @@
 const prisma = require("../../prisma");
+const {
+  cancelPendingInvoicedPreordersForCountry,
+} = require("../../services/cash-register-closure.service");
 
 // Interrupteur temporaire "paiements en ligne ouverts / fermés" par pays.
-// Fermer bloque la création de nouveaux liens de paiement hors précommande
-// via le kiosque QR et annule ceux encore actifs, pour éviter qu'un client
-// paie via Wave alors que le comptoir physique est fermé et que personne ne
-// peut le servir. À retirer une fois l'automatisation réelle des horaires
-// de caisse en place.
+// Fermer :
+//  - annule les liens de paiement hors précommande encore actifs et bloque
+//    la création de nouveaux via le kiosque QR ;
+//  - annule les précommandes préfacturées (INVOICED / PAYMENT_PENDING) et
+//    bloque l'initiation publique de paiement Wave pour ces commandes
+//    (voir payments.service.js#initiateWavePayment) ;
+// pour éviter qu'un client paie alors que le comptoir physique est fermé et
+// que personne ne peut le servir. À retirer une fois l'automatisation
+// réelle des horaires de caisse en place.
 
 const DEFAULT_CLOSED_MESSAGE =
   "Le comptoir est actuellement fermé. Merci de réessayer pendant nos heures d'ouverture.";
@@ -54,39 +61,51 @@ async function closeRegister(req, res) {
   try {
     const closedMessage =
       String(req.body?.message || "").trim() || DEFAULT_CLOSED_MESSAGE;
+    const actorAdminId = req.user?.id || null;
 
-    const [status, cancelledLinks] = await prisma.$transaction([
-      prisma.cashRegisterStatus.upsert({
+    const result = await prisma.$transaction(async (tx) => {
+      const status = await tx.cashRegisterStatus.upsert({
         where: { countryId: req.countryId },
         update: {
           isOpen: false,
           closedMessage,
           closedAt: new Date(),
-          closedById: req.user?.id || null,
+          closedById: actorAdminId,
         },
         create: {
           countryId: req.countryId,
           isOpen: false,
           closedMessage,
           closedAt: new Date(),
-          closedById: req.user?.id || null,
+          closedById: actorAdminId,
         },
         include: includeActors,
-      }),
-      prisma.externalPaymentLink.updateMany({
+      });
+
+      const cancelledLinks = await tx.externalPaymentLink.updateMany({
         where: { countryId: req.countryId, status: "ACTIVE" },
         data: {
           status: "CANCELLED",
           cancelledAt: new Date(),
-          updatedById: req.user?.id || null,
+          updatedById: actorAdminId,
         },
-      }),
-    ]);
+      });
+
+      const cancelledPreordersCount = await cancelPendingInvoicedPreordersForCountry({
+        tx,
+        countryId: req.countryId,
+        reason: "Précommande annulée : fermeture de caisse, paiement non reçu à temps.",
+        actorAdminId,
+      });
+
+      return { status, cancelledLinksCount: cancelledLinks.count, cancelledPreordersCount };
+    });
 
     return res.json({
       ok: true,
-      status: serialize(status),
-      cancelledLinksCount: cancelledLinks.count,
+      status: serialize(result.status),
+      cancelledLinksCount: result.cancelledLinksCount,
+      cancelledPreordersCount: result.cancelledPreordersCount,
     });
   } catch (error) {
     console.error("cashRegisterStatus.closeRegister error:", error);

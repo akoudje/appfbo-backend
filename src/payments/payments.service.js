@@ -21,6 +21,9 @@ const {
 const {
   syncTicketWaveOrderFromWebhook,
 } = require("../services/ticket-wave-payment.service");
+const {
+  getCashRegisterStatus,
+} = require("../services/cash-register-closure.service");
 
 function isWaveSimulationEnabled() {
   return String(process.env.ENABLE_WAVE_SIMULATION || "false") === "true";
@@ -1552,6 +1555,24 @@ async function initiateWavePayment({
     );
     err.statusCode = 400;
     throw err;
+  }
+
+  // Interrupteur temporaire "caisse fermée" : ne s'applique qu'à
+  // l'initiation publique (client, sans session admin) — un membre du
+  // personnel qui initie manuellement un paiement le fait sciemment, ce
+  // n'est pas le cas non supervisé que ce garde-fou vise à bloquer. Voir
+  // cashRegisterStatus.controller.js.
+  if (!req.user) {
+    const registerStatus = await getCashRegisterStatus(countryId);
+    if (!registerStatus.isOpen) {
+      const err = new Error(
+        registerStatus.closedMessage ||
+          "Le comptoir est actuellement fermé. Merci de réessayer pendant nos heures d'ouverture.",
+      );
+      err.statusCode = 503;
+      err.code = "CASH_REGISTER_CLOSED";
+      throw err;
+    }
   }
 
   const providerAccount = await resolveWaveProviderAccount(countryId);
