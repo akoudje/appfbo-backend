@@ -499,6 +499,7 @@ model Country {
   externalPaymentLinks ExternalPaymentLink[]
   memorials Memorial[]
   memorialTributes MemorialTribute[]
+  cashRegisterStatus CashRegisterStatus?
 }
 
 model MobilePushToken {
@@ -655,6 +656,8 @@ model AdminUser {
   cancelledFboDocuments FboDocument[] @relation("FboDocumentCancelledBy")
   createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
   updatedExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkUpdatedBy")
+  closedCashRegisterStatuses CashRegisterStatus[] @relation("CashRegisterStatusClosedBy")
+  reopenedCashRegisterStatuses CashRegisterStatus[] @relation("CashRegisterStatusReopenedBy")
   reviewedMemorialTributes MemorialTribute[] @relation("MemorialTributeReviewedBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
   auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
@@ -1694,6 +1697,33 @@ model ExternalPaymentLink {
   @@index([provider, providerTransactionId])
   @@index([customerPhone])
   @@index([customerFboNumber])
+}
+
+// Interrupteur temporaire "caisse ouverte / fermée" par pays : quand le
+// comptoir physique ferme, on empêche la génération de nouveaux liens de
+// paiement hors précommande via le kiosque QR et on annule ceux encore
+// actifs, pour éviter qu'un client paie alors que personne ne peut le
+// servir. À retirer une fois l'automatisation réelle des horaires de
+// caisse en place (voir ExternalPaymentLink pour le lien concerné).
+model CashRegisterStatus {
+  id String @id @default(cuid())
+
+  countryId String @unique
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  isOpen        Boolean @default(true)
+  closedMessage String? @db.Text
+
+  closedAt   DateTime?
+  closedById String?
+  closedBy   AdminUser? @relation("CashRegisterStatusClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
+  reopenedAt   DateTime?
+  reopenedById String?
+  reopenedBy   AdminUser? @relation("CashRegisterStatusReopenedBy", fields: [reopenedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model PickupCodeResendRequest {
