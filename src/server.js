@@ -122,38 +122,55 @@ const corsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
 
+    // L'app desktop admin (Electron) charge l'UI via `file://` en
+    // production (voir electron/main.cjs, win.loadFile). Chromium envoie
+    // alors un en-tête `Origin: null` (littéral) sur les appels cross-origin
+    // vers l'API : c'est une origine "opaque" valide pour notre propre
+    // client desktop, pas une requête à bloquer.
+    if (origin === "null") return cb(null, true);
+
+    // Important : ne jamais passer d'Error à `cb()` ci-dessous. Le
+    // middleware `cors` la propage à `next(err)`, ce qui fait planter la
+    // requête (y compris le preflight OPTIONS) avec un 500 générique côté
+    // client — indiscernable d'une vraie panne serveur, sans le moindre
+    // détail CORS. `cb(null, false)` bloque proprement (pas d'en-têtes
+    // Access-Control-*, la requête échoue côté navigateur) sans planter.
+    let parsed;
     try {
-      const { hostname, protocol } = new URL(origin);
-      if (protocol !== "https:" && protocol !== "http:") {
-        return cb(new Error("Bad origin"));
-      }
-
-      if (allowedOrigins.has(origin)) {
-        return cb(null, true);
-      }
-
-      if (allowedOriginPatterns.some((rx) => rx.test(origin))) {
-        return cb(null, true);
-      }
-
-      if (hostname === "localhost" || hostname === "127.0.0.1") {
-        return cb(null, true);
-      }
-
-      if (
-        hostname.endsWith(".vercel.app") &&
-        (hostname.startsWith("appfbo-admin") ||
-          hostname.startsWith("appfbo-frontend"))
-      ) {
-        return cb(null, true);
-      }
-
-      console.warn("CORS blocked:", origin);
-      return cb(new Error(`CORS blocked for origin: ${origin}`));
+      parsed = new URL(origin);
     } catch (e) {
       console.warn("CORS origin parse failed:", origin);
-      return cb(new Error("CORS origin invalid"));
+      return cb(null, false);
     }
+
+    const { hostname, protocol } = parsed;
+    if (protocol !== "https:" && protocol !== "http:") {
+      console.warn("CORS blocked (bad protocol):", origin);
+      return cb(null, false);
+    }
+
+    if (allowedOrigins.has(origin)) {
+      return cb(null, true);
+    }
+
+    if (allowedOriginPatterns.some((rx) => rx.test(origin))) {
+      return cb(null, true);
+    }
+
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+      return cb(null, true);
+    }
+
+    if (
+      hostname.endsWith(".vercel.app") &&
+      (hostname.startsWith("appfbo-admin") ||
+        hostname.startsWith("appfbo-frontend"))
+    ) {
+      return cb(null, true);
+    }
+
+    console.warn("CORS blocked:", origin);
+    return cb(null, false);
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
