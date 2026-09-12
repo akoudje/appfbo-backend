@@ -94,7 +94,7 @@ async function closeRegister(req, res) {
       const cancelledPreordersCount = await cancelPendingInvoicedPreordersForCountry({
         tx,
         countryId: req.countryId,
-        reason: "Précommande annulée : fermeture de caisse, paiement non reçu à temps.",
+        reason: "Paiement non reçu : précommande annulée à la fermeture de caisse.",
         actorAdminId,
       });
 
