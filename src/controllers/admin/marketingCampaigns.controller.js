@@ -1343,6 +1343,14 @@ async function uploadMarketingAsset(req, res) {
       use_filename: true,
       unique_filename: true,
       filename_override: `${slot}-${Date.now()}`,
+      // Filet de sécurité indépendant du plafond de poids (MAX_UPLOAD_FILE_SIZE) :
+      // une image marketing n'a jamais besoin de dépasser 2400px de large à
+      // l'affichage (bannière plein écran sur grand desktop). `crop: "limit"`
+      // ne redimensionne que si l'original est plus grand, jamais d'agrandissement.
+      // L'optimisation format/qualité (f_auto/q_auto) se fait à la livraison
+      // (voir buildOptimizedImageUrl côté frontend), pas ici, pour rester
+      // adaptable par viewport sans re-uploader.
+      transformation: [{ width: 2400, crop: "limit" }],
     });
 
     const url = uploadResult?.secure_url || uploadResult?.url || null;
