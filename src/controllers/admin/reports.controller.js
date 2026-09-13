@@ -6,6 +6,16 @@ const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 // voir aggregateTotals plus bas.
 const DETAIL_ROWS_LIMIT = 10000;
 
+// Plafond de largeur pour une période "custom" (~1 trimestre). Contrairement
+// à day/week/month qui sont naturellement bornées, une plage personnalisée
+// peut couvrir des mois voire des années : le rapport recalcule pourtant le
+// détail complet (jusqu'à DETAIL_ROWS_LIMIT lignes par section) ET
+// l'évolution mensuelle mois par mois pour toute la plage, sans pagination.
+// Une plage trop large fait timeout/crash le serveur (502) au lieu de
+// répondre — mieux vaut refuser explicitement une plage trop large que de
+// laisser planter la requête sans message exploitable.
+const MAX_CUSTOM_RANGE_DAYS = 92;
+
 function parseReportDate(value) {
   const raw = String(value || "").trim();
   const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -105,6 +115,13 @@ function resolveReportPeriod(query = {}) {
     const safeFrom = fromIso <= toIso ? fromIso : toIso;
     const safeTo = fromIso <= toIso ? toIso : fromIso;
     const days = inclusiveDayCount(safeFrom, safeTo);
+    if (days > MAX_CUSTOM_RANGE_DAYS) {
+      const err = new Error(
+        `Période personnalisée trop large (${days} jours) : ${MAX_CUSTOM_RANGE_DAYS} jours maximum (~1 trimestre). Réduisez la plage ou utilisez plusieurs exports.`,
+      );
+      err.statusCode = 400;
+      throw err;
+    }
     const previousStartIso = shiftIsoDay(safeFrom, -days);
     const previousEndIso = shiftIsoDay(safeFrom, -1);
     return {
