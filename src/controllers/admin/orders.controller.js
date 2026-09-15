@@ -636,7 +636,14 @@ async function listOrders(req, res) {
 
 async function getSubmittedOrdersExport(req, res) {
   try {
-    const where = buildOrdersListWhere(req, { status: "SUBMITTED" });
+    const preorderNumbers = String(req.query.preorderNumbers || "")
+      .split(/[\s,;]+/)
+      .map((n) => n.trim())
+      .filter(Boolean);
+
+    const where = preorderNumbers.length
+      ? scopeWhere(req, { preorderNumber: { in: preorderNumbers } })
+      : buildOrdersListWhere(req, { status: "SUBMITTED" });
 
     const orders = await prisma.preorder.findMany({
       where,
