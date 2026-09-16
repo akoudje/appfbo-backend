@@ -107,6 +107,43 @@ function getEffectiveReminderDelayHours(settings = null) {
   return Math.ceil(getEffectiveReminderDelayMinutes(settings) / 60);
 }
 
+function getCashCloseTimeLocal() {
+  return String(process.env.PREINVOICED_CASH_CLOSE_TIME_LOCAL || "17:00").trim();
+}
+
+function getLastHourReminderDelayMinutes() {
+  return Math.max(
+    1,
+    parsePositiveInt(process.env.PREINVOICED_LAST_HOUR_REMINDER_AFTER_MINUTES, 10),
+  );
+}
+
+// La fermeture de caisse est une action manuelle (pas d'heure planifiée en
+// base) : ce repère ne fait qu'accélérer le rappel pour les factures de fin
+// de journée, il ne déclenche ni fermeture ni annulation automatique.
+function resolveCashCloseTimeOnDay(referenceDate) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(getCashCloseTimeLocal());
+  if (!match) return null;
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  const closeTime = new Date(referenceDate);
+  closeTime.setHours(hours, minutes, 0, 0);
+  return closeTime;
+}
+
+function isWithinLastHourBeforeCashClose(invoicedAt) {
+  const baseTime = new Date(invoicedAt);
+  if (Number.isNaN(baseTime.getTime())) return false;
+  const closeTime = resolveCashCloseTimeOnDay(baseTime);
+  if (!closeTime) return false;
+  const oneHourBeforeClose = new Date(closeTime.getTime() - 60 * 60 * 1000);
+  return (
+    baseTime.getTime() >= oneHourBeforeClose.getTime() &&
+    baseTime.getTime() < closeTime.getTime()
+  );
+}
+
 function getSchedulerEveryMinutes() {
   return Math.max(
     1,
@@ -150,9 +187,19 @@ function formatFcfa(value) {
 function buildReminderCutoffAt(invoicedAt, settings = null) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
-  return new Date(
-    baseTime.getTime() + getEffectiveReminderDelayMinutes(settings) * 60 * 1000,
-  );
+
+  // Une facture émise dans la dernière heure avant la fermeture de caisse a
+  // beaucoup moins de temps réel pour être payée que les autres (la caisse
+  // ferme manuellement, indépendamment du délai d'expiration de 3h) : on
+  // envoie le rappel bien plus vite au lieu d'attendre le délai standard.
+  const delayMinutes = isWithinLastHourBeforeCashClose(baseTime)
+    ? Math.min(
+        getLastHourReminderDelayMinutes(),
+        getEffectiveReminderDelayMinutes(settings),
+      )
+    : getEffectiveReminderDelayMinutes(settings);
+
+  return new Date(baseTime.getTime() + delayMinutes * 60 * 1000);
 }
 
 function formatDuration(minutes) {
@@ -170,11 +217,17 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
     preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-",
   );
   const amountFmt = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
+  // Le délai d'expiration (3h) reste vrai, mais pour une facture de fin de
+  // journée la vraie contrainte est l'heure de fermeture de caisse, bien
+  // plus proche : annoncer "sous 2h" serait trompeur dans ce cas.
+  const urgent = isWithinLastHourBeforeCashClose(preorder?.invoicedAt);
   const remainingMinutes = Math.max(
     1,
     getEffectiveExpiryMinutes(settings) - getEffectiveReminderDelayMinutes(settings),
   );
-  const remainingLabel = formatDuration(remainingMinutes);
+  const remainingLabel = urgent
+    ? "avant la fermeture de la caisse"
+    : `sous ${formatDuration(remainingMinutes)}`;
   const paymentMode = String(
     preorder?.preorderPaymentMode || preorder?.paymentMode || preorder?.paymentProvider || "",
   )
@@ -186,14 +239,14 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
       return prependNotificationPrefix(
         preorder,
         compactText(
-          `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Effectuez le virement puis deposez votre preuve sous ${remainingLabel}: ${normalizedLink}`,
+          `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Effectuez le virement puis deposez votre preuve ${remainingLabel}: ${normalizedLink}`,
         ),
       );
     }
     return prependNotificationPrefix(
       preorder,
       compactText(
-        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez votre virement sous ${remainingLabel} pour éviter l'annulation.`,
+        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez votre virement ${remainingLabel} pour éviter l'annulation.`,
       ),
     );
   }
@@ -202,7 +255,7 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
     return prependNotificationPrefix(
       preorder,
       compactText(
-        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez le paiement sous ${remainingLabel}: ${normalizedLink}`,
+        `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Finalisez le paiement ${remainingLabel}: ${normalizedLink}`,
       ),
     );
   }
@@ -210,7 +263,7 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
   return prependNotificationPrefix(
     preorder,
     compactText(
-      `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Passez a la caisse FLP sous ${remainingLabel} pour éviter l'annulation.`,
+      `Rappel: code paiement ${collectionCode}. Montant ${amountFmt}. Passez a la caisse FLP ${remainingLabel} pour éviter l'annulation.`,
     ),
   );
 }
@@ -632,6 +685,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
         id: row.id,
         preorderNumber: row.preorderNumber,
         reminderHours: getEffectiveReminderDelayHours(row.country?.settings || null),
+        lastHourAccelerated: isWithinLastHourBeforeCashClose(row.invoicedAt),
       })),
     };
   }
@@ -679,6 +733,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
           meta: {
             mode: "AUTO_REMINDER_BEFORE_EXPIRY",
             reminderHours: getEffectiveReminderDelayHours(countrySettings),
+            lastHourAccelerated: isWithinLastHourBeforeCashClose(candidate.invoicedAt),
             smsSent: Boolean(notificationResult?.smsSent),
             smsQueued: Boolean(notificationResult?.smsQueued),
             notificationChannel: notificationResult?.channel || null,
@@ -852,6 +907,7 @@ module.exports = {
   cancelExpiredInvoicedPreorders,
   getEffectiveReminderDelayHours,
   getAutoCancelRunnerMode,
+  isWithinLastHourBeforeCashClose,
   sendReminderForDuePreorders,
   startExpiredInvoiceAutoCancelScheduler,
 };
