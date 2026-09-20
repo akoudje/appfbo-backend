@@ -213,31 +213,11 @@ function enforceFboCheckRateLimit(req) {
   return bucket.count <= FBO_CHECK_RATE_LIMIT_MAX;
 }
 
-// Masque chaque mot du nom (garde la 1re lettre, remplace le reste par des
-// "*") : assez pour que le vrai propriétaire du numéro se reconnaisse et
-// détecte une erreur de saisie, pas assez pour qu'un tiers testant des
-// numéros au hasard puisse récupérer l'identité complète d'un FBO.
-function maskFboFullName(fullName) {
-  return String(fullName || "")
-    .trim()
-    .split(/(\s+|[/\-,.'])/)
-    .map((token) =>
-      /^[A-Za-zÀ-ÖØ-öø-ÿ]+$/.test(token)
-        ? token[0] + "*".repeat(token.length - 1)
-        : token,
-    )
-    .join("");
-}
-
 function sanitizeFboDirectoryPayload(payload) {
   if (!payload || payload.exists === false) return { exists: false };
-  const fullName = String(
-    payload.full_name || payload.fullName || payload.nomComplet || "",
-  ).trim();
   return {
     exists: true,
     grade: typeof payload.grade === "string" ? payload.grade : null,
-    maskedName: fullName ? maskFboFullName(fullName) : null,
   };
 }
 
