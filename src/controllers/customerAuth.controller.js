@@ -163,10 +163,20 @@ async function resolveFboAndDestinations({ countryId, countryCode, numeroFbo, re
   });
   if (!fbo) return null;
 
+  // Un brouillon (DRAFT) tout juste créé (par ex. en navigant simplement le
+  // catalogue) n'a ni téléphone ni email renseigné : ces champs ne sont
+  // remplis qu'à la facturation/soumission. Prendre "la dernière commande"
+  // au sens strict pouvait donc bloquer la connexion d'un client qui a
+  // pourtant des coordonnées valides sur une commande précédente — on ne
+  // considère que les commandes qui ont réellement un contact renseigné.
   const latestOrder = await prisma.preorder.findFirst({
     where: {
       countryId,
       fboId: fbo.id,
+      OR: [
+        { factureWhatsappTo: { not: null } },
+        { fboEmail: { not: null } },
+      ],
     },
     orderBy: { createdAt: "desc" },
     select: {
