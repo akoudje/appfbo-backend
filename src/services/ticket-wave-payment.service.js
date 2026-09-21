@@ -1,6 +1,7 @@
 const prisma = require("../prisma");
 const paymentOrchestrator = require("../payments/payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper");
+const { computePaymentPricing } = require("../payments/payment-pricing");
 const {
   ensureTicketsActivatedForPaidOrder,
   paidOrderTicketInclude,
@@ -117,7 +118,13 @@ async function initiateTicketWavePayment({ req, orderNumber }) {
     throw err;
   }
 
-  const amountFcfa = Number(order.totalFcfa || 0);
+  // Comme pour les précommandes (voir payment-pricing.js), Wave prélève 1%
+  // de frais de service : ce montant est répercuté sur l'acheteur plutôt
+  // qu'absorbé, en l'ajoutant au prix du billet au moment du paiement.
+  const { amountToPayFcfa: amountFcfa, paymentServiceFeeFcfa } = computePaymentPricing({
+    preorderPaymentMode: "WAVE",
+    orderTotalFcfa: order.totalFcfa,
+  });
   if (!Number.isFinite(amountFcfa) || amountFcfa <= 0) {
     const err = new Error("Montant ticket invalide");
     err.statusCode = 400;
@@ -164,6 +171,8 @@ async function initiateTicketWavePayment({ req, orderNumber }) {
     ok: true,
     simulated: simulation,
     order: updated,
+    paymentServiceFeeFcfa,
+    amountToPayFcfa: amountFcfa,
     checkoutUrl: updated.providerCheckoutUrl || updated.providerLaunchUrl,
   };
 }
