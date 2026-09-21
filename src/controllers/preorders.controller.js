@@ -24,6 +24,7 @@ const {
 const {
   fetchFboDirectoryProfile,
   isFboDirectoryTemporarilyUnavailable,
+  normalizeGrade,
 } = require("../services/fboDirectory.service");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1]
@@ -46,14 +47,6 @@ const DEFAULT_POINT_DE_VENTE_BY_COUNTRY = {
   BEN: "COTONOU",
   NER: "NIAMEY",
 };
-const VALID_GRADES = [
-  "CLIENT_PRIVILEGIE",
-  "ANIMATEUR_ADJOINT",
-  "ANIMATEUR",
-  "MANAGER_ADJOINT",
-  "MANAGER",
-];
-
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
@@ -106,57 +99,6 @@ function serializeExistingPreorder(preorder) {
       : null,
     reused: true,
   };
-}
-
-function normalizeGrade(raw) {
-  const normalized = String(raw || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "_")
-    .replace(/-/g, "_");
-  const normalizedText = String(raw || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, " ")
-    .trim();
-
-  const aliases = {
-    CLIENTPRIVILEGIE: "CLIENT_PRIVILEGIE",
-    PREFERRED_CUSTOMER: "CLIENT_PRIVILEGIE",
-    PREFERREDCUSTOMER: "CLIENT_PRIVILEGIE",
-    ANIMATEURADJOINT: "ANIMATEUR_ADJOINT",
-    ASSISTANT_SUPERVISOR: "ANIMATEUR_ADJOINT",
-    ASSISTANTSUPERVISOR: "ANIMATEUR_ADJOINT",
-    SUPERVISOR: "ANIMATEUR",
-    MANAGERADJOINT: "MANAGER_ADJOINT",
-    ASSISTANT_MANAGER: "MANAGER_ADJOINT",
-    ASSISTANTMANAGER: "MANAGER_ADJOINT",
-    UNRECOGNIZED_MANAGER: "MANAGER",
-    UNRECOGNIZEDMANAGER: "MANAGER",
-    RECOGNIZED_MANAGER: "MANAGER",
-    RECOGNIZEDMANAGER: "MANAGER",
-    SENIOR_MANAGER: "MANAGER",
-    SENIORMANAGER: "MANAGER",
-    SOARING_MANAGER: "MANAGER",
-    SOARINGMANAGER: "MANAGER",
-    DIAMOND_MANAGER: "MANAGER",
-    DIAMONDMANAGER: "MANAGER",
-    SAPPHIRE_MANAGER: "MANAGER",
-    SAPPHIREMANAGER: "MANAGER",
-  };
-
-  if (VALID_GRADES.includes(normalized)) return normalized;
-  if (
-    normalizedText.includes("MANAGER") &&
-    (normalizedText.includes("UNRECOGNIZED") ||
-      normalizedText.includes("UNRECOGNISED") ||
-      (normalizedText.includes("NON") && normalizedText.includes("RECONNU")))
-  ) {
-    return "MANAGER";
-  }
-  return aliases[normalized] || "";
 }
 
 function mapSmsStatus(rawStatus) {
