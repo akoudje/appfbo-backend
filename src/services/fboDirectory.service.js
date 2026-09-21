@@ -80,7 +80,14 @@ function normalizeGrade(raw) {
   ) {
     return "MANAGER";
   }
-  return aliases[normalized] || "";
+  if (aliases[normalized]) return aliases[normalized];
+  // Les titres Manager réels du service FBO vont bien au-delà des quelques
+  // variantes listées ci-dessus (ex: "Diamond Sapphire Manager") : plutôt
+  // que d'énumérer chaque combinaison, tout titre contenant "Manager" et
+  // non capturé explicitement reste dans le seul palier Manager que gère
+  // cette appli.
+  if (normalizedText.includes("MANAGER")) return "MANAGER";
+  return "";
 }
 
 async function fetchFboDirectoryProfile(numeroFbo) {
