@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const ticketWavePaymentService = require("../services/ticket-wave-payment.service");
+const { computePaymentPricing } = require("../payments/payment-pricing");
 const { normalizeEmail } = require("../services/email.service");
 const { sendTicketOrderEmail } = require("../services/ticket-email-notifications.service");
 const { publicFrontendBaseUrl } = require("../services/public-url.service");
@@ -272,6 +273,8 @@ async function createTicketOrder(req, res) {
       checkoutUrl: payment.checkoutUrl || null,
       paymentInitiated: true,
       simulatedPayment: Boolean(payment.simulated),
+      paymentServiceFeeFcfa: payment.paymentServiceFeeFcfa,
+      amountToPayFcfa: payment.amountToPayFcfa,
     });
   } catch (error) {
     console.error("createTicketOrder error:", error);
@@ -296,7 +299,21 @@ async function getTicketOrder(req, res) {
       },
     });
     if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
-    return res.json(order);
+
+    // Le paiement billetterie ne passe que par Wave (voir createTicketOrder) :
+    // pas de logique conditionnelle par mode, le prélèvement de 1% s'applique
+    // systématiquement. Non persisté, recalculé à chaque lecture comme pour
+    // le contexte de paiement Wave des précommandes (payments.service.js).
+    const pricing = computePaymentPricing({
+      preorderPaymentMode: "WAVE",
+      orderTotalFcfa: order.totalFcfa,
+    });
+
+    return res.json({
+      ...order,
+      paymentServiceFeeFcfa: pricing.paymentServiceFeeFcfa,
+      amountToPayFcfa: pricing.amountToPayFcfa,
+    });
   } catch (error) {
     console.error("getTicketOrder error:", error);
     return res.status(500).json({ message: "Erreur serveur (getTicketOrder)" });
