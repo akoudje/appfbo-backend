@@ -46,7 +46,33 @@ function getDefaultExpiryMinutes() {
   );
 }
 
-function getEffectiveExpiryMinutes(settings = null) {
+// Virement bancaire, Ecobank Pay et PI SPI exigent tous un dépôt manuel de
+// preuve de paiement (pas un débit instantané) : le client doit d'abord
+// faire l'opération auprès de sa banque avant de pouvoir déposer sa preuve,
+// ce qui peut prendre bien plus longtemps que le délai générique de
+// quelques heures prévu pour les paiements mobile money instantanés.
+function isBankProofPaymentMode(mode) {
+  return ["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"].includes(
+    String(mode || "").trim().toUpperCase(),
+  );
+}
+
+function getDefaultBankPaymentDueMinutes() {
+  return Math.max(
+    60,
+    parsePositiveInt(process.env.BANK_PAYMENT_DUE_DEFAULT_MINUTES, 72 * 60),
+  );
+}
+
+function getEffectiveExpiryMinutes(settings = null, preorderPaymentMode = null) {
+  if (isBankProofPaymentMode(preorderPaymentMode)) {
+    const bankHours = Number(settings?.bankPaymentDueHours);
+    if (Number.isFinite(bankHours) && bankHours > 0) {
+      return Math.max(1, Math.round(bankHours * 60));
+    }
+    return getDefaultBankPaymentDueMinutes();
+  }
+
   const fallback = getDefaultExpiryMinutes();
   const parsed = Number.parseInt(
     String(settings?.preinvoicedAutoCancelAfterMinutes ?? ""),
@@ -60,8 +86,8 @@ function getEffectiveExpiryMinutes(settings = null) {
   return Math.max(1, Number.isFinite(legacyHours) ? legacyHours * 60 : fallback);
 }
 
-function getEffectiveExpiryHours(settings = null) {
-  return Math.ceil(getEffectiveExpiryMinutes(settings) / 60);
+function getEffectiveExpiryHours(settings = null, preorderPaymentMode = null) {
+  return Math.ceil(getEffectiveExpiryMinutes(settings, preorderPaymentMode) / 60);
 }
 
 function getDefaultReminderDelayHours() {
@@ -82,8 +108,8 @@ function getDefaultReminderDelayMinutes() {
   );
 }
 
-function getEffectiveReminderDelayMinutes(settings = null) {
-  const expiryMinutes = getEffectiveExpiryMinutes(settings);
+function getEffectiveReminderDelayMinutes(settings = null, preorderPaymentMode = null) {
+  const expiryMinutes = getEffectiveExpiryMinutes(settings, preorderPaymentMode);
   const fallback = getDefaultReminderDelayMinutes();
   const parsed = Number.parseInt(
     String(settings?.preinvoicedAutoReminderAfterMinutes ?? ""),
@@ -103,8 +129,8 @@ function getEffectiveReminderDelayMinutes(settings = null) {
   );
 }
 
-function getEffectiveReminderDelayHours(settings = null) {
-  return Math.ceil(getEffectiveReminderDelayMinutes(settings) / 60);
+function getEffectiveReminderDelayHours(settings = null, preorderPaymentMode = null) {
+  return Math.ceil(getEffectiveReminderDelayMinutes(settings, preorderPaymentMode) / 60);
 }
 
 function getCashCloseTimeLocal() {
@@ -164,18 +190,18 @@ function getAutoCancelRunnerMode() {
     .toLowerCase();
 }
 
-function buildInvoiceExpiryAt(invoicedAt, settings = null) {
+function buildInvoiceExpiryAt(invoicedAt, settings = null, preorderPaymentMode = null) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
   return new Date(
-    baseTime.getTime() + getEffectiveExpiryMinutes(settings) * 60 * 1000,
+    baseTime.getTime() + getEffectiveExpiryMinutes(settings, preorderPaymentMode) * 60 * 1000,
   );
 }
 
 function resolveInvoiceExpiryAt(order, settings = null) {
   const explicit = order?.paymentExpiresAt ? new Date(order.paymentExpiresAt) : null;
   if (explicit && !Number.isNaN(explicit.getTime())) return explicit;
-  return buildInvoiceExpiryAt(order?.invoicedAt, settings);
+  return buildInvoiceExpiryAt(order?.invoicedAt, settings, order?.preorderPaymentMode);
 }
 
 function formatFcfa(value) {
@@ -184,20 +210,20 @@ function formatFcfa(value) {
   return `${new Intl.NumberFormat("fr-FR").format(Math.max(0, Math.round(num)))} FCFA`;
 }
 
-function buildReminderCutoffAt(invoicedAt, settings = null) {
+function buildReminderCutoffAt(invoicedAt, settings = null, preorderPaymentMode = null) {
   const baseTime = new Date(invoicedAt);
   if (Number.isNaN(baseTime.getTime())) return null;
 
   // Une facture émise dans la dernière heure avant la fermeture de caisse a
   // beaucoup moins de temps réel pour être payée que les autres (la caisse
-  // ferme manuellement, indépendamment du délai d'expiration de 3h) : on
+  // ferme manuellement, indépendamment du délai d'expiration standard) : on
   // envoie le rappel bien plus vite au lieu d'attendre le délai standard.
   const delayMinutes = isWithinLastHourBeforeCashClose(baseTime)
     ? Math.min(
         getLastHourReminderDelayMinutes(),
-        getEffectiveReminderDelayMinutes(settings),
+        getEffectiveReminderDelayMinutes(settings, preorderPaymentMode),
       )
-    : getEffectiveReminderDelayMinutes(settings);
+    : getEffectiveReminderDelayMinutes(settings, preorderPaymentMode);
 
   return new Date(baseTime.getTime() + delayMinutes * 60 * 1000);
 }
@@ -217,22 +243,26 @@ function buildPaymentReminderMessage(preorder, paymentLink = null, settings = nu
     preorder?.paymentCollectionCode || preorder?.preorderNumber || preorder?.id || "-",
   );
   const amountFmt = formatFcfa(preorder?.totalFcfa || preorder?.as400InvoiceTotalFcfa || 0);
-  // Le délai d'expiration (3h) reste vrai, mais pour une facture de fin de
-  // journée la vraie contrainte est l'heure de fermeture de caisse, bien
-  // plus proche : annoncer "sous 2h" serait trompeur dans ce cas.
-  const urgent = isWithinLastHourBeforeCashClose(preorder?.invoicedAt);
-  const remainingMinutes = Math.max(
-    1,
-    getEffectiveExpiryMinutes(settings) - getEffectiveReminderDelayMinutes(settings),
-  );
-  const remainingLabel = urgent
-    ? "avant la fermeture de la caisse"
-    : `sous ${formatDuration(remainingMinutes)}`;
   const paymentMode = String(
     preorder?.preorderPaymentMode || preorder?.paymentMode || preorder?.paymentProvider || "",
   )
     .trim()
     .toUpperCase();
+  // Le délai d'expiration reste vrai, mais pour une facture de fin de
+  // journée la vraie contrainte est l'heure de fermeture de caisse, bien
+  // plus proche : annoncer "sous 2h" serait trompeur dans ce cas. Non
+  // pertinent pour le virement/Ecobank Pay/PI SPI, dont le délai se compte
+  // en jours et n'a rien à voir avec la caisse.
+  const urgent =
+    !isBankProofPaymentMode(paymentMode) && isWithinLastHourBeforeCashClose(preorder?.invoicedAt);
+  const remainingMinutes = Math.max(
+    1,
+    getEffectiveExpiryMinutes(settings, paymentMode) -
+      getEffectiveReminderDelayMinutes(settings, paymentMode),
+  );
+  const remainingLabel = urgent
+    ? "avant la fermeture de la caisse"
+    : `sous ${formatDuration(remainingMinutes)}`;
 
   if (paymentMode.includes("BANK")) {
     if (normalizedLink) {
@@ -274,9 +304,10 @@ function buildAutoCancelMessage(preorder, settings = null) {
     preorder?.preorderNumber || preorder?.paymentCollectionCode || preorder?.id || "-",
   );
 
+  const expiryMinutes = getEffectiveExpiryMinutes(settings, preorder?.preorderPaymentMode);
   return prependNotificationPrefix(preorder, compactText(`
     Bonjour ${customer}, votre precommande ${preorderNumber} a ete annulee
-    faute de paiement confirme dans le delai maximal de ${formatDuration(getEffectiveExpiryMinutes(settings))} apres
+    faute de paiement confirme dans le delai maximal de ${formatDuration(expiryMinutes)} apres
     prefacturation. Vous pouvez lancer une nouvelle precommande si besoin.
   `));
 }
@@ -305,6 +336,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
               preinvoicedAutoReminderAfterHours: true,
               preinvoicedAutoCancelAfterMinutes: true,
               preinvoicedAutoReminderAfterMinutes: true,
+              bankPaymentDueHours: true,
             },
           },
         },
@@ -394,7 +426,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
   }
 
   const cancelReason =
-    `Précommande préfacturée annulée automatiquement après ${getEffectiveExpiryHours(countrySettings)}H sans paiement confirmé.`;
+    `Précommande préfacturée annulée automatiquement après ${getEffectiveExpiryHours(countrySettings, order.preorderPaymentMode)}H sans paiement confirmé.`;
 
   const updated = await prisma.$transaction(async (tx) => {
     const current = await tx.preorder.findUnique({
@@ -538,7 +570,7 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
           toStatus: "CANCELLED",
           stockRollback: mustRollbackStock,
           mode: "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW",
-          expiryHours: getEffectiveExpiryHours(countrySettings),
+          expiryHours: getEffectiveExpiryHours(countrySettings, current.preorderPaymentMode),
           invoicedAt: current.invoicedAt ? new Date(current.invoicedAt).toISOString() : null,
           paymentExpiresAt: current.paymentExpiresAt
             ? new Date(current.paymentExpiresAt).toISOString()
@@ -637,6 +669,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
               preinvoicedAutoReminderAfterHours: true,
               preinvoicedAutoCancelAfterMinutes: true,
               preinvoicedAutoReminderAfterMinutes: true,
+              bankPaymentDueHours: true,
             },
           },
         },
@@ -684,7 +717,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
       remindersDue: due.map((row) => ({
         id: row.id,
         preorderNumber: row.preorderNumber,
-        reminderHours: getEffectiveReminderDelayHours(row.country?.settings || null),
+        reminderHours: getEffectiveReminderDelayHours(row.country?.settings || null, row.preorderPaymentMode),
         lastHourAccelerated: isWithinLastHourBeforeCashClose(row.invoicedAt),
       })),
     };
@@ -732,7 +765,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
           actorAdminId: null,
           meta: {
             mode: "AUTO_REMINDER_BEFORE_EXPIRY",
-            reminderHours: getEffectiveReminderDelayHours(countrySettings),
+            reminderHours: getEffectiveReminderDelayHours(countrySettings, candidate.preorderPaymentMode),
             lastHourAccelerated: isWithinLastHourBeforeCashClose(candidate.invoicedAt),
             smsSent: Boolean(notificationResult?.smsSent),
             smsQueued: Boolean(notificationResult?.smsQueued),
@@ -805,6 +838,7 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
               preinvoicedAutoReminderAfterHours: true,
               preinvoicedAutoCancelAfterMinutes: true,
               preinvoicedAutoReminderAfterMinutes: true,
+              bankPaymentDueHours: true,
             },
           },
         },
@@ -826,7 +860,7 @@ async function cancelExpiredInvoicedPreorders({ now = new Date(), dryRun = false
       cancelledCount: dueCandidates.length,
       cancelled: dueCandidates.map((candidate) => ({
         ...candidate,
-        expiryHours: getEffectiveExpiryHours(candidate.country?.settings || null),
+        expiryHours: getEffectiveExpiryHours(candidate.country?.settings || null, candidate.preorderPaymentMode),
       })),
     };
   }
@@ -905,8 +939,11 @@ module.exports = {
   buildPaymentReminderMessage,
   cancelPreorderAsExpiredUnpaid,
   cancelExpiredInvoicedPreorders,
+  getEffectiveExpiryHours,
+  getEffectiveExpiryMinutes,
   getEffectiveReminderDelayHours,
   getAutoCancelRunnerMode,
+  isBankProofPaymentMode,
   isWithinLastHourBeforeCashClose,
   sendReminderForDuePreorders,
   startExpiredInvoiceAutoCancelScheduler,
