@@ -36,6 +36,7 @@ const {
 } = require("../../utils/bankProofFiles");
 const { computePaymentPricing } = require("../../payments/payment-pricing");
 const paymentsService = require("../../payments/payments.service");
+const { isBankProofPaymentMode } = require("../../services/preorder-expiration.service");
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
@@ -83,7 +84,12 @@ function getBillingQueueOrderStatusFilter(billingWorkStatus) {
   return { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID"] };
 }
 
-function normalizeRelaunchPaymentWindowMinutes(body = {}) {
+// Les paiements par preuve (virement, Ecobank Pay, PI SPI) ont besoin d'un
+// délai bien plus long que les 10-30 min prévues pour une relance mobile
+// money instantanée : le client doit d'abord faire l'opération auprès de sa
+// banque avant de pouvoir déposer sa preuve.
+function normalizeRelaunchPaymentWindowMinutes(body = {}, options = {}) {
+  const { isBankStyle = false, bankPaymentDueHours = 72 } = options;
   const rawMinutes =
     body.durationMinutes ??
     body.paymentWindowMinutes ??
@@ -95,17 +101,34 @@ function normalizeRelaunchPaymentWindowMinutes(body = {}) {
     body.hours ??
     null;
 
+  const maxMinutes = isBankStyle ? 720 * 60 : 30; // jusqu'à 30 jours pour le virement
+  const minMinutes = isBankStyle ? 60 : 10; // au moins 1h pour le virement
+  const defaultMinutes = isBankStyle
+    ? Math.min(maxMinutes, Math.max(minMinutes, Math.round(bankPaymentDueHours * 60)))
+    : 10;
+
   const minutes = Number(rawMinutes);
   if (Number.isFinite(minutes) && minutes > 0) {
-    return Math.min(30, Math.max(10, Math.round(minutes)));
+    return Math.min(maxMinutes, Math.max(minMinutes, Math.round(minutes)));
   }
 
   const hours = Number(rawHours);
   if (Number.isFinite(hours) && hours > 0) {
-    return Math.min(30, Math.max(10, Math.round(hours * 60)));
+    return Math.min(maxMinutes, Math.max(minMinutes, Math.round(hours * 60)));
   }
 
-  return 10;
+  return defaultMinutes;
+}
+
+function formatRelaunchDuration(minutes) {
+  const total = Math.max(1, Math.round(Number(minutes) || 1));
+  if (total < 60) return `${total} min`;
+  const totalHours = total / 60;
+  if (totalHours < 24) {
+    return Number.isInteger(totalHours) ? `${totalHours}h` : `${totalHours.toFixed(1)}h`;
+  }
+  const days = totalHours / 24;
+  return Number.isInteger(days) ? `${days} jour${days > 1 ? "s" : ""}` : `${days.toFixed(1)} jours`;
 }
 
 function normalizeDateStart(d) {
@@ -1518,8 +1541,6 @@ async function relaunchPayment(req, res) {
   const { id } = req.params;
   const actorName = actorLabel(req);
   const actorAdminId = req.user?.id || null;
-  const durationMinutes = normalizeRelaunchPaymentWindowMinutes(req.body || {});
-  const paymentExpiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
   const note = String(req.body?.note || "").trim();
   const switchToCash =
     req.body?.switchToCash === true ||
@@ -1540,6 +1561,27 @@ async function relaunchPayment(req, res) {
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
+
+    // Une commande relancée en mode virement/Ecobank Pay/PI SPI a besoin
+    // d'un délai bien plus long qu'une relance mobile money classique (voir
+    // normalizeRelaunchPaymentWindowMinutes) : le client doit d'abord faire
+    // l'opération auprès de sa banque avant de déposer sa preuve.
+    const isBankStyleRelaunch = !switchToCash && isBankProofPaymentMode(order.preorderPaymentMode);
+    let bankPaymentDueHours = 72;
+    if (isBankStyleRelaunch) {
+      const countrySettings = await prisma.countrySettings.findUnique({
+        where: { countryId: order.countryId },
+        select: { bankPaymentDueHours: true },
+      });
+      if (countrySettings?.bankPaymentDueHours) {
+        bankPaymentDueHours = countrySettings.bankPaymentDueHours;
+      }
+    }
+    const durationMinutes = normalizeRelaunchPaymentWindowMinutes(req.body || {}, {
+      isBankStyle: isBankStyleRelaunch,
+      bankPaymentDueHours,
+    });
+    const paymentExpiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
 
     const status = String(order.status || "").toUpperCase();
     const paymentStatus = String(order.paymentStatus || "").toUpperCase();
@@ -1646,7 +1688,7 @@ async function relaunchPayment(req, res) {
         tx,
         order.id,
         "PAYMENT_PENDING",
-        `Relance du paiement pour ${durationMinutes} minute(s).`,
+        `Relance du paiement pour ${formatRelaunchDuration(durationMinutes)}.`,
         {
           mode: "ADMIN_RELAUNCH_PAYMENT_AFTER_AUTO_CANCEL",
           durationMinutes,
