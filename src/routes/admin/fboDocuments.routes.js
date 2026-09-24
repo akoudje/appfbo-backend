@@ -6,6 +6,9 @@ const controller = require("../../controllers/admin/fboDocuments.controller");
 const router = express.Router();
 
 router.get("/signatories", requirePermission(Permission.FBO_DOCUMENT_ISSUE), controller.listSignatories);
+router.post("/signatories", requirePermission(Permission.FBO_DOCUMENT_ISSUE), controller.createSignatory);
+router.patch("/signatories/:id", requirePermission(Permission.FBO_DOCUMENT_ISSUE), controller.updateSignatory);
+router.delete("/signatories/:id", requirePermission(Permission.FBO_DOCUMENT_ISSUE), controller.deleteSignatory);
 router.get("/fbos", requirePermission(Permission.FBO_DOCUMENT_ISSUE), controller.searchFbos);
 router.get("/", requirePermission(Permission.FBO_DOCUMENT_ISSUE), controller.listDocuments);
 router.post("/", requirePermission(Permission.FBO_DOCUMENT_ISSUE), controller.createDocument);

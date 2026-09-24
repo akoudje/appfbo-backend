@@ -14,24 +14,27 @@ const {
 const FALLBACK_GRADE = "CLIENT_PRIVILEGIE";
 
 // Signataires habilités à apparaître sur une attestation FBO officielle.
-// Le formulaire admin propose ces valeurs, mais c'est cette liste côté
-// serveur qui fait foi: on ne fait jamais confiance à un nom/titre de
-// signataire envoyé librement par le client. La civilité (M/MME) sert à
-// accorder le texte de l'attestation ("Madame"/"Monsieur", "soussigné(e)").
-const AUTHORIZED_SIGNATORIES = [
-  { name: "AHOU YAO EPSE KOFFI", title: "DIRECTRICE DES OPERATIONS", civility: "MME" },
-  { name: "KRA KOFFI", title: "DIRECTEUR FINANCIER", civility: "M" },
-];
-
+// Le formulaire admin propose ces valeurs, mais c'est la base (table
+// FboDocumentSignatory, gérée depuis l'admin) qui fait foi côté serveur :
+// on ne fait jamais confiance à un nom/titre de signataire envoyé librement
+// par le client. La civilité (M/MME) sert à accorder le texte de
+// l'attestation ("Madame"/"Monsieur", "soussigné(e)"). Un signataire retiré
+// ou modifié n'altère jamais les attestations déjà émises : FboDocument
+// stocke une copie figée (signatoryName/Title/Civility), pas une référence.
 function normalizeSignatoryKey(value) {
   return String(value || "").trim().toUpperCase().replace(/\s+/g, " ");
 }
 
-function findAuthorizedSignatory(name, title) {
+async function findAuthorizedSignatory(countryId, name, title) {
   const normalizedName = normalizeSignatoryKey(name);
   const normalizedTitle = normalizeSignatoryKey(title);
+  if (!normalizedName || !normalizedTitle) return null;
+
+  const candidates = await prisma.fboDocumentSignatory.findMany({
+    where: { countryId, active: true },
+  });
   return (
-    AUTHORIZED_SIGNATORIES.find(
+    candidates.find(
       (entry) =>
         normalizeSignatoryKey(entry.name) === normalizedName &&
         normalizeSignatoryKey(entry.title) === normalizedTitle,
@@ -135,8 +138,140 @@ async function resolveFboFromDirectory(rawNumero) {
   return { ok: true, fbo, profile };
 }
 
+function serializeSignatory(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    title: row.title,
+    civility: row.civility,
+    active: row.active,
+    sortOrder: row.sortOrder,
+  };
+}
+
 async function listSignatories(req, res) {
-  return res.json({ data: AUTHORIZED_SIGNATORIES });
+  try {
+    const onlyActive = String(req.query?.all || "").trim() !== "1";
+    const rows = await prisma.fboDocumentSignatory.findMany({
+      where: { countryId: req.countryId, ...(onlyActive ? { active: true } : {}) },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    });
+    return res.json({ data: rows.map(serializeSignatory) });
+  } catch (error) {
+    console.error("fboDocuments.listSignatories error:", error);
+    return res.status(500).json({ message: "Erreur serveur (listSignatories)" });
+  }
+}
+
+async function createSignatory(req, res) {
+  try {
+    const name = String(req.body?.name || "").trim().toUpperCase();
+    const title = String(req.body?.title || "").trim().toUpperCase();
+    const civility = String(req.body?.civility || "").trim().toUpperCase();
+
+    if (!name || !title) {
+      return res.status(400).json({ message: "Nom et fonction du signataire requis." });
+    }
+    if (!["M", "MME"].includes(civility)) {
+      return res.status(400).json({ message: "Civilité invalide (M ou MME)." });
+    }
+
+    const maxOrder = await prisma.fboDocumentSignatory.aggregate({
+      where: { countryId: req.countryId },
+      _max: { sortOrder: true },
+    });
+
+    const row = await prisma.fboDocumentSignatory.create({
+      data: {
+        countryId: req.countryId,
+        name,
+        title,
+        civility,
+        sortOrder: (maxOrder._max.sortOrder ?? -1) + 1,
+      },
+    });
+    return res.status(201).json(serializeSignatory(row));
+  } catch (error) {
+    if (error?.code === "P2002") {
+      return res.status(409).json({ message: "Ce signataire (nom + fonction) existe déjà." });
+    }
+    console.error("fboDocuments.createSignatory error:", error);
+    return res.status(500).json({ message: "Erreur serveur (createSignatory)" });
+  }
+}
+
+async function updateSignatory(req, res) {
+  try {
+    const existing = await prisma.fboDocumentSignatory.findFirst({
+      where: { id: req.params.id, countryId: req.countryId },
+    });
+    if (!existing) {
+      return res.status(404).json({ message: "Signataire introuvable." });
+    }
+
+    const data = {};
+    if (req.body?.name !== undefined) {
+      const name = String(req.body.name || "").trim().toUpperCase();
+      if (!name) return res.status(400).json({ message: "Le nom ne peut pas être vide." });
+      data.name = name;
+    }
+    if (req.body?.title !== undefined) {
+      const title = String(req.body.title || "").trim().toUpperCase();
+      if (!title) return res.status(400).json({ message: "La fonction ne peut pas être vide." });
+      data.title = title;
+    }
+    if (req.body?.civility !== undefined) {
+      const civility = String(req.body.civility || "").trim().toUpperCase();
+      if (!["M", "MME"].includes(civility)) {
+        return res.status(400).json({ message: "Civilité invalide (M ou MME)." });
+      }
+      data.civility = civility;
+    }
+    if (req.body?.active !== undefined) {
+      data.active = Boolean(req.body.active);
+    }
+
+    const row = await prisma.fboDocumentSignatory.update({
+      where: { id: existing.id },
+      data,
+    });
+    return res.json(serializeSignatory(row));
+  } catch (error) {
+    if (error?.code === "P2002") {
+      return res.status(409).json({ message: "Ce signataire (nom + fonction) existe déjà." });
+    }
+    console.error("fboDocuments.updateSignatory error:", error);
+    return res.status(500).json({ message: "Erreur serveur (updateSignatory)" });
+  }
+}
+
+async function deleteSignatory(req, res) {
+  try {
+    const existing = await prisma.fboDocumentSignatory.findFirst({
+      where: { id: req.params.id, countryId: req.countryId },
+    });
+    if (!existing) {
+      return res.status(404).json({ message: "Signataire introuvable." });
+    }
+
+    const remaining = await prisma.fboDocumentSignatory.count({
+      where: { countryId: req.countryId, active: true },
+    });
+    if (existing.active && remaining <= 1) {
+      return res.status(400).json({
+        message: "Impossible de retirer le dernier signataire actif : ajoutez-en un autre d'abord.",
+      });
+    }
+
+    // Suppression réelle (pas de FK vers cette table depuis FboDocument, qui
+    // n'en garde qu'une copie figée au moment de l'émission) : rien d'autre
+    // ne référence cette ligne.
+    await prisma.fboDocumentSignatory.delete({ where: { id: existing.id } });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("fboDocuments.deleteSignatory error:", error);
+    return res.status(500).json({ message: "Erreur serveur (deleteSignatory)" });
+  }
 }
 
 async function searchFbos(req, res) {
@@ -208,11 +343,15 @@ async function createDocument(req, res) {
       numeroFbo,
       city = "Abidjan",
       purpose,
-      signatoryName = AUTHORIZED_SIGNATORIES[0].name,
-      signatoryTitle = AUTHORIZED_SIGNATORIES[0].title,
+      signatoryName,
+      signatoryTitle,
     } = req.body || {};
 
-    const authorizedSignatory = findAuthorizedSignatory(signatoryName, signatoryTitle);
+    const authorizedSignatory = await findAuthorizedSignatory(
+      req.countryId,
+      signatoryName,
+      signatoryTitle,
+    );
     if (!authorizedSignatory) {
       return res.status(400).json({
         message: "Signataire non autorisé pour ce type de document.",
@@ -292,6 +431,9 @@ async function cancelDocument(req, res) {
 
 module.exports = {
   listSignatories,
+  createSignatory,
+  updateSignatory,
+  deleteSignatory,
   searchFbos,
   listDocuments,
   createDocument,

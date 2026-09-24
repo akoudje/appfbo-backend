@@ -496,6 +496,7 @@ model Country {
   ticketCheckInSessions TicketCheckInSession[]
   ticketCheckInLogs TicketCheckInLog[]
   fboDocuments FboDocument[]
+  fboDocumentSignatories FboDocumentSignatory[]
   externalPaymentLinks ExternalPaymentLink[]
   memorials Memorial[]
   memorialTributes MemorialTribute[]
@@ -751,6 +752,32 @@ model FboDocument {
   @@index([fboId, issuedAt])
   @@index([status, issuedAt])
   @@index([fboNumber])
+}
+
+// Signataires habilités à apparaître sur une attestation FBO officielle.
+// Remplace l'ancienne liste figée en dur côté serveur (AUTHORIZED_SIGNATORIES) :
+// gérable depuis l'admin (ajout/retrait/modification de fonction), toujours
+// avec la même garantie de sécurité — FboDocument.signatoryName/Title reste
+// une copie figée au moment de l'émission, jamais une référence vers cette
+// table, donc retirer ou modifier un signataire ici n'altère aucune
+// attestation déjà émise.
+model FboDocumentSignatory {
+  id String @id @default(cuid())
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  name     String
+  title    String
+  civility SignatoryCivility @default(MME)
+  active   Boolean           @default(true)
+  sortOrder Int              @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([countryId, name, title])
+  @@index([countryId, active, sortOrder])
 }
 
 model Memorial {
