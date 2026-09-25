@@ -2890,7 +2890,11 @@ async function switchToBankTransferPayment(req, res) {
         where: { id: order.id },
         data: {
           preorderPaymentMode: "BANK_TRANSFER",
-          paymentProvider: "BANK_TRANSFER",
+          // PaymentProvider (enum) ne modélise que les providers automatisés
+          // (WAVE, ORANGE_MONEY, MTN_MOMO, MOOV_MONEY) + MANUAL : le virement,
+          // comme la caisse, n'a pas de provider propre, d'où MANUAL ici
+          // aussi (même valeur que switchWaveToManualPayment pour la caisse).
+          paymentProvider: "MANUAL",
           paymentStatus: "UNPAID",
           bankPaymentStatus: "WAITING_PROOF",
           activePaymentId: null,
@@ -2909,7 +2913,7 @@ async function switchToBankTransferPayment(req, res) {
           fromPreorderPaymentMode: order.preorderPaymentMode || null,
           toPreorderPaymentMode: "BANK_TRANSFER",
           fromPaymentProvider: order.paymentProvider || null,
-          toPaymentProvider: "BANK_TRANSFER",
+          toPaymentProvider: "MANUAL",
           paymentExpiresAt: paymentExpiresAt.toISOString(),
           expiryMinutes,
         },
@@ -2932,7 +2936,7 @@ async function switchToBankTransferPayment(req, res) {
         preorder: {
           ...updated,
           preorderPaymentMode: "BANK_TRANSFER",
-          paymentProvider: "BANK_TRANSFER",
+          paymentProvider: "MANUAL",
         },
         invoiceRef: updated.factureReference || updated.preorderNumber || "-",
         paymentLink: "",
