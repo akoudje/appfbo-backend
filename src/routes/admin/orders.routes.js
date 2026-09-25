@@ -101,6 +101,12 @@ router.post(
 );
 
 router.post(
+  "/:id/switch-payment-to-bank-transfer",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.switchToBankTransferPayment,
+);
+
+router.post(
   "/:id/resend-confirmation-sms",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.resendConfirmationSms,
