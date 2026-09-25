@@ -36,7 +36,10 @@ const {
 } = require("../../utils/bankProofFiles");
 const { computePaymentPricing } = require("../../payments/payment-pricing");
 const paymentsService = require("../../payments/payments.service");
-const { isBankProofPaymentMode } = require("../../services/preorder-expiration.service");
+const {
+  isBankProofPaymentMode,
+  getEffectiveExpiryMinutes,
+} = require("../../services/preorder-expiration.service");
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
@@ -2813,6 +2816,164 @@ async function switchManualToWavePayment(req, res) {
   }
 }
 
+async function switchToBankTransferPayment(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!isGlobalAdminRole(req.user?.role)) {
+      return res.status(403).json({
+        message: "Seuls les administrateurs globaux peuvent changer ce mode de paiement.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        country: { select: { code: true, settings: { select: { bankPaymentDueHours: true } } } },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const paymentMode = String(order.preorderPaymentMode || "").toUpperCase();
+    if (paymentMode === "BANK_TRANSFER") {
+      return res.status(400).json({
+        message: "Cette commande est déjà en paiement par virement bancaire.",
+      });
+    }
+
+    const normalizedStatus = String(order.status || "").toUpperCase();
+    if (["PAID", "READY", "FULFILLED", "CANCELLED"].includes(normalizedStatus)) {
+      return res.status(400).json({
+        message: "Impossible de changer le mode de paiement sur une commande déjà soldée ou clôturée.",
+      });
+    }
+    if (!["INVOICED", "PAYMENT_PENDING"].includes(normalizedStatus)) {
+      return res.status(400).json({
+        message: "La commande doit être préfacturée avant de basculer vers le virement bancaire.",
+      });
+    }
+
+    const now = new Date();
+    // Même délai que sur une commande virement créée normalement (voir
+    // getEffectiveExpiryMinutes, mode-aware depuis le fix bankPaymentDueHours) :
+    // sans ça la bascule hériterait du court délai Wave/caisse d'origine.
+    const expiryMinutes = getEffectiveExpiryMinutes(
+      order.country?.settings || null,
+      "BANK_TRANSFER",
+    );
+    const paymentExpiresAt = new Date(now.getTime() + expiryMinutes * 60 * 1000);
+
+    await prisma.$transaction(async (tx) => {
+      if (order.activePaymentId) {
+        const active = await tx.payment.findUnique({
+          where: { id: order.activePaymentId },
+          select: { id: true, status: true, cancelledAt: true },
+        });
+        const currentStatus = String(active?.status || "").toUpperCase();
+        if (
+          active &&
+          !["SUCCEEDED", "PAID", "REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED"].includes(
+            currentStatus,
+          )
+        ) {
+          await tx.payment.update({
+            where: { id: active.id },
+            data: { status: "CANCELLED", cancelledAt: active.cancelledAt || now },
+          });
+        }
+      }
+
+      await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          preorderPaymentMode: "BANK_TRANSFER",
+          paymentProvider: "BANK_TRANSFER",
+          paymentStatus: "UNPAID",
+          bankPaymentStatus: "WAITING_PROOF",
+          activePaymentId: null,
+          paidAt: null,
+          paymentExpiresAt,
+          billingLastActivityAt: now,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "WAIT_CUSTOMER_DATA",
+        `Bascule du mode de paiement ${paymentMode || "?"} vers virement bancaire`,
+        {
+          fromPreorderPaymentMode: order.preorderPaymentMode || null,
+          toPreorderPaymentMode: "BANK_TRANSFER",
+          fromPaymentProvider: order.paymentProvider || null,
+          toPaymentProvider: "BANK_TRANSFER",
+          paymentExpiresAt: paymentExpiresAt.toISOString(),
+          expiryMinutes,
+        },
+        req.user?.id || null,
+      );
+    });
+
+    const updated = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: { include: { product: true }, orderBy: { createdAt: "asc" } },
+      },
+    });
+
+    // Renvoie l'instruction de virement au client avec le nouveau délai —
+    // sans ça il resterait sur les instructions Wave/caisse d'origine.
+    try {
+      const amountToPayFcfa = resolveOrderAmountToPayFcfa(updated);
+      const message = buildInvoiceMessage({
+        preorder: {
+          ...updated,
+          preorderPaymentMode: "BANK_TRANSFER",
+          paymentProvider: "BANK_TRANSFER",
+        },
+        invoiceRef: updated.factureReference || updated.preorderNumber || "-",
+        paymentLink: "",
+        amountToPayFcfa,
+      });
+      const destination = String(updated.factureWhatsappTo || "").trim();
+
+      await prisma.$transaction(async (tx) => {
+        await tx.orderMessage.create({
+          data: {
+            preorderId: updated.id,
+            channel: "SMS",
+            purpose: "PAYMENT_LINK",
+            status: "DRAFT",
+            toPhone: destination || null,
+            body: message,
+            createdBy: req.user?.id || null,
+          },
+        });
+        await tx.preorder.update({
+          where: { id: updated.id },
+          data: { whatsappMessage: message },
+        });
+      });
+    } catch (notifyError) {
+      console.error("switchToBankTransferPayment notify error:", notifyError);
+    }
+
+    return res.json({
+      ok: true,
+      message: "Mode de paiement basculé vers virement bancaire.",
+      order: updated,
+    });
+  } catch (e) {
+    console.error("switchToBankTransferPayment error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (switchToBankTransferPayment)" });
+  }
+}
+
 async function prepareOrder(req, res) {
   try {
     const { id } = req.params;
@@ -3824,6 +3985,7 @@ module.exports = {
   resendConfirmationSms,
   switchWaveToManualPayment,
   switchManualToWavePayment,
+  switchToBankTransferPayment,
   updatePreparationChecklistItem,
   bulkUpdatePreparationChecklist,
   createPreparationAnomaly,
