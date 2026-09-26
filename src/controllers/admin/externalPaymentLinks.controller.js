@@ -113,7 +113,8 @@ async function getQrConfig(req, res) {
     }
     const countryCode = req.country?.code || "CIV";
     const url = `${publicBaseUrl(req)}/pay/wave?countryCode=${encodeURIComponent(countryCode)}&access=${encodeURIComponent(token)}`;
-    return res.json({ url, countryCode });
+    const directUrl = `${url}&direct=1`;
+    return res.json({ url, directUrl, countryCode });
   } catch (error) {
     console.error("externalPaymentLinks.getQrConfig error:", error);
     return res.status(500).json({ message: "Erreur serveur (getQrConfig)" });
