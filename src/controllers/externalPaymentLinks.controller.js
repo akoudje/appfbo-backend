@@ -147,6 +147,7 @@ async function createQrLink(req, res) {
 
     return res.status(201).json({
       id: link.id,
+      token: link.token,
       reference: link.reference,
       invoiceReference: link.invoiceReference,
       customerPhone: link.customerPhone,
