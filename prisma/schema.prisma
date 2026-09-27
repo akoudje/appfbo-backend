@@ -2228,6 +2228,13 @@ model TicketCheckInLog {
   scannedAt DateTime @default(now())
   metadata Json?
 
+  // Identifiant généré côté client (app de contrôle des tickets) pour chaque
+  // tentative de scan. Permet de rejouer une requête dont la réponse a été
+  // perdue (coupure réseau juste après validation) sans la retraiter : on
+  // retrouve et renvoie le résultat déjà obtenu au lieu de risquer un faux
+  // "déjà utilisé" sur un billet en réalité validé au premier passage.
+  clientRequestId String? @unique
+
   createdAt DateTime @default(now())
 
   @@index([countryId, eventId, scannedAt])

@@ -4,6 +4,7 @@
 // log) qui n'est utile qu'ici, d'où leur portée locale à ce fichier.
 
 const prisma = require("../../../prisma");
+const { Permission } = require("../../../auth/permissions");
 
 function includeCheckInDetails() {
   return {
@@ -70,6 +71,7 @@ function buildCheckInLogData({
   reason,
   ticketStatusBefore = null,
   ticketStatusAfter = null,
+  clientRequestId = null,
 }) {
   return {
     countryId: req.countryId,
@@ -86,15 +88,66 @@ function buildCheckInLogData({
     reason,
     ticketStatusBefore,
     ticketStatusAfter,
+    clientRequestId,
     metadata: {
       userAgent: req.get?.("user-agent") || null,
     },
   };
 }
 
+// Rejoue le résultat déjà obtenu pour une tentative de scan identifiée par
+// clientRequestId (généré côté app à chaque scan). Sans ça, un scan qui a
+// réussi côté serveur mais dont la réponse s'est perdue en route (coupure
+// réseau) serait retraité au retry et renverrait à tort "déjà utilisé" au
+// lieu du succès initial.
+async function findReplayResponse(clientRequestId, countryId) {
+  if (!clientRequestId) return null;
+  const existing = await prisma.ticketCheckInLog.findFirst({
+    where: { clientRequestId, countryId },
+    include: includeCheckInDetails(),
+  });
+  if (!existing) return null;
+
+  if (existing.result === "NOT_FOUND") {
+    return { status: 404, body: { message: "Billet introuvable.", log: existing } };
+  }
+  if (existing.result === "WRONG_EVENT") {
+    return {
+      status: 409,
+      body: { message: "Ce billet appartient à un autre événement.", ticket: existing.ticket, log: existing },
+    };
+  }
+  if (existing.result === "ALREADY_USED") {
+    return { status: 409, body: { message: "Billet déjà utilisé.", ticket: existing.ticket, log: existing } };
+  }
+  if (existing.result === "INACTIVE") {
+    return { status: 400, body: { message: "Billet non actif.", ticket: existing.ticket, log: existing } };
+  }
+
+  const fullTicket = existing.ticketId
+    ? await prisma.ticket.findUnique({
+        where: { id: existing.ticketId },
+        include: {
+          event: true,
+          ticketType: true,
+          order: true,
+          checkedInBy: { select: { id: true, fullName: true, email: true } },
+        },
+      })
+    : null;
+  return { status: 200, body: { ...(fullTicket || existing.ticket || {}), checkInLog: existing } };
+}
+
 async function checkInTicket(req, res) {
   try {
     const { tokenOrCode, eventId, sessionId, entryPoint } = req.body || {};
+    const clientRequestId = String(req.body?.clientRequestId || "").trim() || null;
+
+    if (clientRequestId) {
+      const replay = await findReplayResponse(clientRequestId, req.countryId);
+      if (replay) return res.status(replay.status).json(replay.body);
+    }
+
     const raw = normalizeScannedTicketValue(tokenOrCode);
     const expectedEventId = String(eventId || "").trim();
     if (!raw) return res.status(400).json({ message: "Code billet ou QR requis." });
@@ -110,6 +163,12 @@ async function checkInTicket(req, res) {
       });
       if (!session) return res.status(404).json({ message: "Session de contrôle introuvable." });
       if (session.closedAt) return res.status(400).json({ message: "Session de contrôle déjà fermée." });
+      // Un agent ne doit pouvoir scanner que sur SA propre session : sinon,
+      // n'importe quel titulaire de TICKET_CHECKIN connaissant l'id d'une
+      // session ouverte par un collègue pourrait l'utiliser à sa place.
+      if (session.agentId && session.agentId !== req.user?.id) {
+        return res.status(403).json({ message: "Cette session de contrôle appartient à un autre agent." });
+      }
     }
 
     const ticket = await prisma.ticket.findFirst({
@@ -134,6 +193,7 @@ async function checkInTicket(req, res) {
           scannedValue: raw,
           result: "NOT_FOUND",
           reason: "Billet introuvable.",
+          clientRequestId,
         }),
         include: includeCheckInDetails(),
       });
@@ -152,6 +212,7 @@ async function checkInTicket(req, res) {
           reason: "Ce billet appartient à un autre événement.",
           ticketStatusBefore: ticket.status,
           ticketStatusAfter: ticket.status,
+          clientRequestId,
         }),
         include: includeCheckInDetails(),
       });
@@ -169,6 +230,7 @@ async function checkInTicket(req, res) {
           reason: "Billet déjà utilisé.",
           ticketStatusBefore: ticket.status,
           ticketStatusAfter: ticket.status,
+          clientRequestId,
         }),
         include: includeCheckInDetails(),
       });
@@ -186,6 +248,7 @@ async function checkInTicket(req, res) {
           reason: "Billet non actif.",
           ticketStatusBefore: ticket.status,
           ticketStatusAfter: ticket.status,
+          clientRequestId,
         }),
         include: includeCheckInDetails(),
       });
@@ -225,6 +288,7 @@ async function checkInTicket(req, res) {
             reason: "Billet déjà utilisé.",
             ticketStatusBefore: ticket.status,
             ticketStatusAfter: checkedTicket?.status || ticket.status,
+            clientRequestId,
           }),
           include: includeCheckInDetails(),
         });
@@ -242,6 +306,7 @@ async function checkInTicket(req, res) {
           reason: "Entrée validée.",
           ticketStatusBefore: ticket.status,
           ticketStatusAfter: "USED",
+          clientRequestId,
         }),
         include: includeCheckInDetails(),
       });
@@ -254,6 +319,18 @@ async function checkInTicket(req, res) {
 
     return res.json({ ...updated, checkInLog: log });
   } catch (error) {
+    if (error?.code === "P2002") {
+      const target = Array.isArray(error?.meta?.target)
+        ? error.meta.target.join(",")
+        : String(error?.meta?.target || "");
+      if (target.includes("clientRequestId")) {
+        // Requête concurrente identique (même retry envoyé deux fois en
+        // parallèle) : l'autre a créé le log en premier, on relit son résultat.
+        const clientRequestId = String(req.body?.clientRequestId || "").trim() || null;
+        const replay = await findReplayResponse(clientRequestId, req.countryId).catch(() => null);
+        if (replay) return res.status(replay.status).json(replay.body);
+      }
+    }
     console.error("ticketEvents.checkInTicket error:", error);
     return res.status(500).json({ message: "Erreur serveur (checkInTicket)" });
   }
@@ -298,6 +375,16 @@ async function closeCheckInSession(req, res) {
       where: { id: req.params.sessionId, countryId: req.countryId },
     });
     if (!session) return res.status(404).json({ message: "Session de contrôle introuvable." });
+
+    // Seul l'agent propriétaire peut fermer sa session ; un titulaire de
+    // MARKETING_WRITE (admin événementiel) garde la main pour débloquer une
+    // session orpheline (ex. agent parti sans fermer, device perdu).
+    if (session.agentId && session.agentId !== req.user?.id) {
+      const permissions = req.user?.permissions || [];
+      if (!permissions.includes(Permission.MARKETING_WRITE)) {
+        return res.status(403).json({ message: "Cette session de contrôle appartient à un autre agent." });
+      }
+    }
 
     const updated = await prisma.ticketCheckInSession.update({
       where: { id: session.id },
