@@ -19,18 +19,30 @@ async function listOrders(req, res) {
   try {
     const { eventId, status, q, paymentMethod } = req.query;
     const where = buildOrdersWhere(req, { eventId, status, q, paymentMethod });
+    const paginated = req.query.page !== undefined;
+    const requestedPage = Number(req.query.page || 1);
+    const requestedSize = Number(req.query.pageSize || 25);
+    if (paginated && (!Number.isSafeInteger(requestedPage) || requestedPage < 1 ||
+      !Number.isSafeInteger(requestedSize) || requestedSize < 1 || requestedSize > 100)) {
+      return res.status(400).json({ message: "Pagination invalide." });
+    }
+    const total = paginated ? await prisma.ticketOrder.count({ where }) : undefined;
+    const pageSize = paginated ? requestedSize : 200;
+    const pageCount = paginated ? Math.max(1, Math.ceil(total / pageSize)) : undefined;
+    const page = paginated ? Math.min(requestedPage, pageCount) : 1;
 
     const orders = await prisma.ticketOrder.findMany({
       where,
-      orderBy: [{ createdAt: "desc" }],
-      take: 200,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: pageSize,
+      skip: (page - 1) * pageSize,
       include: {
         event: { select: { id: true, title: true, startsAt: true } },
         ticketType: true,
         tickets: { include: { ticketType: true } },
       },
     });
-    return res.json({ data: orders });
+    return res.json({ data: orders, ...(paginated ? { pagination: { page, pageSize, total, pageCount } } : {}) });
   } catch (error) {
     console.error("ticketEvents.listOrders error:", error);
     return res.status(500).json({ message: "Erreur serveur (listOrders)" });
