@@ -169,6 +169,17 @@ function buildPublicBankProofContext(order) {
             instructions: order?.country?.settings?.piSpiInstructions || null,
           }
         : null,
+    bankTransfer:
+      String(order?.preorderPaymentMode || "").trim().toUpperCase() === "BANK_TRANSFER"
+        ? {
+            label: order?.country?.settings?.bankAccountLabel || null,
+            bankName: order?.country?.settings?.bankName || null,
+            accountHolder: order?.country?.settings?.bankAccountHolder || null,
+            accountNumber: order?.country?.settings?.bankAccountNumber || null,
+            iban: order?.country?.settings?.bankIban || null,
+            swift: order?.country?.settings?.bankSwift || null,
+          }
+        : null,
   };
 }
 
@@ -550,6 +561,12 @@ async function getPublicBankProofContext(req, res) {
                 piSpiMerchantName: true,
                 piSpiQrImageUrl: true,
                 piSpiInstructions: true,
+                bankAccountLabel: true,
+                bankName: true,
+                bankAccountHolder: true,
+                bankAccountNumber: true,
+                bankIban: true,
+                bankSwift: true,
               },
             },
           },
@@ -685,6 +702,12 @@ async function getPublicBankProofContextByOrderId(req, res) {
                 piSpiMerchantName: true,
                 piSpiQrImageUrl: true,
                 piSpiInstructions: true,
+                bankAccountLabel: true,
+                bankName: true,
+                bankAccountHolder: true,
+                bankAccountNumber: true,
+                bankIban: true,
+                bankSwift: true,
               },
             },
           },

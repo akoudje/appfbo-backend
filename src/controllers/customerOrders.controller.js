@@ -176,6 +176,12 @@ async function getMyOrder(req, res) {
                 piSpiMerchantName: true,
                 piSpiQrImageUrl: true,
                 piSpiInstructions: true,
+                bankAccountLabel: true,
+                bankName: true,
+                bankAccountHolder: true,
+                bankAccountNumber: true,
+                bankIban: true,
+                bankSwift: true,
               },
             },
           },
@@ -231,6 +237,7 @@ async function getMyOrder(req, res) {
       relationType,
       ecobankPay: paymentContext.ecobankPay,
       piSpi: paymentContext.piSpi,
+      bankTransfer: paymentContext.bankTransfer,
     });
   } catch (e) {
     console.error("getMyOrder error:", e);
