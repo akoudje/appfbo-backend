@@ -141,7 +141,6 @@ function buildPublicBankProofContext(order) {
     paymentStatus: order?.paymentStatus || null,
     preorderPaymentMode: order?.preorderPaymentMode || null,
     totalFcfa: order?.totalFcfa || 0,
-    factureReference: order?.factureReference || null,
     paymentCollectionCode: order?.paymentCollectionCode || null,
     invoicedAt: order?.invoicedAt || null,
     bankPaymentStatus: order?.bankPaymentStatus || null,

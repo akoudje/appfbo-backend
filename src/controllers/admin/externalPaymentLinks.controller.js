@@ -122,7 +122,8 @@ async function getQrConfig(req, res) {
 }
 
 function buildSmsMessage(link, req) {
-  const reference = link.invoiceReference || link.reference || "Paiement";
+  // Pas de référence facture AS400 dans le SMS client : référence du lien uniquement.
+  const reference = link.reference || "Paiement";
   return `FOREVER: ${reference}. ${formatAmount(link.amountFcfa)}. Wave: ${publicUrl(req, link.token)}`;
 }
 

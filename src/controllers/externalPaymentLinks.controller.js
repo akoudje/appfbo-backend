@@ -175,6 +175,13 @@ async function createQrLink(req, res) {
   }
 }
 
+// La référence facture AS400 est interne : jamais renvoyée sur les pages publiques.
+function withoutInvoiceReference(result) {
+  if (!result?.link) return result;
+  const { invoiceReference: _invoiceReference, ...link } = result.link;
+  return { ...result, link };
+}
+
 async function getPublicLink(req, res) {
   try {
     const token = String(req.params.token || "").trim();
@@ -203,7 +210,6 @@ async function getPublicLink(req, res) {
       id: link.id,
       reference: link.reference,
       externalReference: link.externalReference,
-      invoiceReference: link.invoiceReference,
       customerName: link.customerName,
       customerPhone: link.customerPhone,
       customerEmail: link.customerEmail,
@@ -242,7 +248,7 @@ async function initiateWave(req, res) {
       token,
       payerPhone,
     });
-    return res.json(result);
+    return res.json(withoutInvoiceReference(result));
   } catch (error) {
     console.error("externalPaymentLinks.initiateWave error:", error);
     const message =
@@ -262,7 +268,7 @@ async function syncWave(req, res) {
       req,
       token,
     });
-    return res.json(result);
+    return res.json(withoutInvoiceReference(result));
   } catch (error) {
     console.error("externalPaymentLinks.syncWave error:", error);
     return res.status(error.statusCode || 500).json({
