@@ -1940,7 +1940,6 @@ async function getPublicWavePaymentContext({ req, preorderId }) {
     data: {
       orderId: preorder.id,
       preorderNumber: preorder.preorderNumber || null,
-      factureReference: preorder.factureReference || null,
       customerName: preorder.fboNomComplet || null,
       fboNumero: preorder.fboNumero || null,
       countryCode: preorder.country?.code || null,
