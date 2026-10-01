@@ -611,6 +611,10 @@ async function loadCountryNotificationTemplates(countryId) {
         notificationTemplates: true,
         supportPhone: true,
         pickupAddress: true,
+        bankName: true,
+        bankAccountHolder: true,
+        bankAccountNumber: true,
+        bankIban: true,
       },
     });
     if (!settings) return null;
@@ -627,6 +631,7 @@ function buildTemplateContext({
   paymentLinkTracked,
   supportPhone = null,
   pickupAddress = null,
+  bankAccount = null,
 }) {
   const customerName = preorder?.fboNomComplet || "Client";
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
@@ -660,7 +665,29 @@ function buildTemplateContext({
     paymentExpiryHours: String(paymentExpiryHours),
     supportPhone: supportPhone || "",
     pickupAddress: pickupAddress || "",
+    bankName: bankAccount?.bankName || "",
+    bankAccountHolder: bankAccount?.bankAccountHolder || "",
+    bankAccountNumber: bankAccount?.bankAccountNumber || "",
+    bankIban: bankAccount?.bankIban || "",
+    bankAccountDetails: formatBankAccountDetails(bankAccount),
+    // Ligne complète, vide si aucun compte n'est configuré pour le pays.
+    bankAccountLine: formatBankAccountDetails(bankAccount)
+      ? `Compte de virement : ${formatBankAccountDetails(bankAccount)}`
+      : "",
   };
+}
+
+// Coordonnées du compte de virement (réglages pays) sur une ligne, pour les modèles.
+function formatBankAccountDetails(bankAccount) {
+  return [
+    bankAccount?.bankAccountHolder,
+    bankAccount?.bankName,
+    bankAccount?.bankAccountNumber,
+    bankAccount?.bankIban ? `IBAN ${bankAccount.bankIban}` : null,
+  ]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" - ");
 }
 
 function resolvePaymentExpiryHoursForPreorder(preorder) {
@@ -1153,6 +1180,7 @@ async function sendPreorderNotification({
     paymentLinkTracked,
     supportPhone: countryTemplateSettings?.supportPhone || null,
     pickupAddress: countryTemplateSettings?.pickupAddress || null,
+    bankAccount: countryTemplateSettings,
   });
   const configuredTemplates = resolveConfiguredTemplates({
     templatesRoot: countryTemplateSettings?.notificationTemplates || null,
