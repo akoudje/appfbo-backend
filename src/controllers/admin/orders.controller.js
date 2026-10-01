@@ -427,6 +427,9 @@ function buildOrdersListWhere(req, overrides = {}) {
 
   if (status) where.status = status;
   if (paymentStatus) where.paymentStatus = paymentStatus;
+  if (String(req.query.preparationQueue) === "true" && status === "PAID") {
+    where.preparationLaunchedAt = { not: null };
+  }
   if (preorderPaymentMode) {
     where.preorderPaymentMode = String(preorderPaymentMode).trim().toUpperCase();
   }
@@ -3215,7 +3218,14 @@ async function updatePreparationChecklistItem(req, res) {
       return res.status(404).json({ message: "Ligne de commande introuvable" });
     }
 
-    const checkedValue = Boolean(checked);
+    if (order.status !== "PAID" || !order.preparationLaunchedAt) {
+      return res.status(409).json({ message: "Le contrôle ne peut être modifié que pendant la préparation." });
+    }
+    if (typeof checked !== "boolean") {
+      return res.status(400).json({ message: "La valeur de contrôle doit être un booléen." });
+    }
+
+    const checkedValue = checked;
     const saved = await prisma.$transaction(async (tx) => {
       await ensurePreparationChecklist(tx, order);
 
@@ -3274,7 +3284,17 @@ async function bulkUpdatePreparationChecklist(req, res) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
 
-    const checkedValue = Boolean(checked);
+    if (order.status !== "PAID" || !order.preparationLaunchedAt) {
+      return res.status(409).json({ message: "Le contrôle ne peut être modifié que pendant la préparation." });
+    }
+    if (typeof checked !== "boolean") {
+      return res.status(400).json({ message: "La valeur de contrôle doit être un booléen." });
+    }
+    if (checked) {
+      return res.status(400).json({ message: "Vérifiez les articles individuellement avant de les valider." });
+    }
+
+    const checkedValue = checked;
     const now = new Date();
 
     await prisma.$transaction(async (tx) => {
