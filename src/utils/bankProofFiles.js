@@ -61,6 +61,38 @@ function buildRemoteBankProofCandidates(raw = "", fileMimeType = "") {
   return [...new Set(candidates.filter(Boolean))];
 }
 
+// Cloudinary refuse la livraison publique des PDF sur ce compte (401 "deny or ACL
+// failure"). On retombe alors sur un téléchargement signé via l'API, qui n'est
+// pas soumis à cette restriction.
+function buildCloudinarySignedDownloadUrl(raw = "") {
+  let parsed;
+  try {
+    parsed = new URL(String(raw || "").trim());
+  } catch {
+    return null;
+  }
+  if (parsed.hostname !== "res.cloudinary.com") return null;
+
+  const match = parsed.pathname.match(
+    /^\/[^/]+\/(image|raw|video)\/(upload|authenticated|private)\/(?:v\d+\/)?(.+)$/,
+  );
+  if (!match) return null;
+
+  const [, resourceType, deliveryType, encodedPath] = match;
+  const assetPath = decodeURIComponent(encodedPath);
+  // Pour "raw", l'extension fait partie du public_id ; pour image/video, c'est le format.
+  const ext = path.extname(assetPath);
+  const publicId = resourceType === "raw" || !ext ? assetPath : assetPath.slice(0, -ext.length);
+  const format = resourceType === "raw" ? "" : ext.replace(/^\./, "");
+
+  // Chargé ici pour ne pas exiger la config Cloudinary quand elle est inutile.
+  const { cloudinary } = require("../services/cloudinary");
+  return cloudinary.utils.private_download_url(publicId, format, {
+    resource_type: resourceType,
+    type: deliveryType,
+  });
+}
+
 async function streamBankProofFileToResponse({
   res,
   fileUrl,
@@ -93,7 +125,10 @@ async function streamBankProofFileToResponse({
 
   let response = null;
   let lastError = null;
-  for (const candidateUrl of buildRemoteBankProofCandidates(raw, fileMimeType)) {
+  const candidateUrls = buildRemoteBankProofCandidates(raw, fileMimeType);
+  const signedUrl = buildCloudinarySignedDownloadUrl(raw);
+  if (signedUrl) candidateUrls.push(signedUrl);
+  for (const candidateUrl of candidateUrls) {
     try {
       response = await axios.get(candidateUrl, {
         responseType: "stream",
