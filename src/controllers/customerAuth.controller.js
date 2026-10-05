@@ -629,7 +629,7 @@ async function dashboard(req, res) {
         where: {
           ...where,
           status: { in: ["INVOICED", "PAYMENT_PENDING"] },
-          paymentStatus: { notIn: ["PAID", "PAYMENT_CONFIRMED"] },
+          paymentStatus: { not: "PAID" },
         },
       }),
       prisma.preorder.count({

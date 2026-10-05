@@ -101,3 +101,33 @@ test('proof submission rejects a fractional declared amount before upload', asyn
   const api = controller('customerBankProof.controller.js', {});
   await assert.rejects(() => api.createBankProofSubmission({ order: {}, file: {}, declaredAmountFcfa: '12.5' }), (error) => error.statusCode === 400);
 });
+
+test('dashboard payment filters use valid Prisma OrderPaymentStatus values', async () => {
+  const { OrderPaymentStatus } = require('@prisma/client');
+  let waitingPaymentQueries = 0;
+  const db = {
+    fbo: { findUnique: async () => ({ id: 'fbo', numeroFbo: '225-000-111-222', nomComplet: 'Client' }) },
+    preorder: {
+      count: async ({ where }) => {
+        if (where.paymentStatus) {
+          const values = [where.paymentStatus.not, ...(where.paymentStatus.notIn || [])].filter(Boolean);
+          for (const value of values) assert.ok(Object.values(OrderPaymentStatus).includes(value), `Invalid payment status: ${value}`);
+          assert.equal(where.paymentStatus.not, 'PAID');
+          waitingPaymentQueries += 1;
+        }
+        return 2;
+      },
+      findMany: async () => [],
+      groupBy: async () => [],
+    },
+  };
+  const api = controller('customerAuth.controller.js', db, {
+    './customerNotifications.controller': { buildNotificationSummaryForCustomer: async () => ({ total: 0, unreadCount: 0 }) },
+  });
+  const res = response();
+  await api.dashboard(request(), res);
+  assert.equal(res.code, 200);
+  assert.equal(res.body.profile.id, 'fbo');
+  assert.equal(res.body.stats.waitingPayment, 2);
+  assert.equal(waitingPaymentQueries, 1);
+});
