@@ -8,6 +8,8 @@ const requireExternalPaymentLinksManage = requirePermission(
   Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
 );
 
+router.get("/attach-orders", requireExternalPaymentLinksManage, controller.findAttachOrders);
+
 router.get(
   "/",
   requireExternalPaymentLinksManage,
