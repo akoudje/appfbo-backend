@@ -56,8 +56,8 @@ function normalizeOptionalText(value) {
 }
 
 function normalizeAmount(value) {
-  const amount = Number.parseInt(value, 10);
-  return Number.isFinite(amount) && amount > 0 ? amount : null;
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
 }
 
 function computeWaveFee(baseAmountFcfa) {
@@ -183,6 +183,7 @@ function serialize(link, req) {
   if (!link) return link;
   return {
     ...link,
+    status: link.status === "ACTIVE" && link.expiresAt && new Date(link.expiresAt) <= new Date() ? "EXPIRED" : link.status,
     publicUrl: publicUrl(req, link.token),
   };
 }
@@ -214,8 +215,11 @@ async function listLinks(req, res) {
         not: null,
         lte: new Date(Date.now() + EXPIRY_SOON_HOURS * 60 * 60 * 1000),
       };
+    } else if (String(status).toUpperCase() === "EXPIRED") {
+      where.OR = [{ status: "EXPIRED" }, { status: "ACTIVE", expiresAt: { lte: new Date() } }];
     } else if (status && ALLOWED_STATUSES.has(String(status).toUpperCase())) {
       where.status = String(status).toUpperCase();
+      if (where.status === "ACTIVE") where.OR = [{ expiresAt: null }, { expiresAt: { gt: new Date() } }];
     }
 
     if (source && ALLOWED_SOURCES.has(String(source).toUpperCase())) {
@@ -233,7 +237,7 @@ async function listLinks(req, res) {
 
     if (q && String(q).trim()) {
       const term = String(q).trim();
-      where.OR = [
+      where.AND = [{ OR: [
         { reference: { contains: term, mode: "insensitive" } },
         { externalReference: { contains: term, mode: "insensitive" } },
         { invoiceReference: { contains: term, mode: "insensitive" } },
@@ -241,16 +245,16 @@ async function listLinks(req, res) {
         { customerName: { contains: term, mode: "insensitive" } },
         { customerPhone: { contains: term, mode: "insensitive" } },
         { customerFboNumber: { contains: term, mode: "insensitive" } },
-      ];
+      ] }];
     }
 
     const { page, pageSize, skip, take } = normalizePagination(req.query);
 
     const [total, activeCount, paidAgg, links] = await Promise.all([
       prisma.externalPaymentLink.count({ where }),
-      prisma.externalPaymentLink.count({ where: { ...where, status: "ACTIVE" } }),
+      prisma.externalPaymentLink.count({ where: { AND: [where, { status: "ACTIVE", OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }] } }),
       prisma.externalPaymentLink.aggregate({
-        where: { ...where, status: "PAID" },
+        where: { AND: [where, { status: "PAID" }] },
         _count: { _all: true },
         _sum: { amountFcfa: true },
       }),
@@ -265,8 +269,13 @@ async function listLinks(req, res) {
         },
       }),
     ]);
+    const attachedPayments = await prisma.payment.findMany({
+      where: { countryId: req.countryId, provider: "WAVE", clientReference: { in: links.map((link) => `external:${link.id}`) } },
+      select: { clientReference: true, preorder: { select: { id: true, preorderNumber: true } } },
+    });
+    const attachedByReference = new Map(attachedPayments.map((payment) => [payment.clientReference, payment.preorder]));
     return res.json({
-      data: links.map((link) => serialize(link, req)),
+      data: links.map((link) => serialize({ ...link, attachedOrder: attachedByReference.get(`external:${link.id}`) || null }, req)),
       total,
       page,
       pageSize,
@@ -291,17 +300,17 @@ async function createLink(req, res) {
       body.baseAmountFcfa ?? body.amountWithoutFeesFcfa ?? body.amountFcfa,
     );
     if (!invoiceReference) return res.status(400).json({ message: "Référence facture obligatoire." });
-    if (!customerPhone) return res.status(400).json({ message: "Numéro de téléphone obligatoire." });
-    if (!baseAmountFcfa) return res.status(400).json({ message: "Montant sans frais invalide." });
+    if (!customerPhone || !/^\+?\d{8,15}$/.test(customerPhone.replace(/[\s().-]/g, ""))) return res.status(400).json({ message: "Numéro de téléphone invalide (8 à 15 chiffres)." });
+    if (!baseAmountFcfa || baseAmountFcfa + computeWaveFee(baseAmountFcfa) > 2147483647) return res.status(400).json({ message: "Montant sans frais invalide." });
     const serviceFeeFcfa = computeWaveFee(baseAmountFcfa);
     const amountFcfa = baseAmountFcfa + serviceFeeFcfa;
     const customerName = normalizeText(body.customerName, customerPhone);
 
     const paymentMethod = "WAVE";
 
-    const reference = normalizeOptionalText(body.reference) || (await nextReference(req.countryId));
     const status = normalizeOptionalText(body.status) || "ACTIVE";
-    if (!ALLOWED_STATUSES.has(status)) return res.status(400).json({ message: "Statut invalide." });
+    if (!["ACTIVE", "DRAFT"].includes(status)) return res.status(400).json({ message: "Un nouveau lien doit être actif ou en brouillon." });
+    const reference = normalizeOptionalText(body.reference) || (await nextReference(req.countryId));
 
     const link = await prisma.externalPaymentLink.create({
       data: {
@@ -363,6 +372,8 @@ async function createLink(req, res) {
 
 async function resendSms(req, res) {
   try {
+    const phone = normalizeOptionalText(req.body?.phone);
+    if (phone && !/^\+?\d{8,15}$/.test(phone.replace(/[\s().-]/g, ""))) return res.status(400).json({ message: "Numéro de téléphone invalide (8 à 15 chiffres)." });
     const existing = await prisma.externalPaymentLink.findFirst({
       where: { id: req.params.id, countryId: req.countryId },
       include: {
@@ -371,7 +382,7 @@ async function resendSms(req, res) {
       },
     });
     if (!existing) return res.status(404).json({ message: "Lien externe introuvable." });
-    if (existing.status !== "ACTIVE") {
+    if (existing.status !== "ACTIVE" || (existing.expiresAt && new Date(existing.expiresAt) <= new Date())) {
       return res.status(400).json({ message: "Seuls les liens actifs peuvent être renvoyés par SMS." });
     }
 
@@ -425,16 +436,21 @@ async function updateStatus(req, res) {
     });
     if (!existing) return res.status(404).json({ message: "Lien externe introuvable." });
 
+    if (status !== "CANCELLED" || !["DRAFT", "ACTIVE"].includes(existing.status)) {
+      return res.status(409).json({ message: "Seul un lien non payé peut être annulé. La confirmation du paiement est réservée à Wave." });
+    }
     const data = {
       status,
       updatedById: req.user?.id || null,
     };
-    if (status === "PAID") data.paidAt = existing.paidAt || new Date();
     if (status === "CANCELLED") data.cancelledAt = existing.cancelledAt || new Date();
 
-    const updated = await prisma.externalPaymentLink.update({
-      where: { id: existing.id },
-      data,
+    const changed = await prisma.externalPaymentLink.updateMany({
+      where: { id: existing.id, countryId: req.countryId, status: { in: ["DRAFT", "ACTIVE"] } }, data,
+    });
+    if (!changed.count) return res.status(409).json({ message: "Le statut du lien a changé. Actualisez la liste." });
+    const updated = await prisma.externalPaymentLink.findFirst({
+      where: { id: existing.id, countryId: req.countryId },
       include: {
         createdBy: { select: { id: true, fullName: true, email: true } },
         updatedBy: { select: { id: true, fullName: true, email: true } },
@@ -444,6 +460,27 @@ async function updateStatus(req, res) {
   } catch (error) {
     console.error("externalPaymentLinks.updateStatus error:", error);
     return res.status(500).json({ message: "Erreur serveur (updateStatus)" });
+  }
+}
+
+async function findAttachOrders(req, res) {
+  try {
+    const q = normalizeOptionalText(req.query.q);
+    if (!q || q.length < 2) return res.json({ data: [] });
+    const orders = await prisma.preorder.findMany({
+      where: {
+        countryId: req.countryId,
+        status: { notIn: ["CANCELLED", "PAID", "READY", "FULFILLED"] },
+        paymentStatus: { not: "PAID" },
+        OR: ["preorderNumber", "factureReference", "fboNomComplet", "fboNumero"].map((field) => ({ [field]: { contains: q, mode: "insensitive" } })),
+      },
+      select: { id: true, preorderNumber: true, factureReference: true, fboNomComplet: true, fboNumero: true, totalFcfa: true },
+      take: 10, orderBy: { createdAt: "desc" },
+    });
+    return res.json({ data: orders });
+  } catch (error) {
+    console.error("externalPaymentLinks.findAttachOrders error:", error);
+    return res.status(500).json({ message: "Recherche des commandes impossible." });
   }
 }
 
@@ -520,9 +557,18 @@ async function attachToOrder(req, res) {
 
     const paidAt = link.paidAt || new Date();
     const amountPaidFcfa = Number(link.amountFcfa || 0);
+    const invoiceAmountFcfa = Number(link.baseAmountFcfa || (amountPaidFcfa - Number(link.serviceFeeFcfa || 0)));
+    if (!(invoiceAmountFcfa > 0) || invoiceAmountFcfa !== Number(order.totalFcfa)) {
+      return res.status(409).json({ message: `Montant incompatible : facture ${formatAmount(order.totalFcfa)}, paiement hors frais ${formatAmount(invoiceAmountFcfa)}. Le rattachement est bloqué.` });
+    }
     const now = new Date();
 
     const result = await prisma.$transaction(async (tx) => {
+      const currentOrder = await tx.preorder.findFirst({ where: { id: order.id, countryId: req.countryId } });
+      const currentLink = await tx.externalPaymentLink.findFirst({ where: { id: link.id, countryId: req.countryId } });
+      if (!currentOrder || !currentLink || currentLink.status !== "PAID" || currentOrder.paymentStatus === "PAID" || ["PAID", "READY", "FULFILLED", "CANCELLED"].includes(currentOrder.status) || Number(currentOrder.totalFcfa) !== invoiceAmountFcfa || Number(currentLink.amountFcfa) !== amountPaidFcfa || Number(currentLink.baseAmountFcfa || (currentLink.amountFcfa - Number(currentLink.serviceFeeFcfa || 0))) !== invoiceAmountFcfa) {
+        throw Object.assign(new Error("La commande ou le paiement a changé. Actualisez avant de rattacher."), { statusCode: 409 });
+      }
       let paymentId = existingPayment?.id || null;
       let attemptId = null;
 
@@ -636,7 +682,7 @@ async function attachToOrder(req, res) {
       });
 
       return { order: updatedOrder, paymentId, paymentAttemptId: attemptId };
-    });
+    }, { isolationLevel: "Serializable" });
 
     return res.json({
       ok: true,
@@ -648,6 +694,7 @@ async function attachToOrder(req, res) {
     });
   } catch (error) {
     console.error("externalPaymentLinks.attachToOrder error:", error);
+    if (["P2034", "P2002"].includes(error.code)) return res.status(409).json({ message: "Ce paiement ou cette commande vient d’être modifié. Actualisez avant de réessayer." });
     return res.status(error.statusCode || 500).json({
       message: error.message || "Erreur serveur (attachToOrder)",
     });
@@ -655,6 +702,7 @@ async function attachToOrder(req, res) {
 }
 
 module.exports = {
+  findAttachOrders,
   getQrConfig,
   listLinks,
   createLink,

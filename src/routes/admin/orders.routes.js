@@ -5,6 +5,8 @@ const ordersController = require("../../controllers/admin/orders.controller");
 const as400GatewayController = require("../../controllers/admin/as400Gateway.controller");
 
 const router = express.Router();
+const { protectPickupSecrets } = require("../../middlewares/protectPickupSecrets");
+router.use(protectPickupSecrets);
 
 router.get("/", requirePermission(Permission.PREORDER_READ), ordersController.listOrders);
 router.get(
