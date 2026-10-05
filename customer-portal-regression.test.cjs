@@ -11,7 +11,7 @@ function request(body = {}, query = {}) { return { customer: { fboId: 'fbo', num
 function controller(file, db, extras = {}) {
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'src/controllers', file), 'utf8'), {
-    module, Buffer, Date, console: { error() {} }, process: { env: { CUSTOMER_OTP_PEPPER: 'test-pepper', CUSTOMER_JWT_SECRET: 'test-secret' } },
+    module, Buffer, Date, console: { error() {} }, process: { env: { CUSTOMER_OTP_MIN_RESPONSE_MS: '0', CUSTOMER_OTP_PEPPER: 'test-pepper', CUSTOMER_JWT_SECRET: 'test-secret' } },
     require: (name) => {
       if (name === '../prisma') return db;
       if (name === 'crypto') return crypto;
@@ -62,7 +62,7 @@ function otpDb() {
   return {
     fbo: { findUnique: async () => ({ id: 'fbo', numeroFbo: '225-000-111-222', nomComplet: 'Client' }) },
     customerOtpChallenge: {
-      findFirst: async () => ({ id: 'otp', codeHash: crypto.createHash('sha256').update('test-pepper:123456').digest('hex'), attempts: 0, maxAttempts: 5 }),
+      findFirst: async ({ where }) => { assert.equal(where.channel, 'EMAIL'); return ({ id: 'otp', codeHash: crypto.createHash('sha256').update('test-pepper:123456').digest('hex'), attempts: 0, maxAttempts: 5 }); },
       updateMany: async ({ where }) => { assert.equal(where.consumedAt, null); assert.equal(where.attempts.lt, 5); assert.ok(where.expiresAt.gt); if (consumed) return { count: 0 }; consumed = true; return { count: 1 }; },
     },
   };
@@ -130,4 +130,58 @@ test('dashboard payment filters use valid Prisma OrderPaymentStatus values', asy
   assert.equal(res.body.profile.id, 'fbo');
   assert.equal(res.body.stats.waitingPayment, 2);
   assert.equal(waitingPaymentQueries, 1);
+});
+function emailOtpApi({ email = 'client@example.test', orders = [], accepted = true, unknown = false } = {}) {
+  const sent = [], created = [];
+  const db = {
+    fbo: { findUnique: async () => unknown ? null : ({ id: 'fbo', email }) },
+    preorder: { findMany: async () => orders },
+    customerOtpChallenge: {
+      findFirst: async ({ where }) => { assert.equal(where.channel, 'EMAIL'); return null; },
+      updateMany: async () => ({ count: 0 }),
+      create: async ({ data }) => { created.push(data); return data; },
+    },
+  };
+  db.$transaction = async (fn) => fn(db);
+  const api = controller('customerAuth.controller.js', db, {
+    '../services/email.service': {
+      normalizeEmail: require('./src/services/email.service').normalizeEmail,
+      sendEmail: async (payload) => { sent.push(payload); return { accepted }; },
+    },
+    '../services/sms.service': { sendSms: async () => assert.fail('OTP must never be sent by SMS') },
+  });
+  return { api, sent, created };
+}
+
+test('OTP requests send only email even when a legacy client requests SMS', async () => {
+  const { api, sent, created } = emailOtpApi();
+  const res = response(); await api.requestOtp(request({ numeroFbo: '225-000-111-222', channel: 'SMS', phone: '0102030405' }), res);
+  assert.equal(res.code, 200); assert.equal(sent.length, 1); assert.equal(sent[0].to, 'client@example.test');
+  assert.equal(created[0].channel, 'EMAIL'); assert.deepEqual(Array.from(res.body.availableChannels), ['EMAIL']);
+  assert.deepEqual(Array.from(res.body.sentChannels), ['EMAIL']);
+});
+
+test('OTP uses the latest valid order email when the FBO email is absent or invalid', async () => {
+  const { api, sent } = emailOtpApi({ email: 'invalid', orders: [{ fboEmail: '' }, { fboEmail: 'invalid' }, { fboEmail: 'previous@example.test' }] });
+  const res = response(); await api.requestOtp(request({ numeroFbo: '225-000-111-222' }), res);
+  assert.equal(res.code, 200); assert.equal(sent[0].to, 'previous@example.test');
+});
+
+test('OTP without a valid email sends nothing and creates no challenge', async () => {
+  const { api, sent, created } = emailOtpApi({ email: '' });
+  const res = response(); await api.requestOtp(request({ numeroFbo: '225-000-111-222', channel: 'SMS' }), res);
+  assert.equal(res.code, 409); assert.equal(sent.length, 0); assert.equal(created.length, 0);
+  assert.match(res.body.message, /email/);
+});
+
+test('email delivery failure never falls back to SMS or creates a challenge', async () => {
+  const { api, sent, created } = emailOtpApi({ accepted: false });
+  const res = response(); await api.requestOtp(request({ numeroFbo: '225-000-111-222' }), res);
+  assert.equal(res.code, 502); assert.equal(sent.length, 1); assert.equal(created.length, 0);
+});
+
+test('unknown FBO receives a generic email response without sending a code', async () => {
+  const { api, sent } = emailOtpApi({ unknown: true });
+  const res = response(); await api.requestOtp(request({ numeroFbo: '225-000-111-222', channel: 'SMS' }), res);
+  assert.equal(res.code, 200); assert.equal(res.body.channel, 'EMAIL'); assert.equal(sent.length, 0);
 });
