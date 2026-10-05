@@ -4,6 +4,7 @@ const os = require("os");
 const crypto = require("crypto");
 const multer = require("multer");
 const prisma = require("../prisma");
+const { customerOrderResponse } = require("../utils/customerOrderResponse");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
 const { uploadFile } = require("../services/cloudinary");
 const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
@@ -301,6 +302,8 @@ async function createBankProofSubmission({
   actorAdminId = null,
 }) {
   const now = new Date();
+  const parsedAmount = declaredAmountFcfa === undefined || declaredAmountFcfa === null || declaredAmountFcfa === "" ? null : Number(declaredAmountFcfa);
+  if (parsedAmount !== null && (!Number.isSafeInteger(parsedAmount) || parsedAmount < 0 || parsedAmount > 2147483647)) throw Object.assign(new Error("Le montant déclaré doit être un entier positif ou nul en FCFA."), { statusCode: 400 });
   const ext = path.extname(file.originalname || "").toLowerCase();
   const safeExt = [".jpg", ".jpeg", ".png", ".pdf"].includes(ext) ? ext : "";
   const orderIdPart = String(order.id || "order").slice(0, 12);
@@ -337,8 +340,7 @@ async function createBankProofSubmission({
   const fileUrl = uploaded?.secure_url || uploaded?.url || null;
   if (!fileUrl) throw new Error("UPLOAD_PREUVE_PERSISTANTE_INDISPONIBLE");
 
-  const parsedAmount = Number.parseInt(declaredAmountFcfa, 10);
-  const amount = Number.isFinite(parsedAmount) && parsedAmount >= 0 ? parsedAmount : null;
+  const amount = parsedAmount;
 
   const proof = await prisma.$transaction(async (tx) => {
     const created = await tx.bankPaymentProof.create({
@@ -358,8 +360,8 @@ async function createBankProofSubmission({
       },
     });
 
-    await tx.preorder.update({
-      where: { id: order.id },
+    const updated = await tx.preorder.updateMany({
+      where: { id: order.id, ...(source !== "ADMIN_UPLOAD" ? { status: { in: ["INVOICED", "PAYMENT_PENDING"] }, paymentStatus: { not: "PAID" }, OR: [{ paymentExpiresAt: null }, { paymentExpiresAt: { gt: new Date() } }] } : {}) },
       data: {
         status: "PAYMENT_PENDING",
         paymentStatus: "PAYMENT_PENDING",
@@ -379,6 +381,7 @@ async function createBankProofSubmission({
         manualPaymentReceivedAt: now,
       },
     });
+    if (!updated.count) throw Object.assign(new Error("Le paiement ou l’état de la commande a changé. Le dépôt de preuve n’est plus disponible."), { statusCode: 409 });
 
     await tx.preorderLog.create({
       data: {
@@ -420,7 +423,6 @@ async function createBankProofSubmission({
 
 async function submitMyBankProof(req, res) {
   try {
-    const countryId = req.country?.id || req.countryId;
     const fboId = req.customer?.fboId;
     const { id } = req.params;
     const { reference, declaredAmountFcfa, note } = req.body || {};
@@ -431,7 +433,7 @@ async function submitMyBankProof(req, res) {
     }
 
     const order = await prisma.preorder.findFirst({
-      where: { id, countryId, fboId },
+      where: { id, country: { code: { in: ["CIV", "BEN", "TGO", "NER", "BFA"] } }, OR: [{ fboId }, { placedByFboNumero: String(req.customer?.numeroFbo || "").trim() }] },
       select: {
         id: true,
         status: true,
@@ -442,6 +444,7 @@ async function submitMyBankProof(req, res) {
         factureReference: true,
         invoicedAt: true,
         paymentExpiresAt: true,
+        paymentStatus: true,
       },
     });
 
@@ -454,13 +457,10 @@ async function submitMyBankProof(req, res) {
     }
 
     const status = String(order.status || "").toUpperCase();
-    const hasInvoiceSignal = Boolean(order.factureReference || order.invoicedAt);
-    const canUploadAfterBilling = new Set(["INVOICED", "PAYMENT_PENDING", "PAID", "READY", "FULFILLED"]);
-
-    if (!hasInvoiceSignal && !canUploadAfterBilling.has(status)) {
+    if (!["INVOICED", "PAYMENT_PENDING"].includes(status) || order.paymentStatus === "PAID" || resolveCustomerPaymentWindow(order).isExpired) {
       return res.status(400).json({
         message:
-          "Le dépôt de preuve sera disponible après traitement par le facturier (montant final communiqué).",
+          "Le dépôt de preuve est réservé aux commandes facturées en attente de paiement, avant expiration.",
       });
     }
 
@@ -473,21 +473,25 @@ async function submitMyBankProof(req, res) {
       source: "CUSTOMER_PORTAL",
     });
 
-    return res.json({ ok: true, proof });
+    return res.json({ ok: true, proof: customerOrderResponse({ bankPaymentProofs: [proof] }).bankPaymentProofs[0] });
   } catch (e) {
     console.error("submitMyBankProof error:", e);
-    return res.status(500).json({ message: "Erreur serveur (submitMyBankProof)" });
+    return res.status(e.statusCode || 500).json({ message: e.statusCode ? e.message : "Erreur serveur (submitMyBankProof)" });
+  } finally {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch {} }
   }
 }
 
 async function downloadMyBankProof(req, res) {
   try {
-    const countryId = req.country?.id || req.countryId;
     const fboId = req.customer?.fboId;
     const { id, proofId } = req.params;
 
+    const order = await prisma.preorder.findFirst({ where: { id, country: { code: { in: ["CIV", "BEN", "TGO", "NER", "BFA"] } }, OR: [{ fboId }, { placedByFboNumero: String(req.customer?.numeroFbo || "").trim() }] }, select: { id: true, countryId: true } });
+    if (!order) return res.status(404).json({ message: "Preuve introuvable" });
+
     const proof = await prisma.bankPaymentProof.findFirst({
-      where: { id: proofId, preorderId: id, countryId, fboId },
+      where: { id: proofId, preorderId: id, countryId: order.countryId },
       select: {
         id: true,
         fileUrl: true,

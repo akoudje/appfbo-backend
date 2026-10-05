@@ -1,4 +1,5 @@
 const prisma = require("../prisma");
+const { customerOrderResponse } = require("../utils/customerOrderResponse");
 const { computePreorderTotals } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
@@ -74,6 +75,16 @@ async function listMyOrders(req, res) {
       ],
     };
 
+    const q = String(req.query?.q || "").trim().slice(0, 150);
+    const status = String(req.query?.status || "").toUpperCase();
+    const relation = String(req.query?.relation || "").toUpperCase();
+    where.AND = [];
+    if (q) where.AND.push({ OR: ["preorderNumber", "factureReference", "fboNomComplet", "fboNumero"].map((field) => ({ [field]: { contains: q, mode: "insensitive" } })) });
+    if (["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID", "READY", "FULFILLED", "CANCELLED"].includes(status)) where.AND.push({ status });
+    if (status === "ACTIVE") where.AND.push({ status: { notIn: ["CANCELLED", "FULFILLED"] } });
+    if (relation === "SELF") where.AND.push({ fboId });
+    if (relation === "PLACED_FOR_OTHER") where.AND.push({ fboId: { not: fboId }, placedByFboNumero: numeroFbo });
+
     const [rows, total] = await Promise.all([
       prisma.preorder.findMany({
         where,
@@ -116,7 +127,7 @@ async function listMyOrders(req, res) {
             },
           },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip,
         take: ORDERS_PAGE_SIZE,
       }),
@@ -127,11 +138,11 @@ async function listMyOrders(req, res) {
       data: rows.map((row) => {
         const relationType =
           row.fboNumero === numeroFbo ? "SELF" : "PLACED_FOR_OTHER";
-        return attachCustomerPaymentWindow({
+        return customerOrderResponse(attachCustomerPaymentWindow({
           ...row,
           relationType,
           latestBankProof: row.bankPaymentProofs?.[0] || null,
-        });
+        }));
       }),
       total,
       page,
@@ -233,7 +244,7 @@ async function getMyOrder(req, res) {
     const paymentContext = buildPublicBankProofContext(order);
 
     return res.json({
-      ...attachCustomerPaymentWindow(order),
+      ...customerOrderResponse(attachCustomerPaymentWindow(order)),
       relationType,
       ecobankPay: paymentContext.ecobankPay,
       piSpi: paymentContext.piSpi,
@@ -294,8 +305,8 @@ async function cancelMyOrder(req, res) {
     const now = new Date();
 
     const updated = await prisma.$transaction(async (tx) => {
-      const saved = await tx.preorder.update({
-        where: { id: order.id },
+      const changed = await tx.preorder.updateMany({
+        where: { id: order.id, status: { in: CUSTOMER_CANCELLABLE_STATUSES }, paymentStatus: { not: "PAID" } },
         data: {
           status: "CANCELLED",
           cancelledAt: now,
@@ -303,6 +314,8 @@ async function cancelMyOrder(req, res) {
           cancelledById: null,
         },
       });
+      if (!changed.count) throw Object.assign(new Error("La commande vient d’être traitée. Actualisez son état avant de réessayer."), { statusCode: 409 });
+      const saved = await tx.preorder.findUnique({ where: { id: order.id } });
 
       await tx.preorderLog.create({
         data: {
@@ -333,10 +346,10 @@ async function cancelMyOrder(req, res) {
       console.error("cancelMyOrder notification failed:", notifyError?.message || notifyError);
     }
 
-    return res.json({ ok: true, status: updated.status, order: updated });
+    return res.json({ ok: true, status: updated.status, order: customerOrderResponse(updated) });
   } catch (e) {
     console.error("cancelMyOrder error:", e);
-    return res.status(500).json({ message: "Erreur serveur (cancelMyOrder)" });
+    return res.status(e.statusCode || 500).json({ message: e.statusCode ? e.message : "Erreur serveur (cancelMyOrder)" });
   }
 }
 
