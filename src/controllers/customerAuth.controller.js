@@ -108,6 +108,7 @@ function buildGenericOtpRequestResponse({ channel = "", destinationMasked = "" }
     channel: channel || "SMS/EMAIL",
     destinationMasked: destinationMasked || "destination masquée",
     expiresInMinutes: otpExpiresInMinutes(),
+    retryAfterSeconds: otpResendCooldownSeconds(),
     message: GENERIC_OTP_REQUEST_MESSAGE,
   };
 }
@@ -300,7 +301,7 @@ async function requestOtp(req, res) {
       }
     }
 
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = String(crypto.randomInt(100000, 1000000));
     const expiresMin = otpExpiresInMinutes();
     const expiresAt = new Date(now.getTime() + expiresMin * 60 * 1000);
     const explicitChannel = String(channel || "").trim().toUpperCase();
@@ -470,20 +471,21 @@ async function verifyOtp(req, res) {
     }
 
     if (!hashesEqual(challenge.codeHash, otpHash(code))) {
-      await prisma.customerOtpChallenge.update({
-        where: { id: challenge.id },
+      await prisma.customerOtpChallenge.updateMany({
+        where: { id: challenge.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: challenge.maxAttempts } },
         data: { attempts: { increment: 1 } },
       });
       return res.status(400).json({ message: GENERIC_OTP_VERIFY_MESSAGE });
     }
 
-    await prisma.customerOtpChallenge.update({
-      where: { id: challenge.id },
+    const consumed = await prisma.customerOtpChallenge.updateMany({
+      where: { id: challenge.id, consumedAt: null, expiresAt: { gt: now }, attempts: { lt: challenge.maxAttempts } },
       data: {
         consumedAt: now,
         attempts: { increment: 1 },
       },
     });
+    if (!consumed.count) return res.status(400).json({ message: GENERIC_OTP_VERIFY_MESSAGE });
 
     const token = signCustomerToken({
       fboId: fbo.id,
@@ -496,7 +498,8 @@ async function verifyOtp(req, res) {
     const cookieMaxAge = (Number.isFinite(cookieHours) && cookieHours > 0 ? cookieHours : 12) * 60 * 60 * 1000;
     const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 
-    res.cookie("cpt", token, {
+    const nativeSession = req.body?.sessionTransport === "bearer";
+    if (!nativeSession) res.cookie("cpt", token, {
       httpOnly: true,
       secure: isProd,
       // Le frontend (Vercel) et le backend (Render) sont deux domaines
@@ -510,9 +513,9 @@ async function verifyOtp(req, res) {
 
     return res.json({
       ok: true,
-      // Le JWT n'est plus renvoyé dans le corps de la réponse : il vit
-      // uniquement dans le cookie httpOnly posé ci-dessus, pour qu'aucun
-      // script côté client ne puisse jamais le lire (protection XSS).
+      ...(nativeSession ? { token } : {}),
+      // Le web conserve le cookie HttpOnly. L'application native demande
+      // explicitement un jeton Bearer après la même vérification OTP.
       profile: {
         fboId: fbo.id,
         numeroFbo: fbo.numeroFbo,
