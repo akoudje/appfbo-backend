@@ -615,6 +615,7 @@ model AdminUser {
   actif    Boolean   @default(true)
   lastLoginAt DateTime?
   passwordChangedAt DateTime?
+  sessionVersion Int @default(0)
   failedLoginCount Int @default(0)
   lockedUntil DateTime?
   permissionAllow Json?
