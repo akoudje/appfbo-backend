@@ -35,8 +35,12 @@ async function getStockDashboard(req, res) {
       recentMovements,
     ] = await Promise.all([
       prisma.countryProduct.count({ where: { countryId } }),
-      prisma.countryProduct.count({ where: { countryId, stockQty: { gt: 0 } } }),
-      prisma.countryProduct.count({ where: { countryId, stockQty: { lte: 0 } } }),
+      prisma.countryProduct.count({
+        where: { countryId, stockQty: { gt: 0 } },
+      }),
+      prisma.countryProduct.count({
+        where: { countryId, stockQty: { lte: 0 } },
+      }),
       prisma.countryProduct.count({
         where: {
           countryId,
@@ -152,12 +156,16 @@ async function listStockMovements(req, res) {
     const page = parsePositiveInt(req.query.page, 1);
     const pageSize = Math.min(100, parsePositiveInt(req.query.pageSize, 30));
     const q = String(req.query.q || "").trim();
-    const type = String(req.query.type || "").trim().toUpperCase();
-    const reason = String(req.query.reason || "").trim().toUpperCase();
+    const type = String(req.query.type || "")
+      .trim()
+      .toUpperCase();
+    const reason = String(req.query.reason || "")
+      .trim()
+      .toUpperCase();
     const days = Math.min(180, parsePositiveInt(req.query.days, 30));
 
     const where = {
-          countryId: req.countryId,
+      countryId: req.countryId,
       ...(days
         ? {
             createdAt: {
@@ -167,6 +175,8 @@ async function listStockMovements(req, res) {
         : {}),
     };
 
+    if (req.query.productId)
+      where.productId = String(req.query.productId).trim();
     if (type && ["DEBIT", "CREDIT"].includes(type)) {
       where.type = type;
     }
@@ -182,9 +192,21 @@ async function listStockMovements(req, res) {
       where.OR = [
         { product: { is: { nom: { contains: q, mode: "insensitive" } } } },
         { product: { is: { sku: { contains: q, mode: "insensitive" } } } },
-        { preorder: { is: { preorderNumber: { contains: q, mode: "insensitive" } } } },
-        { preorder: { is: { factureReference: { contains: q, mode: "insensitive" } } } },
-        { preorder: { is: { parcelNumber: { contains: q, mode: "insensitive" } } } },
+        {
+          preorder: {
+            is: { preorderNumber: { contains: q, mode: "insensitive" } },
+          },
+        },
+        {
+          preorder: {
+            is: { factureReference: { contains: q, mode: "insensitive" } },
+          },
+        },
+        {
+          preorder: {
+            is: { parcelNumber: { contains: q, mode: "insensitive" } },
+          },
+        },
       ];
     }
 
@@ -243,147 +265,86 @@ async function listStockMovements(req, res) {
 
 async function adjustStock(req, res) {
   try {
-    const { productId, targetStockQty, deltaQty, note } = req.body || {};
-
-    if (!productId || !String(productId).trim()) {
-      return res.status(400).json({ message: "productId requis" });
-    }
-
-    const targetQty = parseNonNegativeInt(targetStockQty);
-    const delta = deltaQty === undefined || deltaQty === null || deltaQty === ""
-      ? null
-      : Number.parseInt(deltaQty, 10);
-
-    if (targetQty === null && !Number.isFinite(delta)) {
-      return res.status(400).json({
-        message: "targetStockQty ou deltaQty requis",
-      });
-    }
-
-    const productAvailability = await prisma.countryProduct.findUnique({
-      where: {
-        countryId_productId: {
-          countryId: req.countryId,
-          productId: String(productId).trim(),
-        },
-      },
-      select: {
-        id: true,
-        productId: true,
-        stockQty: true,
-        product: {
-          select: {
-            id: true,
-            sku: true,
-            nom: true,
-          },
-        },
-      },
-    });
-
-    if (!productAvailability) {
-      return res.status(404).json({ message: "Produit introuvable" });
-    }
-    const product = {
-      ...productAvailability.product,
-      stockQty: productAvailability.stockQty,
-    };
-
-    const nextStockQty =
-      targetQty !== null ? targetQty : Math.max(0, product.stockQty + delta);
-
-    if (nextStockQty < 0) {
-      return res
-        .status(400)
-        .json({ message: "Le stock ne peut pas être négatif" });
-    }
-
-    const effectiveDelta = nextStockQty - product.stockQty;
-
-    if (effectiveDelta === 0) {
-      return res.json({
-        product,
-        movement: null,
-        changed: false,
-      });
-    }
-
+    const { integer, text, fail } = require("../../helpers/product-domain");
+    const { productId, targetStockQty, deltaQty, note, expectedStockQty } =
+      req.body || {};
+    if (typeof productId !== "string" || !productId.trim())
+      fail("Produit requis.");
+    const hasTarget =
+      targetStockQty !== undefined &&
+      targetStockQty !== null &&
+      targetStockQty !== "";
+    const hasDelta =
+      deltaQty !== undefined && deltaQty !== null && deltaQty !== "";
+    if (hasTarget === hasDelta)
+      fail("Renseignez une nouvelle quantité ou un écart, pas les deux.");
+    const target = hasTarget ? integer(targetStockQty, "Stock") : null;
+    const delta = hasDelta ? Number(deltaQty) : null;
+    if (
+      hasDelta &&
+      (!/^-?\d+$/.test(String(deltaQty).trim()) ||
+        !Number.isSafeInteger(delta) ||
+        Math.abs(delta) > 2147483647)
+    )
+      fail("Écart de stock invalide.");
+    const cleanNote = text(note, "Motif de l’ajustement", 1000);
     const result = await prisma.$transaction(async (tx) => {
-      const updatedAvailability = await tx.countryProduct.update({
-        where: { id: productAvailability.id },
-        data: { stockQty: nextStockQty },
-        select: {
-          id: true,
-          stockQty: true,
-          actif: true,
-          updatedAt: true,
-          product: {
-            select: {
-              id: true,
-              sku: true,
-              nom: true,
-              category: true,
-            },
-          },
-        },
+      const current = await tx.countryProduct.findUnique({
+        where: { countryId_productId: { countryId: req.countryId, productId } },
+        include: { product: true },
       });
-
+      if (!current) fail("Produit introuvable dans ce pays.", 404);
+      if (
+        expectedStockQty !== undefined &&
+        integer(expectedStockQty, "Stock précédent") !== current.stockQty
+      )
+        fail("Le stock a changé. Actualisez avant de réessayer.", 409);
+      const next = target !== null ? target : current.stockQty + delta;
+      if (next < 0 || next > 2147483647)
+        fail("Le stock obtenu doit être un entier positif ou nul.");
+      const effectiveDelta = next - current.stockQty;
+      if (!effectiveDelta)
+        return {
+          product: { ...current.product, stockQty: current.stockQty },
+          movement: null,
+          changed: false,
+        };
+      const claim = await tx.countryProduct.updateMany({
+        where: { id: current.id, stockQty: current.stockQty },
+        data: { stockQty: next },
+      });
+      if (claim.count !== 1)
+        fail("Le stock a changé. Actualisez avant de réessayer.", 409);
       const movement = await tx.stockMovement.create({
         data: {
-          productId: product.id,
+          productId,
           countryId: req.countryId,
           type: effectiveDelta > 0 ? "CREDIT" : "DEBIT",
           reason: "MANUAL_ADJUSTMENT",
           qty: Math.abs(effectiveDelta),
-          note: note ? String(note).trim() : null,
+          note: cleanNote,
           meta: {
-            previousQty: product.stockQty,
-            nextQty: nextStockQty,
-            mode: targetQty !== null ? "TARGET" : "DELTA",
+            previousQty: current.stockQty,
+            nextQty: next,
+            mode: target !== null ? "TARGET" : "DELTA",
           },
           createdById: req.user?.id || null,
         },
-        include: {
-          product: {
-            select: {
-              id: true,
-              sku: true,
-              nom: true,
-              stockQty: true,
-            },
-          },
-          createdByAdmin: {
-            select: {
-              id: true,
-              fullName: true,
-              email: true,
-              role: true,
-            },
-          },
-        },
       });
-
-      const updatedProduct = {
-        id: updatedAvailability.product.id,
-        sku: updatedAvailability.product.sku,
-        nom: updatedAvailability.product.nom,
-        category: updatedAvailability.product.category,
-        stockQty: updatedAvailability.stockQty,
-        actif: updatedAvailability.actif,
-        updatedAt: updatedAvailability.updatedAt,
+      return {
+        product: { ...current.product, stockQty: next },
+        movement,
+        changed: true,
       };
-
-      return { updatedProduct, movement };
     });
-
-    return res.json({
-      product: result.updatedProduct,
-      movement: result.movement,
-      changed: true,
-    });
+    return res.json(result);
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("adjustStock error:", error);
-    return res.status(500).json({ message: "Erreur serveur (adjustStock)" });
+    return res
+      .status(500)
+      .json({ message: "Impossible d’ajuster le stock. Réessayez." });
   }
 }
 

@@ -1,18 +1,9 @@
-const { ProductCategory } = require("@prisma/client");
 const { v2: cloudinary } = require("cloudinary");
 const multer = require("multer");
 
 const prisma = require("../../prisma");
 
 const { scopeCreate } = require("../../helpers/countryScope");
-
-const GRADE_PRICE_FIELDS = [
-  "CLIENT_PRIVILEGIE",
-  "ANIMATEUR_ADJOINT",
-  "ANIMATEUR",
-  "MANAGER_ADJOINT",
-  "MANAGER",
-];
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -30,793 +21,750 @@ function uploadBufferToCloudinary(buffer, options = {}) {
   });
 }
 
-function isDecimalLike(v) {
-  if (v === null || v === undefined) return false;
-  const s = String(v).trim();
-  if (!s) return false;
-  return /^-?\d+(\.\d+)?$/.test(s);
-}
-
-function parseStockQty(v, fallback = 0) {
-  if (v === null || v === undefined || v === "") return fallback;
-  const n = Number.parseInt(v, 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(0, n);
-}
-
-function parseGradePrices(input = {}) {
-  const source = input?.gradePrices && typeof input.gradePrices === "object"
-    ? input.gradePrices
-    : input;
-
-  const result = {};
-  const errors = [];
-
-  for (const grade of GRADE_PRICE_FIELDS) {
-    const aliases = [
-      grade,
-      grade.toLowerCase(),
-      `prix${grade}`,
-      `prix_${grade}`,
-      `price${grade}`,
-      `price_${grade}`,
-    ];
-    const raw = aliases
-      .map((key) => source?.[key])
-      .find((value) => value !== undefined && value !== null && String(value).trim() !== "");
-
-    if (raw === undefined) continue;
-
-    const value = Number(raw);
-    if (!Number.isFinite(value) || value < 0) {
-      errors.push(`${grade} invalide`);
-      continue;
-    }
-    result[grade] = Math.round(value * 10000) / 10000;
-  }
-
-  return { gradePrices: result, errors };
-}
-
-async function upsertProductGradePrices(tx, { productId, countryId, gradePrices }) {
-  const entries = Object.entries(gradePrices || {});
-  for (const [grade, prixFcfa] of entries) {
-    await tx.productGradePrice.upsert({
-      where: {
-        countryId_productId_grade: {
-          countryId,
-          productId,
-          grade,
-        },
-      },
-      create: {
-        countryId,
-        productId,
-        grade,
-        prixFcfa,
-      },
-      update: {
-        prixFcfa,
-      },
-    });
-  }
-}
-
-function isIntegerLike(v) {
-  if (v === null || v === undefined || v === "") return false;
-  return /^-?\d+$/.test(String(v).trim());
-}
-
-function parseEnumSafe(input, enumObj, fallback) {
-  if (input === null || input === undefined || String(input).trim() === "") {
-    return fallback;
-  }
-
-  const raw = String(input).trim();
-  const values = new Set(Object.values(enumObj));
-
-  if (values.has(raw)) return raw;
-
-  const normalized = raw
-    .toUpperCase()
-    .replace(/\s+/g, "_")
-    .replace(/[’']/g, "_")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  if (values.has(normalized)) return normalized;
-
-  return fallback;
-}
-
+const domain = require("../../helpers/product-domain");
+const { csvCell } = require("../../helpers/order-query");
+const { GRADES, fail, integer, boolean, normalize, listQuery, changed, audit } =
+  domain;
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
+  fileFilter(req, file, cb) {
     const ok = ["image/png", "image/jpeg", "image/webp"].includes(
       file.mimetype,
     );
-    cb(ok ? null : new Error("Format image non supporté (png/jpg/webp)"), ok);
+    cb(
+      ok
+        ? null
+        : new Error("Utilisez une image PNG, JPEG ou WebP (5 Mo maximum)."),
+      ok,
+    );
   },
 });
-
-function productToCountryDto(product, countryId) {
-  const countryProduct =
-    product?.countryProducts?.find((item) => item.countryId === countryId) ||
-    product?.countryProducts?.[0] ||
-    null;
-
+function error(res, e) {
+  if (e.code === "P2002")
+    return res
+      .status(409)
+      .json({ message: "Ce SKU ou code-barres est déjà utilisé." });
+  if (e.statusCode)
+    return res.status(e.statusCode).json({ message: e.message });
+  console.error("Products error:", e);
+  return res
+    .status(500)
+    .json({ message: "Impossible de terminer cette opération. Réessayez." });
+}
+function select(countryId) {
   return {
-    ...product,
-    prixBaseFcfa: countryProduct?.prixBaseFcfa ?? product.prixBaseFcfa,
-    actif: countryProduct?.actif ?? product.actif,
-    stockQty: countryProduct?.stockQty ?? product.stockQty,
-    maxQtyPerOrder:
-      countryProduct?.maxQtyPerOrder === undefined
-        ? product.maxQtyPerOrder
-        : countryProduct.maxQtyPerOrder,
-    countryProductId: countryProduct?.id || null,
-    countryId,
-    gradePrices: GRADE_PRICE_FIELDS.reduce((acc, grade) => {
-      const row = product?.gradePrices?.find(
-        (item) => item.countryId === countryId && item.grade === grade,
-      );
-      acc[grade] = row ? Number(row.prixFcfa || 0) : "";
-      return acc;
-    }, {}),
+    countryProducts: { where: { countryId } },
+    gradePrices: { where: { countryId } },
+    packagings: { orderBy: { unitsPerPackage: "asc" } },
+  };
+}
+function dto(p, countryId) {
+  const a = p.countryProducts?.[0];
+  return {
+    ...p,
     countryProducts: undefined,
-    cc: product.cc?.toString?.() ?? String(product.cc ?? "0.000"),
-    poidsKg: product.poidsKg?.toString?.() ?? String(product.poidsKg ?? "0.000"),
+    countryId,
+    countryProductId: a?.id,
+    countryUpdatedAt: a?.updatedAt,
+    prixBaseFcfa: a?.prixBaseFcfa ?? p.prixBaseFcfa,
+    stockQty: a?.stockQty ?? p.stockQty,
+    actif: a?.actif ?? p.actif,
+    maxQtyPerOrder: a ? a.maxQtyPerOrder : p.maxQtyPerOrder,
+    cc: String(p.cc ?? "0"),
+    poidsKg: String(p.poidsKg ?? "0"),
+    gradePrices: Object.fromEntries(
+      GRADES.map((grade) => [
+        grade,
+        p.gradePrices
+          ?.find((row) => row.grade === grade)
+          ?.prixFcfa?.toString() ?? "",
+      ]),
+    ),
   };
 }
-
-const productBaseSelect = {
-  id: true,
-  sku: true,
-  nom: true,
-  prixBaseFcfa: true,
-  cc: true,
-  poidsKg: true,
-  actif: true,
-  imageUrl: true,
-  category: true,
-  details: true,
-  stockQty: true,
-  maxQtyPerOrder: true,
-  createdAt: true,
-  updatedAt: true,
-};
-
-function productSelectForCountry(countryId, extra = {}) {
-  return {
-    ...productBaseSelect,
-    ...extra,
-    countryProducts: {
-      where: { countryId },
-      select: {
-        id: true,
-        countryId: true,
-        prixBaseFcfa: true,
-        stockQty: true,
-        actif: true,
-        maxQtyPerOrder: true,
-      },
-    },
-    gradePrices: {
-      where: { countryId },
-      select: {
-        countryId: true,
-        grade: true,
-        prixFcfa: true,
-      },
-    },
-    packagings: {
-      orderBy: { unitsPerPackage: "asc" },
-    },
-  };
+async function saveGrades(tx, productId, countryId, grades) {
+  for (const [grade, prixFcfa] of Object.entries(grades)) {
+    if (prixFcfa === null)
+      await tx.productGradePrice.deleteMany({
+        where: { productId, countryId, grade },
+      });
+    else
+      await tx.productGradePrice.upsert({
+        where: { countryId_productId_grade: { countryId, productId, grade } },
+        create: { productId, countryId, grade, prixFcfa },
+        update: { prixFcfa },
+      });
+  }
 }
-
-async function upsertCountryProduct(tx, { productId, countryId, prixBaseFcfa, stockQty, actif, maxQtyPerOrder }) {
-  return tx.countryProduct.upsert({
-    where: {
-      countryId_productId: {
-        countryId,
+async function initialStock(tx, req, productId, qty) {
+  if (qty > 0)
+    await tx.stockMovement.create({
+      data: {
         productId,
+        countryId: req.countryId,
+        type: "CREDIT",
+        reason: "MANUAL_ADJUSTMENT",
+        qty,
+        note: "Stock initial du catalogue",
+        createdById: req.user?.id || null,
+        meta: { previousQty: 0, nextQty: qty, mode: "INITIAL" },
       },
-    },
-    create: {
-      productId,
-      countryId,
-      prixBaseFcfa,
-      stockQty,
-      actif,
-      maxQtyPerOrder,
-    },
-    update: {
-      prixBaseFcfa,
-      stockQty,
-      actif,
-      maxQtyPerOrder,
-    },
-  });
+    });
 }
-
 async function createProduct(req, res) {
   try {
-    const {
-      sku,
-      nom,
-      prixBaseFcfa,
-      cc,
-      poidsKg,
-      actif = true,
-      imageUrl,
-      category,
-      details,
-      stockQty,
-      maxQtyPerOrder,
-      gradePrices,
-    } = req.body || {};
-
-    if (!sku || !String(sku).trim())
-      return res.status(400).json({ message: "sku requis" });
-    if (!nom || !String(nom).trim())
-      return res.status(400).json({ message: "nom requis" });
-
-    const price = Number(prixBaseFcfa);
-    if (!Number.isFinite(price) || price < 0)
-      return res.status(400).json({ message: "prixBaseFcfa invalide" });
-
-    if (!isDecimalLike(cc))
-      return res.status(400).json({ message: "cc requis" });
-    if (!isDecimalLike(poidsKg))
-      return res.status(400).json({ message: "poidsKg requis" });
-
-    const cat = parseEnumSafe(
-      category,
-      ProductCategory,
-      ProductCategory.NON_CLASSE || "NON_CLASSE",
-    );
-    const stock = parseStockQty(stockQty, 0);
-    if (stockQty !== undefined && stockQty !== null && stockQty !== "" && !isIntegerLike(stockQty)) {
-      return res.status(400).json({ message: "stockQty invalide" });
-    }
-    if (
-      maxQtyPerOrder !== undefined &&
-      maxQtyPerOrder !== null &&
-      maxQtyPerOrder !== "" &&
-      (!isIntegerLike(maxQtyPerOrder) || Number.parseInt(maxQtyPerOrder, 10) < 1)
-    ) {
-      return res.status(400).json({ message: "maxQtyPerOrder invalide" });
-    }
-    const maxQty =
-      maxQtyPerOrder === undefined || maxQtyPerOrder === null || maxQtyPerOrder === ""
-        ? null
-        : parseStockQty(maxQtyPerOrder, null);
-    const det =
-      details !== undefined && details !== null ? String(details).trim() : null;
-    const parsedGradePrices = parseGradePrices({ gradePrices });
-    if (parsedGradePrices.errors.length) {
-      return res.status(400).json({
-        message: `Prix par grade invalide: ${parsedGradePrices.errors.join(", ")}`,
-      });
-    }
-
-    const countryId = req.countryId;
-    const normalizedSku = String(sku).trim();
-
+    const { shared, local, grades } = normalize(req.body, true);
     const created = await prisma.$transaction(async (tx) => {
-      const existing = await tx.product.findUnique({
-        where: { sku: normalizedSku },
+      const exists = await tx.product.findUnique({
+        where: { sku: shared.sku },
         select: { id: true },
       });
-
-      const product = existing
-        ? await tx.product.update({
-            where: { id: existing.id },
-            data: {
-              nom: String(nom).trim(),
-              cc: String(cc),
-              poidsKg: String(poidsKg),
-              imageUrl: imageUrl ? String(imageUrl).trim() : null,
-              category: cat,
-              details: det || null,
-            },
-            select: { id: true },
-          })
-        : await tx.product.create({
-            data: scopeCreate(req, {
-              sku: normalizedSku,
-              nom: String(nom).trim(),
-              prixBaseFcfa: price,
-              cc: String(cc),
-              poidsKg: String(poidsKg),
-              actif: Boolean(actif),
-              imageUrl: imageUrl ? String(imageUrl).trim() : null,
-              category: cat,
-              details: det || null,
-              stockQty: stock,
-              maxQtyPerOrder: maxQty,
-            }),
-            select: { id: true },
-          });
-
-      await upsertCountryProduct(tx, {
-        productId: product.id,
-        countryId,
-        prixBaseFcfa: price,
-        stockQty: stock,
-        actif: Boolean(actif),
-        maxQtyPerOrder: maxQty,
+      if (exists)
+        fail(
+          "Ce SKU existe déjà. Modifiez sa fiche ou ajoutez sa disponibilité par la copie de catalogue.",
+          409,
+        );
+      const product = await tx.product.create({
+        data: scopeCreate(req, {
+          ...shared,
+          prixBaseFcfa: local.prixBaseFcfa,
+          stockQty: 0,
+          actif: local.actif,
+          maxQtyPerOrder: local.maxQtyPerOrder ?? null,
+        }),
       });
-      await upsertProductGradePrices(tx, {
-        productId: product.id,
-        countryId,
-        gradePrices: parsedGradePrices.gradePrices,
+      await tx.countryProduct.create({
+        data: {
+          productId: product.id,
+          countryId: req.countryId,
+          ...local,
+          stockQty: local.stockQty ?? 0,
+        },
       });
-
+      await initialStock(tx, req, product.id, local.stockQty ?? 0);
+      await saveGrades(tx, product.id, req.countryId, grades);
+      await audit(tx, req, product.id, "CREATE", {
+        after: { ...shared, ...local, gradePrices: grades },
+      });
       return tx.product.findUnique({
         where: { id: product.id },
-        select: productSelectForCountry(countryId),
+        include: select(req.countryId),
       });
     });
-
-    return res.status(201).json(productToCountryDto(created, countryId));
+    return res.status(201).json(dto(created, req.countryId));
   } catch (e) {
-    console.error("createProduct error:", e);
-    if (String(e?.code) === "P2002")
-      return res.status(409).json({ message: "SKU déjà utilisé" });
-    return res.status(500).json({ message: "Erreur serveur (createProduct)" });
+    return error(res, e);
   }
 }
-
+function availabilityWhere(parsed) {
+  const { countryProducts, ...productWhere } = parsed.where;
+  return { ...countryProducts.some, product: { is: productWhere } };
+}
 async function listProducts(req, res) {
   try {
-    const { q, actif, take, category, inStock } = req.query;
-    const filters = {};
-    const availabilityFilters = { countryId: req.countryId };
-
-    if (q && String(q).trim()) {
-      const qs = String(q).trim();
-      filters.OR = [
-        { nom: { contains: qs, mode: "insensitive" } },
-        { sku: { contains: qs, mode: "insensitive" } },
-      ];
+    const parsed = listQuery(req.query, req.countryId),
+      where = availabilityWhere(parsed);
+    const paginated =
+      req.query.page !== undefined || req.query.pageSize !== undefined;
+    const take = paginated
+      ? parsed.pageSize
+      : Math.min(500, integer(req.query.take ?? 200, "Nombre de produits", 1));
+    let stats = {},
+      totalCount = 0,
+      page = parsed.page;
+    if (paginated) {
+      const [total, actifs, rupture, faible, incomplets] = await Promise.all([
+        prisma.countryProduct.count({ where }),
+        prisma.countryProduct.count({
+          where: { AND: [where, { actif: true }] },
+        }),
+        prisma.countryProduct.count({
+          where: { AND: [where, { stockQty: { lte: 0 } }] },
+        }),
+        prisma.countryProduct.count({
+          where: { AND: [where, { stockQty: { gt: 0, lte: 5 } }] },
+        }),
+        prisma.countryProduct.count({
+          where: {
+            AND: [
+              where,
+              {
+                product: {
+                  is: {
+                    OR: [
+                      { imageUrl: null },
+                      { imageUrl: "" },
+                      { category: "NON_CLASSE" },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      ]);
+      totalCount = total;
+      page = Math.min(page, Math.max(1, Math.ceil(total / take)));
+      stats = {
+        total,
+        actifs,
+        inactifs: total - actifs,
+        rupture,
+        faible,
+        incomplets,
+      };
     }
-
-    if (actif !== undefined && actif !== "") {
-      if (String(actif) === "true") availabilityFilters.actif = true;
-      else if (String(actif) === "false") availabilityFilters.actif = false;
-    }
-
-    if (category && String(category).trim()) {
-      const parsed = parseEnumSafe(category, ProductCategory, null);
-      if (!parsed)
-        return res.status(400).json({ message: "category invalide" });
-      filters.category = parsed;
-    }
-
-    if (String(inStock) === "true") availabilityFilters.stockQty = { gt: 0 };
-    if (String(inStock) === "false") availabilityFilters.stockQty = { lte: 0 };
-    const countryId = req.countryId;
-    const where = {
-      ...filters,
-      countryProducts: { some: availabilityFilters },
-    };
-
-    const limit = Math.min(500, Math.max(10, Number(take) || 200));
-
-    const products = await prisma.product.findMany({
+    const rows = await prisma.countryProduct.findMany({
       where,
-      take: limit,
-      orderBy: [{ nom: "asc" }],
-      select: productSelectForCountry(countryId),
+      orderBy: parsed.orderBy,
+      take,
+      skip: paginated ? (page - 1) * take : 0,
+      include: { product: { include: select(req.countryId) } },
     });
-
-    return res.json(products.map((p) => productToCountryDto(p, countryId)));
+    const items = rows.map((row) => dto(row.product, req.countryId));
+    return res.json(
+      paginated ? { items, totalCount, page, pageSize: take, stats } : items,
+    );
   } catch (e) {
-    console.error("listProducts error:", e);
-    return res.status(500).json({ message: "Erreur serveur (listProducts)" });
+    return error(res, e);
   }
 }
-
 async function getProductById(req, res) {
   try {
-    const { id } = req.params;
-    const countryId = req.countryId;
     const p = await prisma.product.findFirst({
       where: {
-        id,
-        countryProducts: { some: { countryId } },
+        id: req.params.id,
+        countryProducts: { some: { countryId: req.countryId } },
       },
-      select: productSelectForCountry(countryId),
+      include: select(req.countryId),
     });
-
-    if (!p) return res.status(404).json({ message: "Produit introuvable" });
-
-    return res.json(productToCountryDto(p, countryId));
+    if (!p) fail("Produit introuvable dans ce pays.", 404);
+    return res.json(dto(p, req.countryId));
   } catch (e) {
-    console.error("getProductById error:", e);
-    return res.status(500).json({ message: "Erreur serveur (getProductById)" });
+    return error(res, e);
   }
 }
-
+async function lockAvailability(tx, req, productId) {
+  const where = { countryId: req.countryId, productId };
+  if (req.body.expectedCountryUpdatedAt) {
+    const date = new Date(req.body.expectedCountryUpdatedAt);
+    if (!Number.isFinite(date.getTime()))
+      fail("Version de disponibilité invalide.");
+    where.updatedAt = date;
+  }
+  const claimed = await tx.countryProduct.updateMany({
+    where,
+    data: {
+      updatedAt: new Date(
+        Math.max(Date.now(), (where.updatedAt?.getTime() || 0) + 1),
+      ),
+    },
+  });
+  if (claimed.count !== 1)
+    fail(
+      "La disponibilité a changé ou ce produit est absent de ce pays. Actualisez la fiche avant de réessayer.",
+      409,
+    );
+  const productWhere = { id: productId };
+  if (req.body.expectedUpdatedAt) {
+    const date = new Date(req.body.expectedUpdatedAt);
+    if (!Number.isFinite(date.getTime())) fail("Version de produit invalide.");
+    productWhere.updatedAt = date;
+  }
+  const claimedProduct = await tx.product.updateMany({
+    where: productWhere,
+    data: {
+      updatedAt: new Date(
+        Math.max(Date.now(), (productWhere.updatedAt?.getTime() || 0) + 1),
+      ),
+    },
+  });
+  if (claimedProduct.count !== 1)
+    fail("Cette fiche a été modifiée. Actualisez-la avant de réessayer.", 409);
+}
 async function updateProduct(req, res) {
   try {
-    const { id } = req.params;
-    const countryId = req.countryId;
-    const {
-      sku,
-      nom,
-      prixBaseFcfa,
-      actif,
-      imageUrl,
-      cc,
-      poidsKg,
-      category,
-      details,
-      stockQty,
-      maxQtyPerOrder,
-      gradePrices,
-    } = req.body || {};
-
-    const productData = {
-      ...(sku !== undefined ? { sku: String(sku).trim() } : {}),
-      ...(nom !== undefined ? { nom: String(nom).trim() } : {}),
-      ...(imageUrl !== undefined
-        ? { imageUrl: imageUrl ? String(imageUrl).trim() : null }
-        : {}),
-      ...(cc !== undefined ? { cc: String(cc) } : {}),
-      ...(poidsKg !== undefined ? { poidsKg: String(poidsKg) } : {}),
-      ...(category !== undefined
-        ? {
-            category: parseEnumSafe(
-              category,
-              ProductCategory,
-              ProductCategory.NON_CLASSE || "NON_CLASSE",
-            ),
-          }
-        : {}),
-      ...(details !== undefined
-        ? { details: details ? String(details).trim() : null }
-        : {}),
-    };
-
-    const availabilityData = {
-      ...(prixBaseFcfa !== undefined
-        ? { prixBaseFcfa: Number(prixBaseFcfa) }
-        : {}),
-      ...(actif !== undefined ? { actif: Boolean(actif) } : {}),
-      ...(stockQty !== undefined
-        ? { stockQty: parseStockQty(stockQty, 0) }
-        : {}),
-      ...(maxQtyPerOrder !== undefined
-        ? {
-            maxQtyPerOrder:
-              maxQtyPerOrder === null || maxQtyPerOrder === ""
-                ? null
-                : parseStockQty(maxQtyPerOrder, null),
-          }
-        : {}),
-    };
-
-    if (
-      "prixBaseFcfa" in availabilityData &&
-      (!Number.isFinite(availabilityData.prixBaseFcfa) || availabilityData.prixBaseFcfa < 0)
-    ) {
-      return res.status(400).json({ message: "prixBaseFcfa invalide" });
-    }
-    const parsedGradePrices = parseGradePrices({ gradePrices });
-    if (parsedGradePrices.errors.length) {
-      return res.status(400).json({
-        message: `Prix par grade invalide: ${parsedGradePrices.errors.join(", ")}`,
-      });
-    }
-    if ("sku" in productData && !productData.sku)
-      return res.status(400).json({ message: "sku invalide" });
-    if ("nom" in productData && !productData.nom)
-      return res.status(400).json({ message: "nom invalide" });
-
-    if ("cc" in productData && !isDecimalLike(productData.cc))
-      return res.status(400).json({ message: "cc invalide" });
-    if ("poidsKg" in productData && !isDecimalLike(productData.poidsKg))
-      return res.status(400).json({ message: "poidsKg invalide" });
-    if (
-      stockQty !== undefined &&
-      stockQty !== null &&
-      stockQty !== "" &&
-      !isIntegerLike(stockQty)
-    ) {
-      return res.status(400).json({ message: "stockQty invalide" });
-    }
-    if (
-      maxQtyPerOrder !== undefined &&
-      maxQtyPerOrder !== null &&
-      maxQtyPerOrder !== "" &&
-      (!isIntegerLike(maxQtyPerOrder) || Number.parseInt(maxQtyPerOrder, 10) < 1)
-    ) {
-      return res.status(400).json({ message: "maxQtyPerOrder invalide" });
-    }
-
-    const exists = await prisma.product.findFirst({
-      where: { id, countryProducts: { some: { countryId } } },
-      select: {
-        id: true,
-        prixBaseFcfa: true,
-        stockQty: true,
-        actif: true,
-        maxQtyPerOrder: true,
-        countryProducts: {
-          where: { countryId },
-          select: {
-            prixBaseFcfa: true,
-            stockQty: true,
-            actif: true,
-            maxQtyPerOrder: true,
-          },
-        },
-      },
-    });
-    if (!exists)
-      return res.status(404).json({ message: "Produit introuvable" });
-
-    const currentAvailability = exists.countryProducts?.[0] || exists;
+    const { shared, local, grades } = normalize(req.body);
+    if ("stockQty" in local)
+      fail("Utilisez l’action Ajuster le stock pour modifier les quantités.");
     const updated = await prisma.$transaction(async (tx) => {
-      if (Object.keys(productData).length) {
+      await lockAvailability(tx, req, req.params.id);
+      const before = await tx.product.findUnique({
+          where: { id: req.params.id },
+          include: select(req.countryId),
+        }),
+        previous = dto(before, req.countryId);
+      const sharedChanges = changed(previous, shared),
+        localChanges = changed(previous, local);
+      if (Object.keys(sharedChanges).length)
         await tx.product.update({
-          where: { id: exists.id },
-          data: productData,
+          where: { id: before.id },
+          data: sharedChanges,
         });
-      }
-
-      await upsertCountryProduct(tx, {
-        productId: exists.id,
-        countryId,
-        prixBaseFcfa:
-          availabilityData.prixBaseFcfa !== undefined
-            ? availabilityData.prixBaseFcfa
-            : Number(currentAvailability.prixBaseFcfa || 0),
-        stockQty:
-          availabilityData.stockQty !== undefined
-            ? availabilityData.stockQty
-            : Number(currentAvailability.stockQty || 0),
-        actif:
-          availabilityData.actif !== undefined
-            ? availabilityData.actif
-            : Boolean(currentAvailability.actif),
-        maxQtyPerOrder:
-          availabilityData.maxQtyPerOrder !== undefined
-            ? availabilityData.maxQtyPerOrder
-            : currentAvailability.maxQtyPerOrder,
+      if (Object.keys(localChanges).length)
+        await tx.countryProduct.update({
+          where: {
+            countryId_productId: {
+              countryId: req.countryId,
+              productId: before.id,
+            },
+          },
+          data: localChanges,
+        });
+      await saveGrades(tx, before.id, req.countryId, grades);
+      await audit(tx, req, before.id, "UPDATE", {
+        before: Object.fromEntries(
+          Object.keys({ ...sharedChanges, ...localChanges }).map((key) => [
+            key,
+            previous[key],
+          ]),
+        ),
+        after: { ...sharedChanges, ...localChanges },
+        grades: { before: previous.gradePrices, after: grades },
       });
-      await upsertProductGradePrices(tx, {
-        productId: exists.id,
-        countryId,
-        gradePrices: parsedGradePrices.gradePrices,
-      });
-
       return tx.product.findUnique({
-        where: { id: exists.id },
-        select: productSelectForCountry(countryId),
+        where: { id: before.id },
+        include: select(req.countryId),
       });
     });
-
-    return res.json(productToCountryDto(updated, countryId));
+    return res.json(dto(updated, req.countryId));
   } catch (e) {
-    console.error("updateProduct error:", e);
-    if (String(e?.code) === "P2002")
-      return res.status(409).json({ message: "SKU déjà utilisé" });
-    return res.status(500).json({ message: "Erreur serveur (updateProduct)" });
+    return error(res, e);
   }
 }
-
 async function deleteProduct(req, res) {
   try {
-    const { id } = req.params;
-    const countryId = req.countryId;
-
-    const availability = await prisma.countryProduct.findUnique({
-      where: {
-        countryId_productId: {
-          countryId,
-          productId: id,
+    await prisma.$transaction(async (tx) => {
+      await lockAvailability(tx, req, req.params.id);
+      await tx.countryProduct.update({
+        where: {
+          countryId_productId: {
+            countryId: req.countryId,
+            productId: req.params.id,
+          },
         },
-      },
-      select: {
-        id: true,
-        product: {
-          select: { id: true, sku: true },
-        },
-      },
+        data: { actif: false },
+      });
+      await audit(tx, req, req.params.id, "DEACTIVATE", {
+        after: { actif: false },
+      });
     });
-    if (!availability) return res.status(404).json({ message: "Produit introuvable" });
-
-    await prisma.countryProduct.delete({ where: { id: availability.id } });
-    return res.json({ ok: true });
+    return res.json({ ok: true, deactivated: true });
   } catch (e) {
-    console.error("deleteProduct error:", e);
-    return res.status(500).json({ message: "Erreur serveur (deleteProduct)" });
+    return error(res, e);
   }
 }
-
+async function history(req, res) {
+  try {
+    const p = await prisma.product.findFirst({
+      where: {
+        id: req.params.id,
+        countryProducts: { some: { countryId: req.countryId } },
+      },
+      select: { id: true },
+    });
+    if (!p) fail("Produit introuvable dans ce pays.", 404);
+    const page = integer(req.query.page ?? 1, "Page", 1),
+      pageSize = 30,
+      where = { productId: p.id, countryId: req.countryId };
+    const [items, totalCount] = await Promise.all([
+      prisma.productAuditLog.findMany({
+        where,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: pageSize,
+        skip: (page - 1) * pageSize,
+      }),
+      prisma.productAuditLog.count({ where }),
+    ]);
+    return res.json({ items, totalCount, page, pageSize });
+  } catch (e) {
+    return error(res, e);
+  }
+}
+async function exportProducts(req, res) {
+  try {
+    const parsed = listQuery(req.query, req.countryId),
+      where = availabilityWhere(parsed),
+      count = await prisma.countryProduct.count({ where });
+    if (count > 10000)
+      fail("L’export est limité à 10 000 produits. Affinez vos filtres.");
+    const rows = await prisma.countryProduct.findMany({
+      where,
+      orderBy: parsed.orderBy,
+      take: 10000,
+      include: { product: { include: select(req.countryId) } },
+    });
+    const headers = [
+      "sku",
+      "nom",
+      "prixBaseFcfa",
+      ...GRADES,
+      "cc",
+      "poidsKg",
+      "actif",
+      "imageUrl",
+      "category",
+      "stockQty",
+      "maxQtyPerOrder",
+      "details",
+    ];
+    const lines = rows.map((row) => {
+      const p = dto(row.product, req.countryId);
+      return headers
+        .map((key) =>
+          csvCell(GRADES.includes(key) ? p.gradePrices[key] : p[key]),
+        )
+        .join(";");
+    });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="produits.csv"');
+    return res.send("\uFEFF" + [headers.join(";"), ...lines].join("\r\n"));
+  } catch (e) {
+    return error(res, e);
+  }
+}
+function importInput(row) {
+  const output = { ...row };
+  if (output.category === undefined && output.categorie !== undefined)
+    output.category = output.categorie;
+  if (output.stockQty === undefined)
+    output.stockQty = output.stock ?? output.quantite;
+  output.gradePrices = { ...(row.gradePrices || {}) };
+  for (const grade of GRADES)
+    if (row[grade] !== undefined && row[grade] !== "")
+      output.gradePrices[grade] = row[grade];
+  for (const key of Object.keys(output))
+    if (output[key] === "" && !["sku", "nom"].includes(key)) delete output[key];
+  return output;
+}
 async function importProductsCsv(req, res) {
   try {
-    const countryId = req.countryId;
-    const { rows } = req.body || {};
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return res.status(400).json({ message: "rows requis (array)" });
-    }
-
-    const clean = [];
-    const errors = [];
-
+    const rows = req.body.rows;
+    if (!Array.isArray(rows) || !rows.length || rows.length > 1000)
+      fail("Importez de 1 à 1 000 lignes par fichier.");
+    const dryRun = req.body.dryRun === true,
+      errors = [],
+      clean = [],
+      seen = new Set();
     for (let i = 0; i < rows.length; i++) {
-      const r = rows[i] || {};
-
-      const sku = (r.sku ?? "").toString().trim();
-      const nom = (r.nom ?? "").toString().trim();
-      const prixBaseFcfa = Number(r.prixBaseFcfa);
-      const cc = (r.cc ?? "").toString().trim();
-      const poidsKg = (r.poidsKg ?? "").toString().trim();
-      const actif = r.actif === undefined ? true : Boolean(r.actif);
-      const imageUrl = r.imageUrl ? String(r.imageUrl).trim() : null;
-
-      const category = parseEnumSafe(
-        r.category ?? r.categorie,
-        ProductCategory,
-        ProductCategory.NON_CLASSE || "NON_CLASSE",
-      );
-      const details = r.details ? String(r.details).trim() : null;
-      const stockQty = parseStockQty(r.stockQty ?? r.stock ?? r.quantite, 0);
-      const maxQtyPerOrderRaw =
-        r.maxQtyPerOrder ?? r.maxqtyperorder ?? r.maxQty ?? r.maxqty ?? r.limiteParCommande;
-      const maxQtyPerOrder =
-        maxQtyPerOrderRaw === undefined ||
-        maxQtyPerOrderRaw === null ||
-        String(maxQtyPerOrderRaw).trim() === ""
-          ? null
-          : parseStockQty(maxQtyPerOrderRaw, null);
-      const parsedGradePrices = parseGradePrices(r);
-
-      const rowErr = [];
-      if (!sku) rowErr.push("sku manquant");
-      if (!nom) rowErr.push("nom manquant");
-      if (!Number.isFinite(prixBaseFcfa) || prixBaseFcfa < 0)
-        rowErr.push("prixBaseFcfa invalide");
-      if (!isDecimalLike(cc)) rowErr.push("cc invalide");
-      if (!isDecimalLike(poidsKg)) rowErr.push("poidsKg invalide");
-      if (
-        (r.stockQty ?? r.stock ?? r.quantite) !== undefined &&
-        (r.stockQty ?? r.stock ?? r.quantite) !== null &&
-        String(r.stockQty ?? r.stock ?? r.quantite).trim() !== "" &&
-        (!isIntegerLike(r.stockQty ?? r.stock ?? r.quantite) ||
-          Number.parseInt(r.stockQty ?? r.stock ?? r.quantite, 10) < 0)
-      ) {
-        rowErr.push("stockQty invalide");
-      }
-      if (
-        maxQtyPerOrderRaw !== undefined &&
-        maxQtyPerOrderRaw !== null &&
-        String(maxQtyPerOrderRaw).trim() !== "" &&
-        (!isIntegerLike(maxQtyPerOrderRaw) ||
-          Number.parseInt(maxQtyPerOrderRaw, 10) < 1)
-      ) {
-        rowErr.push("maxQtyPerOrder invalide");
-      }
-      rowErr.push(...parsedGradePrices.errors);
-
-      if (rowErr.length) {
-        errors.push({ index: i + 1, sku, errors: rowErr });
-        continue;
-      }
-
-      clean.push({
-        sku,
-        nom,
-        prixBaseFcfa,
-        cc,
-        poidsKg,
-        actif,
-        imageUrl,
-        category,
-        details,
-        stockQty,
-        maxQtyPerOrder,
-        gradePrices: parsedGradePrices.gradePrices,
-      });
-    }
-
-    if (clean.length === 0) {
-      return res.status(400).json({ message: "Aucune ligne valide", errors });
-    }
-
-    let created = 0;
-    let updated = 0;
-
-    await prisma.$transaction(async (tx) => {
-      for (const p of clean) {
-        const exists = await tx.product.findUnique({
-          where: { sku: p.sku },
-          select: { id: true },
+      try {
+        const input = importInput(rows[i]),
+          patch = normalize(input);
+        if (!patch.shared.sku) fail("SKU requis.");
+        if (seen.has(patch.shared.sku))
+          fail("SKU présent plusieurs fois dans le fichier.");
+        seen.add(patch.shared.sku);
+        clean.push({ index: i + 2, input, patch });
+      } catch (e) {
+        errors.push({
+          index: i + 2,
+          sku: String(rows[i]?.sku || ""),
+          errors: [e.message],
         });
-
-        if (exists) {
-          await tx.product.update({
-            where: { sku: p.sku },
-            data: {
-              nom: p.nom,
-              cc: String(p.cc),
-              poidsKg: String(p.poidsKg),
-              imageUrl: p.imageUrl,
-              category: p.category,
-              details: p.details,
-            },
-          });
-          await upsertCountryProduct(tx, {
-            productId: exists.id,
-            countryId,
-            prixBaseFcfa: p.prixBaseFcfa,
-            stockQty: p.stockQty,
-            actif: p.actif,
-            maxQtyPerOrder: p.maxQtyPerOrder,
-          });
-          await upsertProductGradePrices(tx, {
-            productId: exists.id,
-            countryId,
-            gradePrices: p.gradePrices,
-          });
-          updated++;
-        } else {
-          const createdProduct = await tx.product.create({
-            data: {
-              sku: p.sku,
-              nom: p.nom,
-              countryId,
-              prixBaseFcfa: p.prixBaseFcfa,
-              cc: String(p.cc),
-              poidsKg: String(p.poidsKg),
-              actif: p.actif,
-              imageUrl: p.imageUrl,
-              category: p.category,
-              details: p.details,
-              stockQty: p.stockQty,
-              maxQtyPerOrder: p.maxQtyPerOrder,
-            },
-            select: { id: true },
-          });
-          await upsertCountryProduct(tx, {
-            productId: createdProduct.id,
-            countryId,
-            prixBaseFcfa: p.prixBaseFcfa,
-            stockQty: p.stockQty,
-            actif: p.actif,
-            maxQtyPerOrder: p.maxQtyPerOrder,
-          });
-          await upsertProductGradePrices(tx, {
-            productId: createdProduct.id,
-            countryId,
-            gradePrices: p.gradePrices,
-          });
-          created++;
-        }
       }
-    });
-
-    return res.json({
+    }
+    const existing = await prisma.product.findMany({
+        where: { sku: { in: clean.map((row) => row.patch.shared.sku) } },
+        include: select(req.countryId),
+      }),
+      bySku = new Map(existing.map((p) => [p.sku, p])),
+      plan = [];
+    for (const row of clean) {
+      const previous = bySku.get(row.patch.shared.sku);
+      try {
+        if (!previous) row.patch = normalize(row.input, true);
+        if (previous && !previous.countryProducts.length)
+          fail(
+            "SKU déjà utilisé dans un autre pays. Utilisez la copie de catalogue pour l’ajouter ici.",
+          );
+        plan.push({ ...row, previous, action: previous ? "UPDATE" : "CREATE" });
+      } catch (e) {
+        errors.push({
+          index: row.index,
+          sku: row.patch.shared.sku,
+          errors: [e.message],
+        });
+      }
+    }
+    const previewToken = require("node:crypto")
+      .createHash("sha256")
+      .update(
+        JSON.stringify({
+          countryId: req.countryId,
+          rows,
+          versions: plan.map((row) => [
+            row.previous?.id,
+            row.previous?.updatedAt,
+            row.previous?.countryProducts?.[0]?.updatedAt,
+          ]),
+        }),
+      )
+      .digest("hex");
+    if (
+      !dryRun &&
+      req.body.previewToken &&
+      req.body.previewToken !== previewToken
+    )
+      fail(
+        "Le catalogue a changé depuis l’aperçu. Prévisualisez de nouveau l’import.",
+        409,
+      );
+    const preview = {
+      previewToken,
       totalReceived: rows.length,
-      totalValid: clean.length,
-      created,
-      updated,
+      totalValid: plan.length,
+      created: plan.filter((row) => row.action === "CREATE").length,
+      updated: plan.filter((row) => row.action === "UPDATE").length,
       errors,
-    });
+      rows: plan.map((row) => ({
+        line: row.index,
+        sku: row.patch.shared.sku,
+        nom: row.patch.shared.nom || row.previous?.nom,
+        action: row.action,
+        sharedChanges: row.previous
+          ? Object.keys(changed(row.previous, row.patch.shared))
+          : [],
+        stockIgnored:
+          row.action === "UPDATE" && row.patch.local.stockQty !== undefined,
+      })),
+    };
+    if (dryRun) return res.json({ ...preview, dryRun: true });
+    if (errors.length)
+      return res.status(400).json({
+        message: "Corrigez les lignes signalées avant de confirmer l’import.",
+        ...preview,
+      });
+    if (
+      plan.some(
+        (row) =>
+          row.previous &&
+          Object.keys(changed(row.previous, row.patch.shared)).length > 0,
+      ) &&
+      req.body.confirmSharedChanges !== true
+    )
+      fail(
+        "Confirmez les modifications des informations communes à tous les pays.",
+      );
+    await prisma.$transaction(
+      async (tx) => {
+        for (const row of plan) {
+          const { shared, local, grades } = row.patch;
+          if (row.previous) {
+            const operation = {
+              ...req,
+              body: {
+                expectedUpdatedAt: row.previous.updatedAt,
+                expectedCountryUpdatedAt:
+                  row.previous.countryProducts[0].updatedAt,
+              },
+            };
+            await lockAvailability(tx, operation, row.previous.id);
+            const sharedChanges = changed(row.previous, shared),
+              { stockQty: ignored, ...localChanges } = local;
+            if (Object.keys(sharedChanges).length)
+              await tx.product.update({
+                where: { id: row.previous.id },
+                data: sharedChanges,
+              });
+            if (Object.keys(localChanges).length)
+              await tx.countryProduct.update({
+                where: {
+                  countryId_productId: {
+                    countryId: req.countryId,
+                    productId: row.previous.id,
+                  },
+                },
+                data: localChanges,
+              });
+            await saveGrades(tx, row.previous.id, req.countryId, grades);
+            await audit(tx, req, row.previous.id, "IMPORT_UPDATE", {
+              before: dto(row.previous, req.countryId),
+              after: { ...sharedChanges, ...localChanges, gradePrices: grades },
+              stockIgnored: ignored !== undefined,
+            });
+          } else {
+            const product = await tx.product.create({
+              data: scopeCreate(req, {
+                ...shared,
+                prixBaseFcfa: local.prixBaseFcfa,
+                stockQty: 0,
+                actif: local.actif,
+                maxQtyPerOrder: local.maxQtyPerOrder ?? null,
+              }),
+            });
+            await tx.countryProduct.create({
+              data: {
+                countryId: req.countryId,
+                productId: product.id,
+                ...local,
+                stockQty: local.stockQty ?? 0,
+              },
+            });
+            await initialStock(tx, req, product.id, local.stockQty ?? 0);
+            await saveGrades(tx, product.id, req.countryId, grades);
+            await audit(tx, req, product.id, "IMPORT_CREATE", {
+              after: { ...shared, ...local, gradePrices: grades },
+            });
+          }
+        }
+      },
+      { timeout: 30000 },
+    );
+    return res.json({ ...preview, rows: undefined, dryRun: false });
   } catch (e) {
-    console.error("importProductsCsv error:", e);
-    return res
-      .status(500)
-      .json({ message: "Erreur serveur (importProductsCsv)" });
+    return error(res, e);
   }
 }
-
+async function copyProductsFromCountry(req, res) {
+  try {
+    if (req.user?.role !== "SUPER_ADMIN")
+      fail("La copie entre pays est réservée au super administrateur.", 403);
+    const sourceCode = String(req.body.sourceCode || "CIV")
+        .trim()
+        .toUpperCase(),
+      codes = req.body.destinationCodes;
+    if (!Array.isArray(codes) || !codes.length || codes.length > 30)
+      fail("Sélectionnez les pays de destination.");
+    const destinationCodes = [
+      ...new Set(codes.map((code) => String(code).trim().toUpperCase())),
+    ];
+    if (destinationCodes.includes(sourceCode))
+      fail("Le pays source ne peut pas être une destination.");
+    const overwrite =
+        req.body.overwrite === undefined ? false : boolean(req.body.overwrite),
+      source = await prisma.country.findUnique({ where: { code: sourceCode } });
+    if (!source) fail("Pays source introuvable.", 404);
+    const countries = await prisma.country.findMany({
+      where: { code: { in: destinationCodes }, actif: true },
+      orderBy: { code: "asc" },
+    });
+    if (countries.length !== destinationCodes.length)
+      fail("Un pays sélectionné est introuvable ou inactif.");
+    const rows = await prisma.countryProduct.findMany({
+      where: { countryId: source.id },
+      include: { product: { include: select(source.id) } },
+    });
+    if (!rows.length) fail("Le catalogue source est vide.");
+    const summary = [];
+    const versions = [];
+    let previewToken;
+    await prisma.$transaction(
+      async (tx) => {
+        for (const country of countries) {
+          let created = 0,
+            updated = 0,
+            skipped = 0;
+          for (const row of rows) {
+            const exists = await tx.countryProduct.findUnique({
+              where: {
+                countryId_productId: {
+                  countryId: country.id,
+                  productId: row.productId,
+                },
+              },
+            });
+            versions.push({
+              country: country.code,
+              productId: row.productId,
+              source: row,
+              previous: exists,
+            });
+            if (exists && !overwrite) {
+              skipped++;
+              continue;
+            }
+            if (req.body.dryRun !== true) {
+              const local = {
+                prixBaseFcfa: row.prixBaseFcfa,
+                actif: row.actif,
+                maxQtyPerOrder: row.maxQtyPerOrder,
+              };
+              if (exists) {
+                const claim = await tx.countryProduct.updateMany({
+                  where: { id: exists.id, updatedAt: exists.updatedAt },
+                  data: local,
+                });
+                if (claim.count !== 1)
+                  fail(
+                    "Un catalogue de destination a changé. Prévisualisez de nouveau la copie.",
+                    409,
+                  );
+              } else
+                await tx.countryProduct.create({
+                  data: {
+                    countryId: country.id,
+                    productId: row.productId,
+                    ...local,
+                    stockQty: 0,
+                  },
+                });
+              await saveGrades(
+                tx,
+                row.productId,
+                country.id,
+                Object.fromEntries(
+                  (row.product.gradePrices || []).map((price) => [
+                    price.grade,
+                    Number(price.prixFcfa),
+                  ]),
+                ),
+              );
+              await audit(
+                tx,
+                { ...req, countryId: country.id },
+                row.productId,
+                "COPY_COUNTRY",
+                { sourceCode, overwrite, stockPreserved: true },
+              );
+            }
+            if (exists) updated++;
+            else created++;
+          }
+          summary.push({
+            countryCode: country.code,
+            countryName: country.name,
+            created,
+            updated,
+            skipped,
+          });
+        }
+        previewToken = require("node:crypto")
+          .createHash("sha256")
+          .update(
+            JSON.stringify({
+              sourceCode,
+              destinationCodes,
+              overwrite,
+              versions,
+            }),
+          )
+          .digest("hex");
+        if (
+          req.body.dryRun !== true &&
+          req.body.previewToken &&
+          req.body.previewToken !== previewToken
+        )
+          fail(
+            "Le catalogue a changé depuis l’aperçu. Prévisualisez de nouveau la copie.",
+            409,
+          );
+      },
+      { timeout: 30000 },
+    );
+    return res.json({
+      ok: true,
+      previewToken,
+      sourceCode,
+      productsCopied: rows.length,
+      overwrite,
+      dryRun: req.body.dryRun === true,
+      countries: summary,
+    });
+  } catch (e) {
+    return error(res, e);
+  }
+}
 async function uploadProductImage(req, res) {
   try {
     const countryId = req.countryId;
@@ -826,202 +774,97 @@ async function uploadProductImage(req, res) {
     ]);
 
     handler(req, res, async (err) => {
-      if (err)
-        return res
-          .status(400)
-          .json({ message: err.message || "Upload échoué" });
-
-      if (
-        !process.env.CLOUDINARY_CLOUD_NAME ||
-        !process.env.CLOUDINARY_API_KEY ||
-        !process.env.CLOUDINARY_API_SECRET
-      ) {
-        return res
-          .status(500)
-          .json({ message: "Cloudinary non configuré (env manquantes)" });
-      }
-
-      const { id } = req.params;
-
-      const exists = await prisma.product.findFirst({
-        where: {
-          id,
-          countryProducts: { some: { countryId } },
-        },
-        select: { id: true, imageUrl: true, sku: true, nom: true },
-      });
-      if (!exists)
-        return res.status(404).json({ message: "Produit introuvable" });
-
-      const file = req.files?.file?.[0] || req.files?.image?.[0];
-      if (!file)
-        return res
-          .status(400)
-          .json({ message: "Fichier manquant (file/image)" });
-
-      const skuSafe = (exists.sku || `product_${exists.id}`).replace(
-        /[^\w.-]/g,
-        "_",
-      );
-      const publicId = `appfbo/products/${skuSafe}`;
-
-      let result;
       try {
-        result = await uploadBufferToCloudinary(file.buffer, {
-          folder: "appfbo/products",
-          public_id: skuSafe,
-          overwrite: true,
-          resource_type: "image",
+        if (err)
+          return res
+            .status(400)
+            .json({ message: err.message || "Upload échoué" });
+
+        if (
+          !process.env.CLOUDINARY_CLOUD_NAME ||
+          !process.env.CLOUDINARY_API_KEY ||
+          !process.env.CLOUDINARY_API_SECRET
+        ) {
+          return res
+            .status(500)
+            .json({ message: "Le stockage des images est indisponible." });
+        }
+
+        const { id } = req.params;
+
+        const exists = await prisma.product.findFirst({
+          where: {
+            id,
+            countryProducts: { some: { countryId } },
+          },
+          select: { id: true, imageUrl: true, sku: true, nom: true },
         });
-      } catch (upErr) {
-        console.error("Cloudinary upload error:", upErr);
-        return res.status(400).json({ message: "Upload Cloudinary échoué" });
+        if (!exists)
+          return res.status(404).json({ message: "Produit introuvable" });
+
+        const file = req.files?.file?.[0] || req.files?.image?.[0];
+        if (!file)
+          return res
+            .status(400)
+            .json({ message: "Fichier manquant (file/image)" });
+
+        const skuSafe = (exists.sku || `product_${exists.id}`).replace(
+          /[^\w.-]/g,
+          "_",
+        );
+        const assetId = `${skuSafe}_${require("node:crypto").randomUUID()}`;
+        const publicId = `appfbo/products/${assetId}`;
+
+        let result;
+        try {
+          result = await uploadBufferToCloudinary(file.buffer, {
+            folder: "appfbo/products",
+            public_id: assetId,
+            overwrite: false,
+            resource_type: "image",
+          });
+        } catch (upErr) {
+          console.error("Cloudinary upload error:", upErr);
+          return res
+            .status(400)
+            .json({ message: "L’image n’a pas pu être envoyée. Réessayez." });
+        }
+
+        const updated = await prisma.$transaction(async (tx) => {
+          await lockAvailability(tx, req, id);
+          const product = await tx.product.update({
+            where: { id },
+            data: { imageUrl: result.secure_url },
+            select: {
+              id: true,
+              sku: true,
+              nom: true,
+              imageUrl: true,
+              updatedAt: true,
+            },
+          });
+          await audit(tx, req, id, "IMAGE", {
+            before: { imageUrl: exists.imageUrl },
+            after: { imageUrl: result.secure_url },
+          });
+          const availability = await tx.countryProduct.findUnique({
+            where: {
+              countryId_productId: { countryId: req.countryId, productId: id },
+            },
+          });
+          return { ...product, countryUpdatedAt: availability.updatedAt };
+        });
+
+        return res.json({ ...updated, cloudinaryPublicId: publicId });
+      } catch (e) {
+        return error(res, e);
       }
-
-      const updated = await prisma.product.update({
-        where: { id },
-        data: { imageUrl: result.secure_url },
-        select: {
-          id: true,
-          sku: true,
-          nom: true,
-          imageUrl: true,
-          updatedAt: true,
-        },
-      });
-
-      return res.json({ ...updated, cloudinaryPublicId: publicId });
     });
   } catch (e) {
     console.error("uploadProductImage error:", e);
     return res
       .status(500)
       .json({ message: "Erreur serveur (uploadProductImage)" });
-  }
-}
-
-async function copyProductsFromCountry(req, res) {
-  try {
-    const sourceCode = String(req.body?.sourceCode || "CIV").trim().toUpperCase();
-    const overwrite = Boolean(req.body?.overwrite);
-    const requestedDestinations = Array.isArray(req.body?.destinationCodes)
-      ? req.body.destinationCodes
-          .map((code) => String(code || "").trim().toUpperCase())
-          .filter(Boolean)
-      : [];
-
-    const sourceCountry = await prisma.country.findUnique({
-      where: { code: sourceCode },
-      select: { id: true, code: true, name: true },
-    });
-    if (!sourceCountry) {
-      return res.status(404).json({ message: `Pays source introuvable: ${sourceCode}` });
-    }
-
-    const destinationCountries = await prisma.country.findMany({
-      where: {
-        actif: true,
-        code: requestedDestinations.length
-          ? { in: requestedDestinations.filter((code) => code !== sourceCode) }
-          : { not: sourceCode },
-      },
-      select: { id: true, code: true, name: true },
-      orderBy: { code: "asc" },
-    });
-
-    if (!destinationCountries.length) {
-      return res.status(400).json({ message: "Aucun pays cible actif" });
-    }
-
-    const sourceRows = await prisma.countryProduct.findMany({
-      where: { countryId: sourceCountry.id },
-      include: {
-        product: {
-          select: {
-            id: true,
-            sku: true,
-            nom: true,
-          },
-        },
-      },
-      orderBy: { product: { nom: "asc" } },
-    });
-
-    if (!sourceRows.length) {
-      return res.status(400).json({ message: "Aucun produit disponible dans le pays source" });
-    }
-
-    const summary = [];
-
-    await prisma.$transaction(async (tx) => {
-      for (const country of destinationCountries) {
-        let created = 0;
-        let updated = 0;
-        let skipped = 0;
-
-        for (const row of sourceRows) {
-          const existing = await tx.countryProduct.findUnique({
-            where: {
-              countryId_productId: {
-                countryId: country.id,
-                productId: row.productId,
-              },
-            },
-            select: { id: true },
-          });
-
-          if (existing && !overwrite) {
-            skipped++;
-            continue;
-          }
-
-          await tx.countryProduct.upsert({
-            where: {
-              countryId_productId: {
-                countryId: country.id,
-                productId: row.productId,
-              },
-            },
-            create: {
-              countryId: country.id,
-              productId: row.productId,
-              prixBaseFcfa: row.prixBaseFcfa,
-              stockQty: 0,
-              actif: row.actif,
-              maxQtyPerOrder: row.maxQtyPerOrder,
-            },
-            update: {
-              prixBaseFcfa: row.prixBaseFcfa,
-              actif: row.actif,
-              maxQtyPerOrder: row.maxQtyPerOrder,
-              ...(overwrite ? { stockQty: 0 } : {}),
-            },
-          });
-
-          if (existing) updated++;
-          else created++;
-        }
-
-        summary.push({
-          countryCode: country.code,
-          countryName: country.name,
-          created,
-          updated,
-          skipped,
-        });
-      }
-    });
-
-    return res.json({
-      ok: true,
-      sourceCode,
-      productsCopied: sourceRows.length,
-      overwrite,
-      countries: summary,
-    });
-  } catch (e) {
-    console.error("copyProductsFromCountry error:", e);
-    return res.status(500).json({ message: "Erreur serveur (copyProductsFromCountry)" });
   }
 }
 
@@ -1034,4 +877,6 @@ module.exports = {
   importProductsCsv,
   uploadProductImage,
   copyProductsFromCountry,
+  exportProducts,
+  history,
 };
