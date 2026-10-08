@@ -11,6 +11,8 @@ router.get(
   settingsController.getCountrySettings,
 );
 
+router.get("/history", requirePermission(Permission.COUNTRY_WRITE), settingsController.getCountrySettingsHistory);
+
 router.patch(
   "/",
   requirePermission(Permission.COUNTRY_WRITE),

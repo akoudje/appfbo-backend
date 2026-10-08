@@ -2,16 +2,15 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
 const { normalizeEmail, sendEmail } = require("../services/email.service");
-const { normalizePhoneForCountry, sendSms } = require("../services/sms.service");
 const {
   buildNotificationSummaryForCustomer,
 } = require("./customerNotifications.controller");
 
 const GENERIC_OTP_REQUEST_MESSAGE =
-  "Si ce compte existe, un code de vérification sera envoyé sur le canal disponible.";
+  "Si ce compte existe et dispose d’une adresse email, un code de vérification lui sera envoyé par email.";
 const GENERIC_OTP_VERIFY_MESSAGE = "Code OTP invalide ou expiré.";
 const OTP_RESEND_UNAVAILABLE_MESSAGE =
-  "Aucun canal de réception n'est disponible pour ce compte. Ajoutez un téléphone ou un email valide sur une commande récente.";
+  "Aucune adresse email valide n’est disponible pour ce compte. Contactez votre point de vente pour mettre à jour votre adresse email.";
 const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
 const ACTIVE_ORDER_STATUSES = ["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID", "READY"];
 
@@ -21,13 +20,6 @@ function canonicalFboNumber(raw = "") {
     return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6, 9)}-${digits.slice(9, 12)}`;
   }
   return String(raw || "").trim();
-}
-
-function maskPhone(value = "") {
-  const clean = String(value || "").replace(/\D/g, "");
-  if (!clean) return "";
-  if (clean.length <= 4) return `***${clean}`;
-  return `${"*".repeat(Math.max(0, clean.length - 4))}${clean.slice(-4)}`;
 }
 
 function maskEmail(value = "") {
@@ -51,8 +43,8 @@ function otpResendCooldownSeconds() {
 }
 
 // Durée plancher de réponse pour /auth/otp/request : sans ça, un compte
-// inexistant répond quasi instantanément (aucun envoi SMS/email) alors
-// qu'un compte existant attend le retour de l'API SMS/email — un écart de
+// inexistant répond quasi instantanément (aucun envoi email) alors
+// qu'un compte existant attend le retour de l'API email — un écart de
 // latence mesurable qui permet de deviner quels numéros FBO existent même
 // si le message renvoyé est identique dans les deux cas.
 function otpRequestMinResponseMs() {
@@ -102,10 +94,10 @@ function hashesEqual(left, right) {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function buildGenericOtpRequestResponse({ channel = "", destinationMasked = "" } = {}) {
+function buildGenericOtpRequestResponse({ destinationMasked = "" } = {}) {
   return {
     ok: true,
-    channel: channel || "SMS/EMAIL",
+    channel: "EMAIL",
     destinationMasked: destinationMasked || "destination masquée",
     expiresInMinutes: otpExpiresInMinutes(),
     retryAfterSeconds: otpResendCooldownSeconds(),
@@ -113,18 +105,8 @@ function buildGenericOtpRequestResponse({ channel = "", destinationMasked = "" }
   };
 }
 
-function buildOtpChannelMeta({ smsPhone = "", email = "" } = {}) {
-  const destinations = {};
-  const availableChannels = [];
-  if (smsPhone) {
-    availableChannels.push("SMS");
-    destinations.SMS = maskPhone(smsPhone);
-  }
-  if (email) {
-    availableChannels.push("EMAIL");
-    destinations.EMAIL = maskEmail(email);
-  }
-  return { availableChannels, destinations };
+function buildOtpChannelMeta({ email = "" } = {}) {
+  return { availableChannels: email ? ["EMAIL"] : [], destinations: email ? { EMAIL: maskEmail(email) } : {} };
 }
 
 function signCustomerToken({ fboId, countryId, numeroFbo, email }) {
@@ -149,70 +131,20 @@ function signCustomerToken({ fboId, countryId, numeroFbo, email }) {
   );
 }
 
-async function resolveFboAndDestinations({ countryId, countryCode, numeroFbo, requestedChannel, phoneInput }) {
+async function resolveFboAndDestinations({ countryId, numeroFbo }) {
   const canonical = canonicalFboNumber(numeroFbo);
   if (!canonical) return null;
-
-  const fbo = await prisma.fbo.findUnique({
-    where: { numeroFbo: canonical },
-    select: {
-      id: true,
-      numeroFbo: true,
-      nomComplet: true,
-      email: true,
-    },
-  });
+  const fbo = await prisma.fbo.findUnique({ where: { numeroFbo: canonical }, select: { id: true, numeroFbo: true, nomComplet: true, email: true } });
   if (!fbo) return null;
-
-  // Un brouillon (DRAFT) tout juste créé (par ex. en navigant simplement le
-  // catalogue) n'a ni téléphone ni email renseigné : ces champs ne sont
-  // remplis qu'à la facturation/soumission. Prendre "la dernière commande"
-  // au sens strict pouvait donc bloquer la connexion d'un client qui a
-  // pourtant des coordonnées valides sur une commande précédente — on ne
-  // considère que les commandes qui ont réellement un contact renseigné.
-  const latestOrder = await prisma.preorder.findFirst({
-    where: {
-      countryId,
-      fboId: fbo.id,
-      OR: [
-        { factureWhatsappTo: { not: null } },
-        { fboEmail: { not: null } },
-      ],
-    },
-    orderBy: { createdAt: "desc" },
-    select: {
-      factureWhatsappTo: true,
-      fboEmail: true,
-    },
-  });
-
-  const smsPhone = normalizePhoneForCountry(
-    phoneInput || latestOrder?.factureWhatsappTo || "",
-    countryCode || "CIV",
-  );
-  const email = normalizeEmail(fbo.email || latestOrder?.fboEmail || "");
-
-  let channel = String(requestedChannel || "").trim().toUpperCase();
-  if (!["SMS", "EMAIL"].includes(channel)) channel = "";
-  if (!channel) channel = smsPhone ? "SMS" : "EMAIL";
-  if (channel === "SMS" && !smsPhone && email) channel = "EMAIL";
-  if (channel === "EMAIL" && !email && smsPhone) channel = "SMS";
-  if (!smsPhone && !email) {
-    return {
-      fbo,
-      channel,
-      smsPhone: "",
-      email: "",
-      hasNoReachableChannel: true,
-    };
+  let email = normalizeEmail(fbo.email || "");
+  if (!email) {
+    const orders = await prisma.preorder.findMany({
+      where: { countryId, fboId: fbo.id, fboEmail: { not: null } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { fboEmail: true },
+    });
+    email = orders.map((order) => normalizeEmail(order.fboEmail || "")).find(Boolean) || "";
   }
-
-  return {
-    fbo,
-    channel,
-    smsPhone,
-    email,
-  };
+  return { fbo, channel: "EMAIL", email, hasNoReachableChannel: !email };
 }
 
 async function requestOtp(req, res) {
@@ -220,7 +152,7 @@ async function requestOtp(req, res) {
   // Répond toujours après un délai plancher identique, que le compte existe
   // ou non. Sans ça, un numéro FBO inconnu renvoie quasi instantanément
   // (aucun appel réseau) alors qu'un numéro valide attend le retour de
-  // l'API SMS/email — un écart de latence mesurable qui révèle quels
+  // l'API email — un écart de latence mesurable qui révèle quels
   // numéros existent même si le corps de la réponse est identique.
   async function respond(status, payload) {
     const remaining = otpRequestMinResponseMs() - (Date.now() - startedAt);
@@ -230,7 +162,7 @@ async function requestOtp(req, res) {
 
   try {
     const countryId = req.country?.id || req.countryId;
-    const { numeroFbo, channel, phone } = req.body || {};
+    const { numeroFbo } = req.body || {};
     if (!countryId) {
       return respond(400, { message: "Country required" });
     }
@@ -240,20 +172,16 @@ async function requestOtp(req, res) {
 
     const resolved = await resolveFboAndDestinations({
       countryId,
-      countryCode: req.country?.code || "CIV",
       numeroFbo,
-      requestedChannel: channel,
-      phoneInput: phone,
     });
 
     if (!resolved) {
       return respond(200, buildGenericOtpRequestResponse({
-        channel: channel || "",
+        channel: "EMAIL",
       }));
     }
 
     const channelMeta = buildOtpChannelMeta({
-      smsPhone: resolved.smsPhone,
       email: resolved.email,
     });
 
@@ -274,6 +202,7 @@ async function requestOtp(req, res) {
         countryId,
         fboId: resolved.fbo.id,
         purpose: "CUSTOMER_PORTAL_LOGIN",
+        channel: "EMAIL",
         consumedAt: null,
         expiresAt: { gt: now },
       },
@@ -304,67 +233,15 @@ async function requestOtp(req, res) {
     const otp = String(crypto.randomInt(100000, 1000000));
     const expiresMin = otpExpiresInMinutes();
     const expiresAt = new Date(now.getTime() + expiresMin * 60 * 1000);
-    const explicitChannel = String(channel || "").trim().toUpperCase();
-    const hasExplicitChannel = ["SMS", "EMAIL"].includes(explicitChannel);
-    const preferredFirst = resolved.channel === "SMS" ? ["SMS", "EMAIL"] : ["EMAIL", "SMS"];
-    const channelsToTry = hasExplicitChannel
-      ? [explicitChannel, ...preferredFirst.filter((ch) => ch !== explicitChannel)]
-      : preferredFirst.filter((ch, idx, arr) => arr.indexOf(ch) === idx);
-    const failures = [];
-    const successes = [];
-
-    for (const ch of channelsToTry) {
-      if (ch === "SMS" && resolved.smsPhone) {
-        const smsResult = await sendSms({
-          to: resolved.smsPhone,
-          message: `Code connexion ${otp}. Expire dans ${expiresMin} min.`,
-          countryCode: req.country?.code || "CIV",
-        });
-        if (smsResult?.accepted) {
-          successes.push({ channel: "SMS", result: smsResult });
-          if (hasExplicitChannel) break;
-        } else {
-          failures.push({
-            channel: "SMS",
-            errorCode: smsResult?.errorCode || "SMS_SEND_FAILED",
-            errorMessage: smsResult?.errorMessage || "Échec envoi SMS",
-          });
-        }
-      }
-
-      if (ch === "EMAIL" && resolved.email) {
-        const emailResult = await sendEmail({
-          to: resolved.email,
-          subject: "FOREVER | Code de connexion",
-          body: `Votre code de connexion est ${otp}. Il expire dans ${expiresMin} minutes.`,
-          metadata: {
-            purpose: "CUSTOMER_PORTAL_LOGIN",
-            fboId: resolved.fbo.id,
-          },
-        });
-        if (emailResult?.accepted) {
-          successes.push({ channel: "EMAIL", result: emailResult });
-          if (hasExplicitChannel) break;
-        } else {
-          failures.push({
-            channel: "EMAIL",
-            errorCode: emailResult?.errorCode || "EMAIL_SEND_FAILED",
-            errorMessage: emailResult?.errorMessage || "Échec envoi email",
-          });
-        }
-      }
-    }
-
-    const usedChannel =
-      successes.length > 1 ? "SMS/EMAIL" : successes[0]?.channel || "";
-    const destinationMasked = successes
-      .map((entry) =>
-        entry.channel === "SMS"
-          ? channelMeta.destinations.SMS
-          : channelMeta.destinations.EMAIL,
-      )
-      .filter(Boolean)
-      .join(" • ");
+    const emailResult = await sendEmail({
+      to: resolved.email, subject: "FOREVER | Code de connexion",
+      body: `Votre code de connexion est ${otp}. Il expire dans ${expiresMin} minutes.`,
+      metadata: { purpose: "CUSTOMER_PORTAL_LOGIN", fboId: resolved.fbo.id },
+    });
+    const successes = emailResult?.accepted ? [{ channel: "EMAIL", result: emailResult }] : [];
+    const failures = emailResult?.accepted ? [] : [{ channel: "EMAIL", errorCode: emailResult?.errorCode || "EMAIL_SEND_FAILED", errorMessage: emailResult?.errorMessage || "Échec envoi email" }];
+    const usedChannel = successes.length ? "EMAIL" : "";
+    const destinationMasked = channelMeta.destinations.EMAIL;
 
     if (!successes.length || !usedChannel) {
       return respond(502, {
@@ -456,6 +333,7 @@ async function verifyOtp(req, res) {
         countryId,
         fboId: fbo.id,
         purpose: "CUSTOMER_PORTAL_LOGIN",
+        channel: "EMAIL",
         consumedAt: null,
         expiresAt: { gt: now },
       },
@@ -629,7 +507,7 @@ async function dashboard(req, res) {
         where: {
           ...where,
           status: { in: ["INVOICED", "PAYMENT_PENDING"] },
-          paymentStatus: { notIn: ["PAID", "PAYMENT_CONFIRMED"] },
+          paymentStatus: { not: "PAID" },
         },
       }),
       prisma.preorder.count({

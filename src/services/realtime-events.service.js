@@ -1,3 +1,5 @@
+const prisma = require("../prisma");
+const { getEffectivePermissions, Permission } = require("../auth/permissions");
 const listeners = new Map();
 let nextListenerId = 1;
 
@@ -36,6 +38,8 @@ function subscribeRealtimeEvents({ req, res }) {
     countryId: req.countryId || req.country?.id || null,
     res,
     createdAt: Date.now(),
+    sessionVersion: req.user?.tokenSessionVersion ?? 0,
+    expiresAt: req.user?.tokenExpiresAt || null,
   };
 
   res.status(200);
@@ -68,6 +72,15 @@ function subscribeRealtimeEvents({ req, res }) {
     stats.disconnectReasons[key] = (stats.disconnectReasons[key] || 0) + 1;
   };
 
+  listener.close = (reason) => {
+    cleanup(reason);
+    try {
+      res.end();
+    } catch {
+      /* The socket may already be closed. */
+    }
+  };
+
   req.on("close", () => cleanup("req_close"));
   req.on("end", () => cleanup("req_end"));
   req.on("error", () => cleanup("req_error"));
@@ -88,7 +101,11 @@ function publishRealtimeEvent(event = {}) {
   stats.lastPublishedAt = payload.at;
 
   for (const [listenerId, listener] of listeners.entries()) {
-    if (!listener?.res || listener.res.writableEnded || listener.res.destroyed) {
+    if (
+      !listener?.res ||
+      listener.res.writableEnded ||
+      listener.res.destroyed
+    ) {
       listeners.delete(listenerId);
       continue;
     }
@@ -139,7 +156,10 @@ function getRealtimeHealth() {
       userId: item.userId,
       countryId: item.countryId,
       connectedAt: new Date(item.createdAt).toISOString(),
-      connectedForMs: Math.max(0, Date.now() - Number(item.createdAt || Date.now())),
+      connectedForMs: Math.max(
+        0,
+        Date.now() - Number(item.createdAt || Date.now()),
+      ),
     })),
     stats: { ...stats },
     recentPlaybackAudit: playbackAuditBuffer.slice(0, 50),
@@ -168,10 +188,67 @@ function getConnectedRealtimeUserIds({ countryId } = {}) {
   return Array.from(ids);
 }
 
+function disconnectRealtimeUser(userId) {
+  for (const listener of [...listeners.values()])
+    if (listener.userId === userId) listener.close?.("session_revoked");
+}
+let validatingSessions = false;
+async function validateRealtimeSessions() {
+  if (validatingSessions || !listeners.size) return;
+  validatingSessions = true;
+  try {
+    const ids = [
+      ...new Set(
+        [...listeners.values()].map((item) => item.userId).filter(Boolean),
+      ),
+    ];
+    if (!ids.length) return;
+    const users = await prisma.adminUser.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        role: true,
+        actif: true,
+        countryId: true,
+        sessionVersion: true,
+        permissionAllow: true,
+        permissionDeny: true,
+      },
+    });
+    const byId = new Map(users.map((user) => [user.id, user]));
+    for (const listener of [...listeners.values()]) {
+      if (!listener.userId) continue;
+      const user = byId.get(listener.userId);
+      if (
+        !user?.actif ||
+        (user.sessionVersion ?? 0) !== listener.sessionVersion ||
+        (listener.expiresAt && Date.now() >= listener.expiresAt * 1000) ||
+        !getEffectivePermissions(
+          user.role,
+          user.permissionAllow,
+          user.permissionDeny,
+        ).includes(Permission.PREORDER_READ) ||
+        (user.role !== "SUPER_ADMIN" && user.countryId !== listener.countryId)
+      )
+        listener.close?.("session_revoked");
+    }
+  } catch (error) {
+    console.error("Realtime session validation failed:", error.message);
+    for (const listener of [...listeners.values()])
+      listener.close?.("session_validation_error");
+  } finally {
+    validatingSessions = false;
+  }
+}
 const heartbeatTimer = setInterval(() => {
+  void validateRealtimeSessions();
   const pingPayload = { type: "PING", at: new Date().toISOString() };
   for (const [listenerId, listener] of listeners.entries()) {
-    if (!listener?.res || listener.res.writableEnded || listener.res.destroyed) {
+    if (
+      !listener?.res ||
+      listener.res.writableEnded ||
+      listener.res.destroyed
+    ) {
       listeners.delete(listenerId);
       continue;
     }
@@ -185,6 +262,7 @@ if (typeof heartbeatTimer.unref === "function") {
 }
 
 module.exports = {
+  disconnectRealtimeUser,
   subscribeRealtimeEvents,
   publishRealtimeEvent,
   recordAlertPlayback,

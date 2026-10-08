@@ -1,3 +1,5 @@
+const { validateCountrySettings } = require("../../services/country-settings-validation");
+const { persistCountrySettings } = require("../../services/country-settings-save");
 const prisma = require("../../prisma");
 const { pickCountryId } = require("../../helpers/countryScope");
 
@@ -277,12 +279,6 @@ async function updateCountrySettings(req, res) {
     const countryId = pickCountryId(req);
     const existingSettings = await prisma.countrySettings.findUnique({
       where: { countryId },
-      select: {
-        preinvoicedAutoCancelAfterHours: true,
-        preinvoicedAutoReminderAfterHours: true,
-        preinvoicedAutoCancelAfterMinutes: true,
-        preinvoicedAutoReminderAfterMinutes: true,
-      },
     });
     const {
       minCartFcfa,
@@ -340,6 +336,8 @@ async function updateCountrySettings(req, res) {
       preinvoicedAutoReminderAfterMinutes,
     } = req.body || {};
 
+    const validationErrors = validateCountrySettings(req.body || {}, existingSettings || {});
+    if(Object.keys(validationErrors).length) return res.status(400).json({message:"Corrigez les champs indiqués avant d’enregistrer.", errors:validationErrors});
     const data = {};
 
     if (minCartFcfa !== undefined) {
@@ -616,7 +614,7 @@ async function updateCountrySettings(req, res) {
       data.fboHelpTopics = sanitizeFboHelpTopics(fboHelpTopics);
     }
 
-    const updated = await prisma.countrySettings.upsert({
+    const updated = await persistCountrySettings(prisma, req, existingSettings, {
       where: { countryId },
       update: data,
         create: {
@@ -776,7 +774,7 @@ async function updateCountrySettings(req, res) {
         createdAt: true,
         updatedAt: true,
       },
-    });
+    }, data);
 
     return res.json({
       ...updated,
@@ -785,12 +783,18 @@ async function updateCountrySettings(req, res) {
   } catch (e) {
     console.error("updateCountrySettings error:", e);
     return res
-      .status(500)
-      .json({ message: "Erreur serveur (updateCountrySettings)" });
+      .status(e.statusCode || 500)
+      .json({ message: e.statusCode ? e.message : "Erreur serveur (updateCountrySettings)" });
   }
 }
 
+async function getCountrySettingsHistory(req,res) {
+ try {const countryId=pickCountryId(req);const data=await prisma.countrySettingsChange.findMany({where:{countryId},orderBy:[{createdAt:'desc'},{id:'desc'}],take:30,select:{id:true,actorLabel:true,createdAt:true,changes:true}});return res.json({data});}
+ catch(error){console.error('settings history error:',error);return res.status(500).json({message:"Impossible de charger l’historique des paramètres."});}
+}
+
 module.exports = {
+  getCountrySettingsHistory,
   getCountrySettings,
   updateCountrySettings,
 };

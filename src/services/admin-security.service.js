@@ -12,7 +12,11 @@ function validateAdminPassword(password) {
   ];
   const passedChecks = checks.filter(Boolean).length;
 
-  if (value.length < MIN_PASSWORD_LENGTH || passedChecks < 3) {
+  if (
+    value.length < MIN_PASSWORD_LENGTH ||
+    passedChecks < 3 ||
+    Buffer.byteLength(value, "utf8") > 72
+  ) {
     const err = new Error("WEAK_PASSWORD");
     err.statusCode = 400;
     throw err;
@@ -20,7 +24,7 @@ function validateAdminPassword(password) {
 }
 
 function buildWeakPasswordMessage() {
-  return "Le mot de passe doit contenir au moins 12 caractères et au moins 3 types parmi majuscule, minuscule, chiffre et caractère spécial.";
+  return "Le mot de passe doit contenir au moins 12 caractères et au moins 3 types parmi majuscule, minuscule, chiffre et caractère spécial (72 octets maximum).";
 }
 
 function computeLoginLockInfo(failedLoginCount) {
@@ -37,13 +41,16 @@ function computeLoginLockInfo(failedLoginCount) {
   };
 }
 
-async function createAdminAuditLog(prismaLike, {
-  actorAdminId = null,
-  targetAdminId = null,
-  action,
-  note = null,
-  meta = null,
-}) {
+async function createAdminAuditLog(
+  prismaLike,
+  {
+    actorAdminId = null,
+    targetAdminId = null,
+    action,
+    note = null,
+    meta = null,
+  },
+) {
   if (!action) return null;
 
   return prismaLike.adminUserAuditLog.create({

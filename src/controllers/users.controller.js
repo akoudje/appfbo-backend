@@ -1,149 +1,48 @@
-// src/controllers/users.controller.js
-
 const bcrypt = require("bcryptjs");
 const prisma = require("../prisma");
 const {
   AdminRole,
+  Permission,
   getEffectivePermissions,
   normalizePermissionList,
 } = require("../auth/permissions");
 const {
   validateAdminPassword,
   buildWeakPasswordMessage,
-  createAdminAuditLog,
 } = require("../services/admin-security.service");
-
-const SALT_ROUNDS = 10;
-const GLOBAL_ROLES = new Set(["SUPER_ADMIN"]);
-const VALID_ROLES = new Set(Object.values(AdminRole));
-const ROLE_ASSIGNMENT_MATRIX = {
-  SUPER_ADMIN: new Set(Object.values(AdminRole)),
-  TECH_ADMIN: new Set(
-    Object.values(AdminRole).filter((role) => role !== AdminRole.SUPER_ADMIN),
-  ),
-  OPERATIONS_DIRECTOR: new Set([
-    AdminRole.FINANCE_MANAGER,
-    AdminRole.BILLING_MANAGER,
-    AdminRole.COUNTER_MANAGER,
-    AdminRole.STOCK_MANAGER,
-    AdminRole.MARKETING_MANAGER,
-    AdminRole.MARKETING_ASSISTANT,
-    AdminRole.INVOICER,
-    AdminRole.CAISSIERE,
-    AdminRole.ORDER_PREPARER,
-  ]),
+const {
+  AUDIT_FIELDS,
+  managementError,
+  manageableRoles,
+  canManageRole,
+  saveManagedUser,
+} = require("../services/admin-user-management.service");
+const includeCountry = {
+  country: { select: { id: true, code: true, name: true } },
 };
-
-function parseIntSafe(v, fallback) {
-  const n = Number.parseInt(v, 10);
-  return Number.isFinite(n) ? n : fallback;
+function assertReadScope(req, user) {
+  if (
+    req.user.role !== "SUPER_ADMIN" &&
+    (!req.country?.id ||
+      req.user.countryId !== req.country.id ||
+      user.countryId !== req.country.id)
+  )
+    throw managementError("Accès limité aux comptes de votre pays.", 403);
 }
-
-function normalizeBool(value) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const v = value.trim().toLowerCase();
-    if (v === "true") return true;
-    if (v === "false") return false;
-  }
-  return null;
-}
-
-function isGlobalRole(role) {
-  return GLOBAL_ROLES.has(String(role || "").trim().toUpperCase());
-}
-
-function normalizeRole(role) {
-  return String(role || "").trim().toUpperCase();
-}
-
-function assertValidRole(role) {
-  if (!VALID_ROLES.has(role)) {
-    const err = new Error("INVALID_ROLE");
-    err.statusCode = 400;
-    throw err;
-  }
-}
-
-function canManageRole(actorRole, targetRole) {
-  const normalizedActorRole = normalizeRole(actorRole);
-  const normalizedTargetRole = normalizeRole(targetRole);
-  const allowedRoles = ROLE_ASSIGNMENT_MATRIX[normalizedActorRole];
-  return Boolean(allowedRoles && allowedRoles.has(normalizedTargetRole));
-}
-
-function assertRoleManageable(actorRole, targetRole) {
-  if (!canManageRole(actorRole, targetRole)) {
-    const err = new Error("ROLE_ASSIGNMENT_FORBIDDEN");
-    err.statusCode = 403;
-    throw err;
-  }
-}
-
-function resolveManagedCountryId({
-  actorRole,
-  actorCountryId,
-  targetRole,
-  requestedCountryId,
-}) {
-  const targetIsGlobal = isGlobalRole(targetRole);
-  const actorIsGlobal = isGlobalRole(actorRole);
-
-  if (targetIsGlobal) {
-    return null;
-  }
-
-  if (!actorIsGlobal) {
-    if (!actorCountryId) {
-      const err = new Error("ACTOR_COUNTRY_REQUIRED");
-      err.statusCode = 400;
-      throw err;
-    }
-
-    if (requestedCountryId && requestedCountryId !== actorCountryId) {
-      const err = new Error("COUNTRY_ASSIGNMENT_FORBIDDEN");
-      err.statusCode = 403;
-      throw err;
-    }
-
-    return actorCountryId;
-  }
-
-  if (!requestedCountryId) {
-    const err = new Error("COUNTRY_REQUIRED_FOR_ROLE");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  return requestedCountryId;
-}
-
-async function resolveCountryIdFromCode(countryCode) {
-  if (!countryCode || !String(countryCode).trim()) return null;
-
-  const code = String(countryCode).trim().toUpperCase();
-
-  const country = await prisma.country.findUnique({
-    where: { code },
-    select: { id: true, code: true, name: true },
-  });
-
-  return country || null;
-}
-
-function sanitizeUser(user) {
-  if (!user) return null;
-  const permissionAllow = normalizePermissionList(user.permissionAllow);
-  const permissionDeny = normalizePermissionList(user.permissionDeny);
-
+function sanitizeUser(user, actor) {
+  const allow = normalizePermissionList(user.permissionAllow),
+    deny = normalizePermissionList(user.permissionDeny);
+  const manageable =
+    canManageRole(actor.role, user.role) &&
+    (actor.role === "SUPER_ADMIN" || actor.countryId === user.countryId);
   return {
     id: user.id,
     email: user.email,
     fullName: user.fullName,
     role: user.role,
-    permissions: getEffectivePermissions(user.role, permissionAllow, permissionDeny),
-    permissionAllow,
-    permissionDeny,
+    permissions: getEffectivePermissions(user.role, allow, deny),
+    permissionAllow: allow,
+    permissionDeny: deny,
     actif: user.actif,
     countryId: user.countryId || null,
     countryCode: user.country?.code || null,
@@ -153,532 +52,386 @@ function sanitizeUser(user) {
     passwordChangedAt: user.passwordChangedAt || null,
     lockedUntil: user.lockedUntil || null,
     updatedAt: user.updatedAt,
+    actions: {
+      canEdit: manageable,
+      canChangeStatus: manageable && user.id !== actor.id,
+      canResetPassword: manageable,
+      canRevokeSessions: manageable,
+    },
   };
 }
-
-function buildUsersErrorMessage(error, fallbackMessage) {
-  if (error.message === "INVALID_ROLE") {
-    return "Le rôle sélectionné est invalide.";
-  }
-  if (error.message === "ROLE_ASSIGNMENT_FORBIDDEN") {
-    return "Vous n'êtes pas autorisé à attribuer ou gérer ce rôle.";
-  }
-  if (error.message === "COUNTRY_REQUIRED_FOR_ROLE") {
-    return "Un pays est requis pour ce rôle.";
-  }
-  if (error.message === "COUNTRY_ASSIGNMENT_FORBIDDEN") {
-    return "Vous ne pouvez pas attribuer cet utilisateur à un autre pays.";
-  }
-  if (error.message === "ACTOR_COUNTRY_REQUIRED") {
-    return "Votre compte doit être rattaché à un pays pour gérer ce rôle.";
-  }
-  if (error.message === "SELF_ROLE_CHANGE_FORBIDDEN") {
-    return "Vous ne pouvez pas modifier votre propre rôle.";
-  }
-  return fallbackMessage;
+function respondError(res, error, fallback) {
+  if (error.message === "WEAK_PASSWORD")
+    return res
+      .status(400)
+      .json({
+        message: buildWeakPasswordMessage(),
+        errors: { password: buildWeakPasswordMessage() },
+      });
+  if (!error.statusCode) console.error(fallback, error);
+  return res
+    .status(error.statusCode || 500)
+    .json({
+      message: error.statusCode ? error.message : fallback,
+      ...(error.errors ? { errors: error.errors } : {}),
+    });
 }
-
-/**
- * GET /api/admin/users?q=&role=&actif=&countryCode=&page=&pageSize=
- */
+function validateFields(body, create = false) {
+  const errors = {};
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    throw managementError("Formulaire invalide.");
+  if (create || "email" in body) {
+    if (
+      typeof body.email !== "string" ||
+      body.email.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())
+    )
+      errors.email = "Renseignez une adresse email valide.";
+  }
+  if (create || "fullName" in body) {
+    if (
+      typeof body.fullName !== "string" ||
+      !body.fullName.trim() ||
+      body.fullName.length > 150
+    )
+      errors.fullName = "Renseignez un nom complet (150 caractères maximum).";
+  }
+  if (create || "role" in body) {
+    if (
+      typeof body.role !== "string" ||
+      !Object.values(AdminRole).includes(body.role.trim().toUpperCase())
+    )
+      errors.role = "Sélectionnez un rôle valide.";
+  }
+  if ("actif" in body && typeof body.actif !== "boolean")
+    errors.actif = "Le statut doit être activé ou désactivé.";
+  if (create || "password" in body) {
+    if (typeof body.password !== "string" || (create && !body.password))
+      errors.password = "Le mot de passe est requis.";
+    else if (body.password && bcrypt.truncates(body.password))
+      errors.password = "Le mot de passe dépasse la limite de 72 octets.";
+  }
+  for (const key of ["permissionAllow", "permissionDeny"])
+    if (
+      key in body &&
+      (!Array.isArray(body[key]) ||
+        body[key].some((value) => !Object.values(Permission).includes(value)))
+    )
+      errors[key] = "Liste de droits invalide.";
+  if (Object.keys(errors).length)
+    throw managementError("Corrigez les champs indiqués.", 400, errors);
+}
+async function countryFor(req, nextRole, requestedCode, previousId) {
+  if (nextRole === "SUPER_ADMIN") return null;
+  if (req.user.role !== "SUPER_ADMIN") {
+    if (!req.user.countryId)
+      throw managementError("Votre compte doit être rattaché à un pays.", 403);
+    if (requestedCode) {
+      const country = await prisma.country.findUnique({
+        where: { code: String(requestedCode).trim().toUpperCase() },
+      });
+      if (!country || country.id !== req.user.countryId)
+        throw managementError(
+          "Vous ne pouvez pas attribuer un autre pays.",
+          403,
+        );
+    }
+    return req.user.countryId;
+  }
+  if (requestedCode === undefined && previousId) return previousId;
+  if (typeof requestedCode !== "string" || !requestedCode.trim())
+    throw managementError("Un pays est requis pour ce rôle.", 400, {
+      countryCode: "Sélectionnez un pays.",
+    });
+  const country = await prisma.country.findUnique({
+    where: { code: requestedCode.trim().toUpperCase() },
+  });
+  if (!country)
+    throw managementError("Pays introuvable.", 400, {
+      countryCode: "Sélectionnez un pays valide.",
+    });
+  return country.id;
+}
+function pageNumber(raw, fallback) {
+  if (raw === undefined || raw === "") return fallback;
+  if (
+    !/^\d+$/.test(String(raw)) ||
+    !Number.isSafeInteger(Number(raw)) ||
+    Number(raw) < 1
+  )
+    throw managementError("Pagination invalide.");
+  return Number(raw);
+}
 async function listUsers(req, res) {
   try {
-    const { q, role, actif, countryCode } = req.query;
-
-    const page = Math.max(1, parseIntSafe(req.query.page, 1));
-    const pageSize = Math.min(
-      100,
-      Math.max(10, parseIntSafe(req.query.pageSize, 20)),
-    );
-    const skip = (page - 1) * pageSize;
-
-    const where = {};
-
-    if (q && String(q).trim()) {
-      const qs = String(q).trim();
+    const page = pageNumber(req.query.page, 1),
+      pageSize = Math.min(
+        100,
+        Math.max(10, pageNumber(req.query.pageSize, 20)),
+      ),
+      where = {};
+    const q = String(req.query.q || "")
+      .trim()
+      .slice(0, 150);
+    if (q)
       where.OR = [
-        { fullName: { contains: qs, mode: "insensitive" } },
-        { email: { contains: qs, mode: "insensitive" } },
+        { fullName: { contains: q, mode: "insensitive" } },
+        { email: { contains: q, mode: "insensitive" } },
       ];
+    if (req.query.role) {
+      const role = String(req.query.role).toUpperCase();
+      if (!Object.values(AdminRole).includes(role))
+        throw managementError("Filtre de rôle invalide.");
+      where.role = role;
     }
-
-    if (role && String(role).trim()) {
-      where.role = String(role).trim().toUpperCase();
+    if (req.query.actif !== undefined) {
+      if (![true, false, "true", "false"].includes(req.query.actif))
+        throw managementError("Filtre de statut invalide.");
+      where.actif = req.query.actif === true || req.query.actif === "true";
     }
-
-    const actifBool = normalizeBool(actif);
-    if (actifBool !== null) {
-      where.actif = actifBool;
+    if (req.user.role !== "SUPER_ADMIN") {
+      if (!req.country?.id || req.country.id !== req.user.countryId)
+        throw managementError("Pays non autorisé.", 403);
+      where.countryId = req.user.countryId;
     }
-
-    if (!isGlobalRole(req.user?.role)) {
-      if (!req.country?.id) {
-        return res.status(400).json({ message: "Country required" });
-      }
-      if (countryCode && String(countryCode).trim()) {
-        const country = await resolveCountryIdFromCode(countryCode);
-        if (!country) {
-          return res.status(404).json({ message: "Pays introuvable" });
-        }
-        if (country.id !== req.country.id) {
-          return res.status(403).json({ message: "Forbidden: country scope mismatch" });
-        }
-      }
-      where.countryId = req.country.id;
-    } else if (countryCode && String(countryCode).trim()) {
-      const country = await resolveCountryIdFromCode(countryCode);
-      if (!country) {
-        return res.status(404).json({ message: "Pays introuvable" });
-      }
+    if (req.query.countryCode) {
+      const country = await prisma.country.findUnique({
+        where: { code: String(req.query.countryCode).toUpperCase() },
+        select: { id: true },
+      });
+      if (!country) throw managementError("Pays introuvable.", 400);
+      if (where.countryId && where.countryId !== country.id)
+        throw managementError("Pays non autorisé.", 403);
       where.countryId = country.id;
     }
-
-    const [totalCount, users] = await Promise.all([
+    const [totalCount, rows] = await Promise.all([
       prisma.adminUser.count({ where }),
       prisma.adminUser.findMany({
         where,
-        skip,
+        skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: [{ createdAt: "desc" }],
-        include: {
-          country: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-            },
-          },
-        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        include: includeCountry,
       }),
     ]);
-
     return res.json({
       page,
       pageSize,
       totalCount,
-      totalPages: Math.ceil(totalCount / pageSize),
-      data: users.map(sanitizeUser),
+      totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+      manageableRoles: manageableRoles(req.user.role),
+      data: rows.map((user) => sanitizeUser(user, req.user)),
     });
-  } catch (e) {
-    console.error("listUsers error:", e);
-    return res.status(500).json({ message: "Erreur serveur (listUsers)" });
+  } catch (error) {
+    return respondError(res, error, "Impossible de charger les utilisateurs.");
   }
 }
-
-/**
- * GET /api/admin/users/:id
- */
 async function getUserById(req, res) {
   try {
-    const { id } = req.params;
-
     const user = await prisma.adminUser.findUnique({
-      where: { id },
-      include: {
-        country: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-      },
+      where: { id: req.params.id },
+      include: includeCountry,
     });
-
-    if (!user) {
-      return res.status(404).json({ message: "Utilisateur introuvable" });
-    }
-
-    if (
-      !isGlobalRole(req.user?.role) &&
-      req.country?.id &&
-      user.countryId !== req.country.id
-    ) {
-      return res.status(403).json({ message: "Forbidden: country scope mismatch" });
-    }
-
-    return res.json(sanitizeUser(user));
-  } catch (e) {
-    console.error("getUserById error:", e);
-    return res.status(500).json({ message: "Erreur serveur (getUserById)" });
+    if (!user) throw managementError("Utilisateur introuvable.", 404);
+    assertReadScope(req, user);
+    return res.json(sanitizeUser(user, req.user));
+  } catch (error) {
+    return respondError(res, error, "Impossible de charger ce compte.");
   }
 }
-
-/**
- * POST /api/admin/users
- */
 async function createUser(req, res) {
   try {
-    const {
-      email,
-      password,
-      fullName,
-      role,
-      actif = true,
-      countryCode,
-      permissionAllow,
-      permissionDeny,
-    } = req.body || {};
-
-    const normalizedEmail = String(email || "").trim().toLowerCase();
-    const normalizedPassword = String(password || "");
-    const normalizedFullName = fullName ? String(fullName).trim() : null;
-    const normalizedRole = normalizeRole(role);
-
-    if (!normalizedEmail) {
-      return res.status(400).json({ message: "email requis" });
-    }
-
-    if (!normalizedPassword) {
-      return res.status(400).json({ message: "password requis" });
-    }
-
-    validateAdminPassword(normalizedPassword);
-
-    if (!normalizedRole) {
-      return res.status(400).json({ message: "role requis" });
-    }
-
-    assertValidRole(normalizedRole);
-    assertRoleManageable(req.user?.role, normalizedRole);
-
-    let requestedCountryId = null;
-
-    if (countryCode && String(countryCode).trim()) {
-      const country = await resolveCountryIdFromCode(countryCode);
-      if (!country) {
-        return res.status(404).json({ message: "Pays introuvable" });
-      }
-      requestedCountryId = country.id;
-    }
-
-    const resolvedCountryId = resolveManagedCountryId({
-      actorRole: req.user?.role,
-      actorCountryId: req.country?.id || req.user?.countryId || null,
-      targetRole: normalizedRole,
-      requestedCountryId,
+    const body = req.body || {};
+    validateFields(body, true);
+    validateAdminPassword(body.password);
+    if (!canManageRole(req.user.role, body.role.trim().toUpperCase()))
+      throw managementError("Vous ne pouvez pas attribuer ce rôle.", 403);
+    if (
+      req.user.role !== "SUPER_ADMIN" &&
+      ("permissionAllow" in body || "permissionDeny" in body)
+    )
+      throw managementError(
+        "Seul le Super Admin peut modifier les droits spécifiques.",
+        403,
+      );
+    const data = {
+      email: body.email.trim().toLowerCase(),
+      fullName: body.fullName.trim(),
+      role: body.role.trim().toUpperCase(),
+      actif: body.actif ?? true,
+      countryId: await countryFor(
+        req,
+        body.role.trim().toUpperCase(),
+        body.countryCode,
+      ),
+      password: await bcrypt.hash(body.password, 10),
+      passwordChangedAt: new Date(),
+      permissionAllow: normalizePermissionList(body.permissionAllow),
+      permissionDeny: normalizePermissionList(body.permissionDeny),
+    };
+    const created = await saveManagedUser(prisma, req, {
+      data,
+      note: "Création du compte administrateur.",
     });
-
-    const hashedPassword = await bcrypt.hash(normalizedPassword, SALT_ROUNDS);
-    const canSetPermissionOverrides = req.user?.role === AdminRole.SUPER_ADMIN;
-
-    const created = await prisma.adminUser.create({
-      data: {
-        email: normalizedEmail,
-        password: hashedPassword,
-        fullName: normalizedFullName,
-        role: normalizedRole,
-        actif: Boolean(actif),
-        countryId: resolvedCountryId,
-        passwordChangedAt: new Date(),
-        permissionAllow: canSetPermissionOverrides
-          ? normalizePermissionList(permissionAllow)
-          : [],
-        permissionDeny: canSetPermissionOverrides
-          ? normalizePermissionList(permissionDeny)
-          : [],
-      },
-      include: {
-        country: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-      },
-    });
-
-    await createAdminAuditLog(prisma, {
-      actorAdminId: req.user?.id || null,
-      targetAdminId: created.id,
-      action: "ADMIN_USER_CREATED",
-      note: "Création d'un compte administrateur.",
-      meta: {
-        role: created.role,
-        countryId: created.countryId,
-        actif: created.actif,
-        permissionAllow: normalizePermissionList(created.permissionAllow),
-        permissionDeny: normalizePermissionList(created.permissionDeny),
-      },
-    });
-
-    return res.status(201).json(sanitizeUser(created));
-  } catch (e) {
-    console.error("createUser error:", e);
-
-    if (String(e?.code) === "P2002") {
-      return res.status(409).json({ message: "Email déjà utilisé" });
-    }
-
-    if (e.message === "WEAK_PASSWORD") {
-      return res.status(e.statusCode || 400).json({
-        message: buildWeakPasswordMessage(),
-      });
-    }
-
-    return res.status(e.statusCode || 500).json({
-      message: buildUsersErrorMessage(e, "Erreur serveur (createUser)"),
-    });
+    return res.status(201).json(sanitizeUser(created, req.user));
+  } catch (error) {
+    return respondError(res, error, "Impossible de créer le compte.");
   }
 }
-
-/**
- * PUT /api/admin/users/:id
- */
 async function updateUser(req, res) {
   try {
-    const { id } = req.params;
-    const {
-      email,
-      password,
-      fullName,
-      role,
-      actif,
-      countryCode,
-      permissionAllow,
-      permissionDeny,
-    } = req.body || {};
-
+    const body = req.body || {};
+    validateFields(body);
     const existing = await prisma.adminUser.findUnique({
-      where: { id },
-      include: {
-        country: {
-          select: { id: true, code: true, name: true },
-        },
-      },
+      where: { id: req.params.id },
     });
-
-    if (!existing) {
-      return res.status(404).json({ message: "Utilisateur introuvable" });
-    }
-
+    if (!existing) throw managementError("Utilisateur introuvable.", 404);
+    assertReadScope(req, existing);
+    if (!canManageRole(req.user.role, existing.role))
+      throw managementError("Vous n’êtes pas autorisé à gérer ce rôle.", 403);
     if (
-      !isGlobalRole(req.user?.role) &&
-      req.country?.id &&
-      existing.countryId !== req.country.id
-    ) {
-      return res.status(403).json({ message: "Forbidden: country scope mismatch" });
-    }
-
+      req.user.role !== "SUPER_ADMIN" &&
+      ("permissionAllow" in body || "permissionDeny" in body)
+    )
+      throw managementError(
+        "Seul le Super Admin peut modifier les droits spécifiques.",
+        403,
+      );
     const data = {};
-    const nextRole = role !== undefined ? normalizeRole(role) : existing.role;
-    let passwordChanged = false;
-
-    if (req.user?.id === id && role !== undefined && nextRole !== existing.role) {
-      const err = new Error("SELF_ROLE_CHANGE_FORBIDDEN");
-      err.statusCode = 400;
-      throw err;
-    }
-
-    if (email !== undefined) {
-      const normalizedEmail = String(email || "").trim().toLowerCase();
-      if (!normalizedEmail) {
-        return res.status(400).json({ message: "email invalide" });
-      }
-      data.email = normalizedEmail;
-    }
-
-    if (fullName !== undefined) {
-      data.fullName = fullName ? String(fullName).trim() : null;
-    }
-
-    if (role !== undefined) {
-      if (!nextRole) {
-        return res.status(400).json({ message: "role invalide" });
-      }
-      assertValidRole(nextRole);
-      assertRoleManageable(req.user?.role, nextRole);
-      data.role = nextRole;
-    } else {
-      assertRoleManageable(req.user?.role, existing.role);
-    }
-
-    if (actif !== undefined) {
-      data.actif = Boolean(actif);
-    }
-
-    if (password !== undefined && String(password).trim()) {
-      const normalizedPassword = String(password);
-      validateAdminPassword(normalizedPassword);
-      data.password = await bcrypt.hash(normalizedPassword, SALT_ROUNDS);
+    for (const key of ["email", "fullName", "role"])
+      if (key in body)
+        data[key] =
+          key === "email"
+            ? body[key].trim().toLowerCase()
+            : key === "role"
+              ? body[key].trim().toUpperCase()
+              : body[key].trim();
+    if ("actif" in body) data.actif = body.actif;
+    for (const key of ["permissionAllow", "permissionDeny"])
+      if (key in body) data[key] = normalizePermissionList(body[key]);
+    if ("countryCode" in body || "role" in body)
+      data.countryId = await countryFor(
+        req,
+        data.role || existing.role,
+        body.countryCode,
+        existing.countryId,
+      );
+    if (body.password) {
+      validateAdminPassword(body.password);
+      data.password = await bcrypt.hash(body.password, 10);
       data.passwordChangedAt = new Date();
       data.failedLoginCount = 0;
       data.lockedUntil = null;
-      passwordChanged = true;
     }
-
-    if (permissionAllow !== undefined || permissionDeny !== undefined) {
-      if (req.user?.role !== AdminRole.SUPER_ADMIN) {
-        return res.status(403).json({
-          message: "Seul le Super Admin peut modifier les droits spécifiques.",
-        });
-      }
-
-      if (permissionAllow !== undefined) {
-        data.permissionAllow = normalizePermissionList(permissionAllow);
-      }
-
-      if (permissionDeny !== undefined) {
-        data.permissionDeny = normalizePermissionList(permissionDeny);
-      }
-    }
-
-    let requestedCountryId =
-      existing.countryId !== undefined ? existing.countryId : null;
-
-    if (countryCode !== undefined) {
-      if (!countryCode) {
-        requestedCountryId = null;
-      } else {
-        const country = await resolveCountryIdFromCode(countryCode);
-        if (!country) {
-          return res.status(404).json({ message: "Pays introuvable" });
-        }
-        requestedCountryId = country.id;
-      }
-    }
-
-    data.countryId = resolveManagedCountryId({
-      actorRole: req.user?.role,
-      actorCountryId: req.country?.id || req.user?.countryId || null,
-      targetRole: nextRole,
-      requestedCountryId,
-    });
-
-    const updated = await prisma.adminUser.update({
-      where: { id },
+    const updated = await saveManagedUser(prisma, req, {
+      id: existing.id,
       data,
-      include: {
-        country: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-      },
+      expectedUpdatedAt: body.expectedUpdatedAt,
+      initialUpdatedAt: existing.updatedAt,
+      note: body.password
+        ? "Réinitialisation du mot de passe."
+        : "Modification du compte administrateur.",
     });
-
-    await createAdminAuditLog(prisma, {
-      actorAdminId: req.user?.id || null,
-      targetAdminId: updated.id,
-      action: passwordChanged ? "ADMIN_USER_UPDATED_PASSWORD" : "ADMIN_USER_UPDATED",
-      note: passwordChanged
-        ? "Mise à jour du compte administrateur avec rotation du mot de passe."
-        : "Mise à jour du compte administrateur.",
-      meta: {
-        role: updated.role,
-        countryId: updated.countryId,
-        actif: updated.actif,
-        passwordChanged,
-        permissionAllow: normalizePermissionList(updated.permissionAllow),
-        permissionDeny: normalizePermissionList(updated.permissionDeny),
-      },
-    });
-
-    return res.json(sanitizeUser(updated));
-  } catch (e) {
-    console.error("updateUser error:", e);
-
-    if (String(e?.code) === "P2002") {
-      return res.status(409).json({ message: "Email déjà utilisé" });
-    }
-
-    if (e.message === "WEAK_PASSWORD") {
-      return res.status(e.statusCode || 400).json({
-        message: buildWeakPasswordMessage(),
-      });
-    }
-
-    return res.status(e.statusCode || 500).json({
-      message: buildUsersErrorMessage(e, "Erreur serveur (updateUser)"),
-    });
+    return res.json(sanitizeUser(updated, req.user));
+  } catch (error) {
+    return respondError(res, error, "Impossible de modifier le compte.");
   }
 }
-
-/**
- * PATCH /api/admin/users/:id/status
- */
 async function updateUserStatus(req, res) {
   try {
-    const { id } = req.params;
-    const { actif } = req.body || {};
-
-    if (typeof actif !== "boolean") {
-      return res.status(400).json({ message: "actif requis (boolean)" });
-    }
-
-    const existing = await prisma.adminUser.findUnique({
-      where: { id },
-      include: {
-        country: {
-          select: { id: true, code: true, name: true },
-        },
-      },
-    });
-
-    if (!existing) {
-      return res.status(404).json({ message: "Utilisateur introuvable" });
-    }
-
-    if (
-      !isGlobalRole(req.user?.role) &&
-      req.country?.id &&
-      existing.countryId !== req.country.id
-    ) {
-      return res.status(403).json({ message: "Forbidden: country scope mismatch" });
-    }
-
-    if (req.user?.id === id && actif === false) {
-      return res.status(400).json({
-        message: "Vous ne pouvez pas désactiver votre propre compte.",
+    const body = req.body || {};
+    if (typeof body.actif !== "boolean")
+      throw managementError("Statut invalide.", 400, {
+        actif: "Utilisez activé ou désactivé.",
       });
-    }
-
-    assertRoleManageable(req.user?.role, existing.role);
-
-    const updated = await prisma.adminUser.update({
-      where: { id },
-      data: { actif },
-      include: {
-        country: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-      },
+    const existing = await prisma.adminUser.findUnique({
+      where: { id: req.params.id },
     });
-
-    await createAdminAuditLog(prisma, {
-      actorAdminId: req.user?.id || null,
-      targetAdminId: updated.id,
-      action: actif ? "ADMIN_USER_ACTIVATED" : "ADMIN_USER_DEACTIVATED",
-      note: actif
-        ? "Compte administrateur réactivé."
-        : "Compte administrateur désactivé.",
-      meta: {
-        role: updated.role,
-        countryId: updated.countryId,
-        actif: updated.actif,
-      },
+    if (!existing) throw managementError("Utilisateur introuvable.", 404);
+    assertReadScope(req, existing);
+    const updated = await saveManagedUser(prisma, req, {
+      id: existing.id,
+      data: { actif: body.actif },
+      expectedUpdatedAt: body.expectedUpdatedAt,
+      initialUpdatedAt: existing.updatedAt,
+      action: body.actif ? "ADMIN_USER_ACTIVATED" : "ADMIN_USER_DEACTIVATED",
+      note: body.actif
+        ? "Réactivation du compte."
+        : "Désactivation du compte et révocation des sessions.",
     });
-
-    return res.json(sanitizeUser(updated));
-  } catch (e) {
-    console.error("updateUserStatus error:", e);
-    return res.status(e.statusCode || 500).json({
-      message: buildUsersErrorMessage(e, "Erreur serveur (updateUserStatus)"),
-    });
+    return res.json(sanitizeUser(updated, req.user));
+  } catch (error) {
+    return respondError(res, error, "Impossible de modifier le statut.");
   }
 }
-
+async function revokeUserSessions(req, res) {
+  try {
+    const existing = await prisma.adminUser.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!existing) throw managementError("Utilisateur introuvable.", 404);
+    assertReadScope(req, existing);
+    const updated = await saveManagedUser(prisma, req, {
+      id: existing.id,
+      data: {},
+      expectedUpdatedAt: req.body?.expectedUpdatedAt,
+      initialUpdatedAt: existing.updatedAt,
+      forceRevoke: true,
+      action: "ADMIN_USER_SESSIONS_REVOKED",
+      note: "Déconnexion des sessions du compte.",
+    });
+    return res.json(sanitizeUser(updated, req.user));
+  } catch (error) {
+    return respondError(res, error, "Impossible de révoquer les sessions.");
+  }
+}
+async function getUserHistory(req, res) {
+  try {
+    const user = await prisma.adminUser.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!user) throw managementError("Utilisateur introuvable.", 404);
+    assertReadScope(req, user);
+    const rows = await prisma.adminUserAuditLog.findMany({
+      where: { targetAdminId: user.id },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 30,
+      select: {
+        id: true,
+        action: true,
+        note: true,
+        createdAt: true,
+        meta: true,
+        actorAdmin: { select: { fullName: true, email: true } },
+      },
+    });
+    return res.json({
+      data: rows.map((row) => ({
+        id: row.id,
+        action: row.action,
+        note: row.note,
+        createdAt: row.createdAt,
+        actorLabel:
+          row.actorAdmin?.fullName || row.actorAdmin?.email || "Système",
+        changes: Object.fromEntries(
+          Object.entries(row.meta?.changes || {}).filter(([key]) =>
+            AUDIT_FIELDS.includes(key),
+          ),
+        ),
+        passwordChanged: Boolean(row.meta?.passwordChanged),
+        sessionsRevoked: Boolean(row.meta?.sessionsRevoked),
+      })),
+    });
+  } catch (error) {
+    return respondError(res, error, "Impossible de charger l’historique.");
+  }
+}
 module.exports = {
   listUsers,
   getUserById,
   createUser,
   updateUser,
   updateUserStatus,
+  getUserHistory,
+  revokeUserSessions,
 };

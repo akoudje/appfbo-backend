@@ -470,6 +470,7 @@ model Country {
   updatedAt    DateTime @updatedAt
 
   settings                CountrySettings?
+  settingsChanges         CountrySettingsChange[]
   marketingContent        CountryMarketingContent?
   products                Product[]
   countryProducts         CountryProduct[]
@@ -614,6 +615,7 @@ model AdminUser {
   actif    Boolean   @default(true)
   lastLoginAt DateTime?
   passwordChangedAt DateTime?
+  sessionVersion Int @default(0)
   failedLoginCount Int @default(0)
   lockedUntil DateTime?
   permissionAllow Json?
@@ -2242,4 +2244,15 @@ model TicketCheckInLog {
   @@index([sessionId, scannedAt])
   @@index([checkedById, scannedAt])
   @@index([result, scannedAt])
+}
+
+model CountrySettingsChange {
+  id String @id @default(cuid())
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  actorId String?
+  actorLabel String
+  changes Json
+  createdAt DateTime @default(now())
+  @@index([countryId, createdAt])
 }

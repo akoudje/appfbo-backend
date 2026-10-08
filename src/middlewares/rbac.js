@@ -1,3 +1,4 @@
+const { resolveAdminSession } = require("../services/admin-session.service");
 // src/middlewares/rbac.js
 // Middleware RBAC (contrôle d'accès basé sur les rôles) pour Express.js
 // Ce middleware fournit des fonctions permettant d'appliquer l'authentification, l'accès basé sur les rôles, les vérifications d'autorisation et les restrictions géographiques.
@@ -60,6 +61,9 @@ function parseUserFromJwt(req) {
       role: String(payload.role).trim().toUpperCase(),
       countryId: payload.countryId || null,
       permissions: undefined,
+      tokenSessionVersion: payload.sessionVersion,
+      tokenIssuedAt: payload.iat,
+      tokenExpiresAt: payload.exp,
     };
   } catch (_) {
     return null;
@@ -68,7 +72,10 @@ function parseUserFromJwt(req) {
 
 function parseUserFromHeaders(req) {
   // Fallback legacy strictement opt-in (dev only).
-  if (String(process.env.ALLOW_HEADER_AUTH || "").toLowerCase() !== "true") {
+  if (
+    String(process.env.NODE_ENV || "").toLowerCase() === "production" ||
+    String(process.env.ALLOW_HEADER_AUTH || "").toLowerCase() !== "true"
+  ) {
     return null;
   }
 
@@ -95,22 +102,24 @@ function parseUserFromHeaders(req) {
   };
 }
 
-function requireAuth(req, res, next) {
-  if (req.user && req.user.role) return next();
-
-  // 1) JWT first
-  const jwtUser = parseUserFromJwt(req);
-  if (jwtUser) {
-    req.user = jwtUser;
+async function requireAuth(req, res, next) {
+  try {
+    if (req.user?.sessionChecked) return next();
+    const jwtUser = req.user?.role ? req.user : parseUserFromJwt(req);
+    if (jwtUser) {
+      req.user = await resolveAdminSession(prisma, jwtUser);
+      return next();
+    }
+    const headerUser = parseUserFromHeaders(req);
+    if (!headerUser) return res.status(401).json({ message: "Unauthorized" });
+    if (headerUser.id) req.user = await resolveAdminSession(prisma, headerUser);
+    else req.user = headerUser;
     return next();
+  } catch (error) {
+    if (error.statusCode === 401)
+      return res.status(401).json({ message: error.message });
+    return next(error);
   }
-
-  // 2) fallback headers (transition, uniquement si explicitement autorisé)
-  const headerUser = parseUserFromHeaders(req);
-  if (!headerUser) return res.status(401).json({ message: "Unauthorized" });
-
-  req.user = headerUser;
-  return next();
 }
 
 function requireRole(...roles) {

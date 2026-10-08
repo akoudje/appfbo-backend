@@ -1,39 +1,34 @@
-// src/middlewares/adminJwt.js (CommonJS)
-
 const jwt = require("jsonwebtoken");
-
-function getBearerToken(req) {
-  const raw = req.header("Authorization") || "";
-  const [type, token] = raw.split(" ");
-  if (type?.toLowerCase() !== "bearer") return null;
-  return token || null;
-}
-
-function requireJwt(req, res, next) {
+const prisma = require("../prisma");
+const { resolveAdminSession } = require("../services/admin-session.service");
+async function requireJwt(req, res, next) {
+  const [type, token] = String(req.header("Authorization") || "").split(" ");
+  if (type?.toLowerCase() !== "bearer" || !token)
+    return res.status(401).json({ message: "Unauthorized" });
+  if (!process.env.JWT_SECRET)
+    return res.status(500).json({ message: "Server misconfigured" });
+  let payload;
   try {
-    const token = getBearerToken(req);
-    if (!token) return res.status(401).json({ message: "Unauthorized" });
-
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      console.error("JWT_SECRET missing in env");
-      return res.status(500).json({ message: "Server misconfigured (JWT_SECRET)" });
-    }
-
-    const payload = jwt.verify(token, secret);
-
-    // payload attendu: { sub, role, countryId, email }
-    req.user = {
-      id: payload.sub,
-      role: payload.role,
-      countryId: payload.countryId || null,
-      email: payload.email || null,
-    };
-
-    return next();
-  } catch (e) {
+    payload = jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
     return res.status(401).json({ message: "Unauthorized" });
   }
+  if (!payload?.sub || !payload?.role)
+    return res.status(401).json({ message: "Unauthorized" });
+  try {
+    req.user = await resolveAdminSession(prisma, {
+      id: payload.sub,
+      role: payload.role,
+      email: payload.email,
+      tokenSessionVersion: payload.sessionVersion,
+      tokenIssuedAt: payload.iat,
+      tokenExpiresAt: payload.exp,
+    });
+    return next();
+  } catch (error) {
+    if (error.statusCode === 401)
+      return res.status(401).json({ message: error.message });
+    return next(error);
+  }
 }
-
 module.exports = { requireJwt };

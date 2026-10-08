@@ -1,15 +1,17 @@
+const { completeAdminLogin } = require("../services/admin-login.service");
 // src/controllers/adminAuth.controller.js (CommonJS)
 // Controller pour l'authentification des admins, avec les fonctions de login, récupération du profil courant, et seed d'un super admin. Utilise bcrypt pour le hash des mots de passe et JWT pour la génération de tokens d'authentification. Les fonctions sont exportées pour être utilisées dans les routes correspondantes.
 
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
-const { getEffectivePermissions, normalizePermissionList } = require("../auth/permissions");
+const {
+  getEffectivePermissions,
+  normalizePermissionList,
+} = require("../auth/permissions");
 const {
   validateAdminPassword,
   buildWeakPasswordMessage,
-  computeLoginLockInfo,
-  createAdminAuditLog,
 } = require("../services/admin-security.service");
 
 function signAdminToken(admin) {
@@ -24,9 +26,10 @@ function signAdminToken(admin) {
       email: admin.email,
       role: admin.role,
       countryId: admin.countryId || null,
+      sessionVersion: admin.sessionVersion || 0,
     },
     secret,
-    { expiresIn }
+    { expiresIn },
   );
 }
 
@@ -39,7 +42,11 @@ function sanitizeAdmin(admin) {
     email: admin.email,
     fullName: admin.fullName || null,
     role: admin.role,
-    permissions: getEffectivePermissions(admin.role, permissionAllow, permissionDeny),
+    permissions: getEffectivePermissions(
+      admin.role,
+      permissionAllow,
+      permissionDeny,
+    ),
     permissionAllow,
     permissionDeny,
     actif: admin.actif,
@@ -74,54 +81,26 @@ async function adminLogin(req, res) {
       return res.status(401).json({ message: "Identifiants invalides" });
     }
 
-    if (admin.lockedUntil && new Date(admin.lockedUntil).getTime() > Date.now()) {
+    if (
+      admin.lockedUntil &&
+      new Date(admin.lockedUntil).getTime() > Date.now()
+    ) {
       return res.status(423).json({
         message: "Compte temporairement verrouillé. Réessayez plus tard.",
       });
     }
 
     const ok = await bcrypt.compare(String(password), admin.password);
-    if (!ok) {
-      const lockInfo = computeLoginLockInfo(admin.failedLoginCount);
-      await prisma.adminUser.update({
-        where: { id: admin.id },
-        data: {
-          failedLoginCount: lockInfo.nextCount,
-          lockedUntil: lockInfo.lockedUntil,
-        },
-      });
-      await createAdminAuditLog(prisma, {
-        targetAdminId: admin.id,
-        action: "LOGIN_FAILED",
-        note: lockInfo.shouldLock
-          ? "Échec de connexion - compte verrouillé temporairement."
-          : "Échec de connexion.",
-        meta: {
-          failedLoginCount: lockInfo.nextCount,
-          lockedUntil: lockInfo.lockedUntil,
-        },
-      });
+    const result = await completeAdminLogin(prisma, admin, ok);
+    if (result.status === "LOCKED")
+      return res
+        .status(423)
+        .json({
+          message: "Compte temporairement verrouillé. Réessayez plus tard.",
+        });
+    if (result.status !== "SUCCESS")
       return res.status(401).json({ message: "Identifiants invalides" });
-    }
-
-    const updatedAdmin = await prisma.adminUser.update({
-      where: { id: admin.id },
-      data: {
-        lastLoginAt: new Date(),
-        failedLoginCount: 0,
-        lockedUntil: null,
-      },
-      include: {
-        country: { select: { code: true, name: true } },
-      },
-    });
-
-    await createAdminAuditLog(prisma, {
-      actorAdminId: updatedAdmin.id,
-      targetAdminId: updatedAdmin.id,
-      action: "LOGIN_SUCCESS",
-      note: "Connexion administrateur réussie.",
-    });
+    const updatedAdmin = result.user;
 
     const token = signAdminToken(updatedAdmin);
     return res.json({ token, user: sanitizeAdmin(updatedAdmin) });
@@ -167,7 +146,9 @@ async function seedSuperAdmin(req, res) {
   try {
     const count = await prisma.adminUser.count();
     if (count > 0) {
-      return res.status(403).json({ message: "Seed interdit: un admin existe déjà" });
+      return res
+        .status(403)
+        .json({ message: "Seed interdit: un admin existe déjà" });
     }
 
     const { email, password, fullName } = req.body || {};

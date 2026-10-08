@@ -22,6 +22,8 @@ const {
   createUser,
   updateUser,
   updateUserStatus,
+  getUserHistory,
+  revokeUserSessions,
 } = require("../controllers/users.controller");
 
 const {
@@ -167,6 +169,9 @@ router.get(
   requirePermission(Permission.USER_ADMIN),
   listUsers,
 );
+
+router.get("/users/:id/history", requirePermission(Permission.USER_ADMIN), getUserHistory);
+router.post("/users/:id/sessions/revoke", requirePermission(Permission.USER_ADMIN), revokeUserSessions);
 
 router.get(
   "/users/:id",
