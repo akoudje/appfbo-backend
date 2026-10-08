@@ -9,6 +9,7 @@ const { protectPickupSecrets } = require("../../middlewares/protectPickupSecrets
 router.use(protectPickupSecrets);
 
 router.get("/", requirePermission(Permission.PREORDER_READ), ordersController.listOrders);
+router.get("/export", requirePermission(Permission.EXPORT_READ), ordersController.exportOrders);
 router.get(
   "/submitted-export",
   requirePermission(Permission.EXPORT_READ),

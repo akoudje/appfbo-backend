@@ -1,3 +1,5 @@
+const { validateOrdersQuery, ordersSort, csvCell } = require("../../helpers/order-query");
+const { claimOrderSnapshot } = require("../../helpers/order-write-guard");
 const prisma = require("../../prisma");
 const fs = require("fs");
 const path = require("path");
@@ -391,6 +393,7 @@ function createSimplePdf(lines = []) {
 }
 
 function buildOrdersListWhere(req, overrides = {}) {
+  validateOrdersQuery(req.query);
   const {
     status,
     q,
@@ -425,20 +428,20 @@ function buildOrdersListWhere(req, overrides = {}) {
     }
   }
 
-  if (status) where.status = status;
-  if (paymentStatus) where.paymentStatus = paymentStatus;
+  if (status) where.status = String(status).trim().toUpperCase();
+  if (paymentStatus) where.paymentStatus = String(paymentStatus).trim().toUpperCase();
   if (String(req.query.preparationQueue) === "true" && status === "PAID") {
     where.preparationLaunchedAt = { not: null };
   }
   if (preorderPaymentMode) {
     where.preorderPaymentMode = String(preorderPaymentMode).trim().toUpperCase();
   }
-  if (billingWorkStatus) where.billingWorkStatus = billingWorkStatus;
+  if (billingWorkStatus) where.billingWorkStatus = String(billingWorkStatus).trim().toUpperCase();
   if (billingQueueScope && !status && !overrides.status) {
     where.status = getBillingQueueOrderStatusFilter(billingWorkStatus);
   }
-  if (billingPriority) {
-    where.billingPriority = String(billingPriority).trim().toUpperCase();
+  if (billingPriority || req.query.priority) {
+    where.billingPriority = String(billingPriority || req.query.priority).trim().toUpperCase();
   }
   if (as400Reference && String(as400Reference).trim()) {
     where.factureReference = {
@@ -554,26 +557,9 @@ async function listOrders(req, res) {
 
     const where = buildOrdersListWhere(req);
 
-    const sortMap = {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-      total: "totalFcfa",
-      totalFcfa: "totalFcfa",
-      billingSlaDeadlineAt: "billingSlaDeadlineAt",
-      billingQueueEnteredAt: "billingQueueEnteredAt",
-      billingPriority: "billingPriority",
-      assignedAt: "assignedAt",
-      billingLastActivityAt: "billingLastActivityAt",
-      billingEscalatedAt: "billingEscalatedAt",
-      preparationLaunchedAt: "preparationLaunchedAt",
-      preparedAt: "preparedAt",
-      fulfilledAt: "fulfilledAt",
-    };
-    const sortField = sortMap[String(sort || "").trim()] || "createdAt";
-    const sortDir = dir === "asc" ? "asc" : "desc";
-    const orderBy = [{ [sortField]: sortDir }, { createdAt: "desc" }];
+    const orderBy = ordersSort(req.query);
 
-    const [totalCount, orders] = await Promise.all([
+    const [totalCount, orders, statusGroups] = await Promise.all([
       prisma.preorder.count({ where }),
       prisma.preorder.findMany({
         where,
@@ -627,6 +613,7 @@ async function listOrders(req, res) {
               email: true,
             },
           },
+          activePayment: { select: { amountExpectedFcfa: true } },
           _count: { select: { items: true } },
           // Dernière notification "colis prêt" (code de retrait) : permet
           // d'afficher son statut de livraison (SENT/DELIVERED/FAILED...)
@@ -648,6 +635,9 @@ async function listOrders(req, res) {
           },
         },
       }),
+      String(req.query.includeStats) === "true"
+        ? prisma.preorder.groupBy({ by: ["status"], where, _count: { _all: true } })
+        : Promise.resolve(null),
     ]);
 
     return res.json({
@@ -656,10 +646,33 @@ async function listOrders(req, res) {
       totalCount,
       totalPages: Math.ceil(totalCount / pageSize),
       data: orders,
+      ...(statusGroups ? { stats: { statusCounts: Object.fromEntries(statusGroups.map(group => [group.status, group._count._all])) } } : {}),
     });
   } catch (e) {
     console.error("listOrders error:", e);
-    return res.status(500).json({ message: "Erreur serveur (listOrders)" });
+    return res.status(e.statusCode || 500).json({ message: e.statusCode === 400 ? e.message : "Impossible de charger les commandes." });
+  }
+}
+
+async function exportOrders(req, res) {
+  try {
+    const where = buildOrdersListWhere(req);
+    const count = await prisma.preorder.count({ where });
+    if (count > 10000) return res.status(400).json({ message: "L’export est limité à 10 000 commandes. Affinez les filtres." });
+    const rows = await prisma.preorder.findMany({ where, take: 10000, orderBy: ordersSort(req.query), select: {
+      preorderNumber: true, parcelNumber: true, fboNomComplet: true, fboNumero: true,
+      status: true, paymentStatus: true, billingWorkStatus: true, billingPriority: true,
+      as400InvoiceTotalFcfa: true, indicativeTotalFcfa: true, totalFcfa: true, createdAt: true,
+      assignedInvoicer: { select: { fullName: true } },
+    } });
+    const header = ["Précommande", "Colis", "Client", "Numéro FBO", "Statut", "Paiement", "Facturation", "Priorité", "Responsable", "Montant AS400 (FCFA)", "Montant indicatif (FCFA)", "Création"];
+    const labels = { DRAFT: "Brouillon", SUBMITTED: "Soumise", INVOICED: "Préfacturée", PAYMENT_PENDING: "Paiement en attente", PAID: "Payée", READY: "Prête", FULFILLED: "Remise", CANCELLED: "Annulée", UNPAID: "Non payé", PARTIALLY_PAID: "Partiellement payé", REFUNDED: "Remboursé", NONE: "Non démarrée", QUEUED: "En file", ASSIGNED: "Assignée", IN_PROGRESS: "En cours", WAITING_CUSTOMER_DATA: "Infos client attendues", WAITING_PAYMENT: "Paiement attendu", COMPLETED: "Terminée", RELEASED: "À réassigner", ESCALATED: "À revoir", LOW: "Faible", NORMAL: "Normale", HIGH: "Haute", URGENT: "Urgente" };
+    const lines = rows.map(row => [row.preorderNumber, row.parcelNumber, row.fboNomComplet, row.fboNumero, labels[row.status] || row.status, labels[row.paymentStatus] || row.paymentStatus, labels[row.billingWorkStatus] || row.billingWorkStatus, labels[row.billingPriority] || row.billingPriority, row.assignedInvoicer?.fullName, row.as400InvoiceTotalFcfa, row.indicativeTotalFcfa ?? row.totalFcfa, row.createdAt?.toISOString()]);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="commandes-' + new Date().toISOString().slice(0, 10) + '.csv"');
+    return res.send("\uFEFF" + [header, ...lines].map(row => row.map(csvCell).join(";")).join("\r\n"));
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ message: error.statusCode === 400 ? error.message : "Impossible de générer l’export." });
   }
 }
 
@@ -3044,39 +3057,6 @@ async function prepareOrder(req, res) {
         .json({ message: "Impossible de préparer une commande vide." });
     }
 
-    const unresolvedBlockingAnomalies = await prisma.preparationAnomaly.count({
-      where: {
-        preorderId: order.id,
-        blocking: true,
-        resolvedAt: null,
-      },
-    });
-
-    if (unresolvedBlockingAnomalies > 0) {
-      return res.status(400).json({
-        message:
-          "Impossible de marquer le colis prêt tant qu'une anomalie bloquante de préparation n'est pas résolue.",
-      });
-    }
-
-    await prisma.$transaction(async (tx) => {
-      await ensurePreparationChecklist(tx, order);
-    });
-
-    const checklistItems = await prisma.preparationChecklistItem.findMany({
-      where: { preorderId: order.id },
-    });
-
-    const allChecked =
-      checklistItems.length > 0 && checklistItems.every((item) => item.checked);
-
-    if (!allChecked) {
-      return res.status(400).json({
-        message:
-          "Toutes les lignes de checklist doivent être cochées avant de marquer le colis prêt.",
-      });
-    }
-
     const now = new Date();
     const parcelNumber = order.parcelNumber || generateParcelNumber(order);
     const pickupSecretCode =
@@ -3089,6 +3069,14 @@ async function prepareOrder(req, res) {
     const stockAlreadyDeducted = Boolean(order.stockDeductedAt);
 
     const updated = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
+      await ensurePreparationChecklist(tx, order);
+      const blocking = await tx.preparationAnomaly.count({ where: { preorderId: order.id, blocking: true, resolvedAt: null } });
+      const checklist = await tx.preparationChecklistItem.findMany({ where: { preorderId: order.id } });
+      if (blocking || !checklist.length || !checklist.every(item => item.checked)) {
+        const error = new Error(blocking ? "Une anomalie bloquante doit être résolue avant de préparer le colis." : "Toutes les lignes doivent être cochées avant de préparer le colis.");
+        error.statusCode = 409; throw error;
+      }
       if (!stockAlreadyDeducted) {
         for (const item of order.items) {
           const updatedStock = await tx.countryProduct.updateMany({
@@ -3227,6 +3215,7 @@ async function updatePreparationChecklistItem(req, res) {
 
     const checkedValue = checked;
     const saved = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
       await ensurePreparationChecklist(tx, order);
 
       return tx.preparationChecklistItem.upsert({
@@ -3264,7 +3253,7 @@ async function updatePreparationChecklistItem(req, res) {
     return res.json(saved);
   } catch (e) {
     console.error("updatePreparationChecklistItem error:", e);
-    return res.status(500).json({
+    return res.status(e.statusCode || 500).json({
       message: e.message || "Erreur serveur (updatePreparationChecklistItem)",
     });
   }
@@ -3290,14 +3279,12 @@ async function bulkUpdatePreparationChecklist(req, res) {
     if (typeof checked !== "boolean") {
       return res.status(400).json({ message: "La valeur de contrôle doit être un booléen." });
     }
-    if (checked) {
-      return res.status(400).json({ message: "Vérifiez les articles individuellement avant de les valider." });
-    }
 
     const checkedValue = checked;
     const now = new Date();
 
     await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
       await ensurePreparationChecklist(tx, order);
 
       for (const item of order.items) {
@@ -3320,7 +3307,7 @@ async function bulkUpdatePreparationChecklist(req, res) {
     return res.json({ ok: true });
   } catch (e) {
     console.error("bulkUpdatePreparationChecklist error:", e);
-    return res.status(500).json({
+    return res.status(e.statusCode || 500).json({
       message: e.message || "Erreur serveur (bulkUpdatePreparationChecklist)",
     });
   }
@@ -3352,7 +3339,10 @@ async function createPreparationAnomaly(req, res) {
       return res.status(404).json({ message: "Ligne de commande introuvable" });
     }
 
-    const saved = await prisma.preparationAnomaly.create({
+    if (!["PAID", "READY"].includes(order.status)) return res.status(409).json({ message: "La préparation de ce dossier est terminée ou inactive." });
+    const saved = await prisma.$transaction(async tx => {
+      await claimOrderSnapshot(tx, order);
+      return tx.preparationAnomaly.create({
       data: {
         preorderId: order.id,
         preorderItemId: itemId || null,
@@ -3372,10 +3362,11 @@ async function createPreparationAnomaly(req, res) {
       },
     });
 
+    });
     return res.status(201).json(saved);
   } catch (e) {
     console.error("createPreparationAnomaly error:", e);
-    return res.status(500).json({
+    return res.status(e.statusCode || 500).json({
       message: e.message || "Erreur serveur (createPreparationAnomaly)",
     });
   }
@@ -3542,6 +3533,10 @@ async function fulfillOrder(req, res) {
     }
 
     const updated = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
+      if (await tx.preparationAnomaly.count({ where: { preorderId: order.id, blocking: true, resolvedAt: null } })) {
+        const error = new Error("Résolvez les anomalies bloquantes avant de confirmer la remise."); error.statusCode = 409; throw error;
+      }
       const saved = await tx.preorder.update({
         where: { id: order.id },
         data: {
@@ -3740,6 +3735,7 @@ async function regularizeFulfillmentNoNotification(req, res) {
     const mustDebitStock = !order.stockDeductedAt;
 
     const updated = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
       await ensurePreparationChecklist(tx, order);
 
       if (mustDebitStock) {
@@ -3908,12 +3904,15 @@ async function cancelOrder(req, res) {
 
     assertTransition(order.status, "CANCELLED");
 
-    const cancelReason =
-      reason && String(reason).trim() ? String(reason).trim() : "Annulée";
+    const cancelReason = String(reason || "").trim();
+    if (typeof reason !== "string" || !cancelReason || cancelReason.length > 1000) {
+      return res.status(400).json({ message: "Renseignez un motif d’annulation de 1 à 1 000 caractères." });
+    }
 
     const now = new Date();
 
     const updated = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
       const mustRollbackStock =
         !!order.stockDeductedAt && !order.stockRestoredAt;
 
@@ -3992,6 +3991,7 @@ async function cancelOrder(req, res) {
 
 module.exports = {
   listOrders,
+  exportOrders,
   getSubmittedOrdersExport,
   getOrderById,
   listOrderMessages,

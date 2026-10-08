@@ -9,7 +9,7 @@ function controller(prisma) {
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'src/controllers/admin/orders.controller.js'), 'utf8'), {
     module, console, process, Buffer,
-    require: (id) => id === '../../prisma' ? prisma : id.endsWith('/countryScope') ? { scopeWhere: (req, where = {}) => ({ countryId: req.countryId, ...where }) } : {},
+    require: (id) => id === '../../prisma' ? prisma : id.endsWith('/order-query') ? require('./src/helpers/order-query') : id.endsWith('/order-write-guard') ? require('./src/helpers/order-write-guard') : id.endsWith('/countryScope') ? { scopeWhere: (req, where = {}) => ({ countryId: req.countryId, ...where }) } : {},
   });
   return module.exports;
 }
@@ -54,15 +54,20 @@ test('checklists reject finished orders, unlaunched orders and non-boolean input
     }
   }
 });
-test('bulk validation cannot bypass individual article checks', async () => {
-  const api=controller({preorder:{findFirst:async()=>({id:'o',status:'PAID',preparationLaunchedAt:new Date(),items:[]})},$transaction:async()=>{throw Error('unexpected write');}});
-  const res=response();await api.bulkUpdatePreparationChecklist({params:{id:'o'},body:{checked:true}},res);assert.equal(res.code,400);
+test('bulk validation and correction record the operator while preparation is active', async () => {
+  for (const checked of [true, false]) {
+    const updates=[];
+    const db={preorder:{findFirst:async()=>({id:'o',countryId:'CIV',status:'PAID',preparationLaunchedAt:new Date(),items:[{id:'i'}]}),updateMany:async()=>({count:1})},preparationChecklistItem:{upsert:async()=>({}),update:async({data})=>{updates.push(data);return data;}}};
+    db.$transaction=async fn=>fn(db);
+    const res=response();await controller(db).bulkUpdatePreparationChecklist({countryId:'CIV',user:{id:'operator'},params:{id:'o'},body:{checked}},res);
+    assert.equal(res.code,200);assert.equal(updates[0].checked,checked);assert.equal(updates[0].checkedById,checked?'operator':null);
+  }
 });
 
 test('individual validation records the operator and allows correction during preparation', async () => {
   for (const checked of [true, false]) {
     let saved;
-    const db={preorder:{findFirst:async()=>({id:'o',status:'PAID',preparationLaunchedAt:new Date(),items:[{id:'i'}]})},preparationChecklistItem:{upsert:async(args)=>{if('checked' in args.update)saved=args.update;return args.update;}}};
+    const db={preorder:{findFirst:async()=>({id:'o',countryId:'CIV',status:'PAID',preparationLaunchedAt:new Date(),items:[{id:'i'}]}),updateMany:async()=>({count:1})},preparationChecklistItem:{upsert:async(args)=>{if('checked' in args.update)saved=args.update;return args.update;}}};
     db.$transaction=async(fn)=>fn(db);
     const api=controller(db),res=response();
     await api.updatePreparationChecklistItem({countryId:'CIV',user:{id:'operator'},params:{id:'o'},body:{itemId:'i',checked}},res);

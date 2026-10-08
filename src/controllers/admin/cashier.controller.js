@@ -1,3 +1,4 @@
+const { claimOrderSnapshot } = require("../../helpers/order-write-guard");
 const prisma = require("../../prisma");
 const { scopeWhere } = require("../../helpers/countryScope");
 const { AdminRole } = require("../../auth/permissions");
@@ -702,12 +703,13 @@ async function launchPreparation(req, res) {
       req.user?.fullName || req.user?.email || req.user?.role || "CAISSE";
 
     const updatedOrder = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
       const parcelNumber = order.parcelNumber || generateParcelNumber(order);
 
       // Le stock est réservé dès le lancement de la préparation, pas à la fin
       // (voir "Marquer colis prêt") : une fois le colis entamé, son stock ne
       // doit plus pouvoir être consommé par une autre commande.
-      for (const item of order.items || []) {
+      for (const item of order.stockDeductedAt ? [] : order.items || []) {
         const updatedStock = await tx.countryProduct.updateMany({
           where: {
             countryId: order.countryId,
@@ -772,7 +774,7 @@ async function launchPreparation(req, res) {
           packingNote: packingNote
             ? String(packingNote).trim()
             : order.packingNote,
-          stockDeductedAt: now,
+          stockDeductedAt: order.stockDeductedAt || now,
         },
       });
 
