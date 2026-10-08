@@ -2105,6 +2105,11 @@ model TicketOrder {
   holderEmail String?
 
   totalFcfa Int @default(0)
+  paymentServiceFeeFcfa Int?
+  amountToPayFcfa Int?
+  clientRequestId String?
+  ticketIssueCode String?
+
   paymentMethod String?
   paymentProvider String?
   paymentReference String?
@@ -2128,6 +2133,7 @@ model TicketOrder {
 
   @@index([countryId, status, createdAt])
   @@index([eventId, status, createdAt])
+  @@unique([countryId, clientRequestId])
   @@index([ticketTypeId])
   @@index([paymentProvider, providerSessionId])
   @@index([buyerPhone])

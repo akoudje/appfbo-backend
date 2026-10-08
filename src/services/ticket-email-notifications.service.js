@@ -171,3 +171,11 @@ async function sendTicketOrderEmail({ order, publicUrl, recipientEmail } = {}) {
 module.exports = {
   sendTicketOrderEmail,
 };
+
+async function sendTicketOrderAccessEmail({order,publicUrl}){
+ if(order.status==='PAID'&&!order.ticketIssueCode&&(order.tickets||[]).length)return sendTicketOrderEmail({order,publicUrl});
+ const to=normalizeEmail(order.buyerEmail||order.holderEmail||'');if(!to)return {sent:false,skipped:true};
+ const url=ticketOrderPublicUrl({order,publicUrl});
+ const result=await sendEmail({to,subject:`Votre achat - ${order.event?.title||order.orderNumber}`,body:`Bonjour ${order.buyerFullName},\nRetrouvez votre achat ${order.orderNumber} et son état actuel depuis ce lien sécurisé :\n${url}\nConservez ce lien personnel.`,html:`<p>Bonjour ${escapeHtml(order.buyerFullName)},</p><p>Retrouvez votre achat ${escapeHtml(order.orderNumber)} et son état actuel.</p><p><a href="${escapeHtml(url)}">Afficher mon achat</a></p><p>Conservez ce lien personnel.</p>`});return {sent:!!result?.accepted};
+}
+module.exports.sendTicketOrderAccessEmail=sendTicketOrderAccessEmail;

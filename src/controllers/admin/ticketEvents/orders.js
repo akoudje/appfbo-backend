@@ -4,15 +4,22 @@
 
 const prisma = require("../../../prisma");
 const ticketWavePaymentService = require("../../../services/ticket-wave-payment.service");
+const inventory = require("../../../services/ticket-inventory.service");
 const {
   ticketOrderNumber,
   ensureTicketsActivatedForPaidOrder,
   paidOrderTicketInclude,
 } = require("../../../services/ticket-order-ticketing.service");
 const { normalizeEmail } = require("../../../services/email.service");
-const { sendTicketOrderEmail } = require("../../../services/ticket-email-notifications.service");
-const { publicFrontendBaseUrl } = require("../../../services/public-url.service");
-const { expireStaleTicketOrders } = require("../../../services/ticket-order-expiration.service");
+const {
+  sendTicketOrderEmail,
+} = require("../../../services/ticket-email-notifications.service");
+const {
+  publicFrontendBaseUrl,
+} = require("../../../services/public-url.service");
+const {
+  expireStaleTicketOrders,
+} = require("../../../services/ticket-order-expiration.service");
 const { digitsOnly, buildOrdersWhere } = require("./shared");
 
 async function listOrders(req, res) {
@@ -22,13 +29,23 @@ async function listOrders(req, res) {
     const paginated = req.query.page !== undefined;
     const requestedPage = Number(req.query.page || 1);
     const requestedSize = Number(req.query.pageSize || 25);
-    if (paginated && (!Number.isSafeInteger(requestedPage) || requestedPage < 1 ||
-      !Number.isSafeInteger(requestedSize) || requestedSize < 1 || requestedSize > 100)) {
+    if (
+      paginated &&
+      (!Number.isSafeInteger(requestedPage) ||
+        requestedPage < 1 ||
+        !Number.isSafeInteger(requestedSize) ||
+        requestedSize < 1 ||
+        requestedSize > 100)
+    ) {
       return res.status(400).json({ message: "Pagination invalide." });
     }
-    const total = paginated ? await prisma.ticketOrder.count({ where }) : undefined;
+    const total = paginated
+      ? await prisma.ticketOrder.count({ where })
+      : undefined;
     const pageSize = paginated ? requestedSize : 200;
-    const pageCount = paginated ? Math.max(1, Math.ceil(total / pageSize)) : undefined;
+    const pageCount = paginated
+      ? Math.max(1, Math.ceil(total / pageSize))
+      : undefined;
     const page = paginated ? Math.min(requestedPage, pageCount) : 1;
 
     const orders = await prisma.ticketOrder.findMany({
@@ -42,8 +59,15 @@ async function listOrders(req, res) {
         tickets: { include: { ticketType: true } },
       },
     });
-    return res.json({ data: orders, ...(paginated ? { pagination: { page, pageSize, total, pageCount } } : {}) });
+    return res.json({
+      data: orders,
+      ...(paginated
+        ? { pagination: { page, pageSize, total, pageCount } }
+        : {}),
+    });
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("ticketEvents.listOrders error:", error);
     return res.status(500).json({ message: "Erreur serveur (listOrders)" });
   }
@@ -70,16 +94,24 @@ async function createCashOrder(req, res) {
     const normalizedBuyerName = String(buyerFullName || "").trim();
     const normalizedBuyerPhone = digitsOnly(buyerPhone);
     const normalizedBuyerEmail = normalizeEmail(buyerEmail || "");
-    const normalizedHolderName = String(holderFullName || buyerFullName || "").trim();
+    const normalizedHolderName = String(
+      holderFullName || buyerFullName || "",
+    ).trim();
 
     if (!normalizedEventId || !normalizedTicketTypeId) {
-      return res.status(400).json({ message: "Événement et type de ticket requis." });
+      return res
+        .status(400)
+        .json({ message: "Événement et type de ticket requis." });
     }
     if (!normalizedBuyerName || !normalizedBuyerPhone) {
-      return res.status(400).json({ message: "Nom et téléphone client requis." });
+      return res
+        .status(400)
+        .json({ message: "Nom et téléphone client requis." });
     }
     if (!normalizedBuyerEmail) {
-      return res.status(400).json({ message: "Email client valide requis pour envoyer le ticket digital." });
+      return res.status(400).json({
+        message: "Email client valide requis pour envoyer le ticket digital.",
+      });
     }
     if (!normalizedHolderName) {
       return res.status(400).json({ message: "Nom du participant requis." });
@@ -93,21 +125,36 @@ async function createCashOrder(req, res) {
       },
       include: { event: true },
     });
-    if (!ticketType) return res.status(404).json({ message: "Type de ticket introuvable." });
-    if (!ticketType.active) return res.status(400).json({ message: "Ce type de ticket est inactif." });
+    if (!ticketType)
+      return res.status(404).json({ message: "Type de ticket introuvable." });
+    if (!ticketType.active)
+      return res
+        .status(400)
+        .json({ message: "Ce type de ticket est inactif." });
     if (qty > Number(ticketType.maxPerOrder || 10)) {
-      return res.status(400).json({ message: `Maximum ${ticketType.maxPerOrder} billet(s) par achat.` });
+      return res.status(400).json({
+        message: `Maximum ${ticketType.maxPerOrder} billet(s) par achat.`,
+      });
     }
 
     const soldCount = await prisma.ticket.count({
-      where: { ticketTypeId: ticketType.id, status: { in: ["ACTIVE", "USED"] } },
+      where: {
+        ticketTypeId: ticketType.id,
+        status: { in: ["ACTIVE", "USED"] },
+      },
     });
-    if (ticketType.capacity != null && soldCount + qty > Number(ticketType.capacity)) {
-      return res.status(409).json({ message: "Capacité insuffisante pour ce type de ticket." });
+    if (
+      ticketType.capacity != null &&
+      soldCount + qty > Number(ticketType.capacity)
+    ) {
+      return res
+        .status(409)
+        .json({ message: "Capacité insuffisante pour ce type de ticket." });
     }
 
     const totalFcfa = Number(ticketType.priceFcfa || 0) * qty;
     const order = await prisma.$transaction(async (tx) => {
+      await inventory.lockEvent(tx, ticketType.eventId);
       const savedOrder = await tx.ticketOrder.create({
         data: {
           countryId: req.countryId,
@@ -132,7 +179,10 @@ async function createCashOrder(req, res) {
           paidAt: new Date(),
           note: note ? String(note).trim() : "Vente ticket espèces au guichet.",
         },
-        include: { ticketType: true, tickets: { include: { ticketType: true } } },
+        include: {
+          ticketType: true,
+          tickets: { include: { ticketType: true } },
+        },
       });
 
       await ensureTicketsActivatedForPaidOrder(tx, savedOrder);
@@ -142,11 +192,20 @@ async function createCashOrder(req, res) {
       });
     });
 
-    const emailResult = await sendTicketOrderEmail({ order, publicUrl: publicFrontendBaseUrl(req) });
-    return res.status(201).json({ ...order, emailSent: Boolean(emailResult.sent), emailResult });
+    const emailResult = await sendTicketOrderEmail({
+      order,
+      publicUrl: publicFrontendBaseUrl(req),
+    });
+    return res
+      .status(201)
+      .json({ ...order, emailSent: Boolean(emailResult.sent), emailResult });
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("ticketEvents.createCashOrder error:", error);
-    return res.status(500).json({ message: "Erreur serveur (createCashOrder)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (createCashOrder)" });
   }
 }
 
@@ -156,23 +215,58 @@ async function markOrderPaid(req, res) {
       where: { id: req.params.orderId, countryId: req.countryId },
       include: { ticketType: true, tickets: { include: { ticketType: true } } },
     });
-    if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande billet introuvable" });
     if (order.status === "CANCELLED" || order.status === "EXPIRED") {
-      return res.status(400).json({ message: "Cette commande ne peut plus être encaissée." });
+      return res
+        .status(400)
+        .json({ message: "Cette commande ne peut plus être encaissée." });
     }
 
     const { paymentReference, paymentMethod, note } = req.body || {};
-    const normalizedPaymentMethod = paymentMethod ? String(paymentMethod).trim().toUpperCase() : "CASH";
+    const normalizedPaymentMethod = paymentMethod
+      ? String(paymentMethod).trim().toUpperCase()
+      : "CASH";
     const updated = await prisma.$transaction(async (tx) => {
-      await ensureTicketsActivatedForPaidOrder(tx, order);
+      await inventory.lockEvent(tx, order.eventId);
+      await inventory.lockOrder(tx, order.id);
+      const current = await tx.ticketOrder.findUnique({
+        where: { id: order.id },
+      });
+      if (["CANCELLED", "EXPIRED"].includes(current.status))
+        inventory.fail(
+          "Cet achat a changé. Actualisez avant de continuer.",
+          409,
+        );
+      const resolvedMode =
+        current.status === "PAID"
+          ? current.paymentMethod
+          : normalizedPaymentMethod;
+      const pricing =
+        require("../../../payments/payment-pricing").computePaymentPricing({
+          paymentMode: resolvedMode,
+          orderTotalFcfa: current.totalFcfa,
+        });
+      await ensureTicketsActivatedForPaidOrder(tx, current);
       return tx.ticketOrder.update({
         where: { id: order.id },
         data: {
           status: "PAID",
           paymentStatus: "SUCCEEDED",
-          paymentReference: paymentReference ? String(paymentReference).trim() : order.paymentReference,
-          paymentMethod: normalizedPaymentMethod,
-          paymentProvider: normalizedPaymentMethod,
+          paymentReference: paymentReference
+            ? String(paymentReference).trim()
+            : order.paymentReference,
+          paymentMethod: resolvedMode,
+          paymentProvider: resolvedMode,
+          ticketIssueCode: null,
+          paymentServiceFeeFcfa:
+            current.status === "PAID"
+              ? current.paymentServiceFeeFcfa
+              : pricing.paymentServiceFeeFcfa,
+          amountToPayFcfa:
+            current.status === "PAID"
+              ? current.amountToPayFcfa
+              : pricing.amountToPayFcfa,
           paidAt: order.paidAt || new Date(),
           note: note ? String(note).trim() : order.note,
         },
@@ -181,7 +275,10 @@ async function markOrderPaid(req, res) {
     });
 
     if (updated.buyerEmail || updated.holderEmail) {
-      sendTicketOrderEmail({ order: updated, publicUrl: publicFrontendBaseUrl(req) }).catch((emailError) => {
+      sendTicketOrderEmail({
+        order: updated,
+        publicUrl: publicFrontendBaseUrl(req),
+      }).catch((emailError) => {
         console.warn("ticket cash payment email send failed", {
           orderId: updated.id,
           error: emailError?.message,
@@ -191,6 +288,8 @@ async function markOrderPaid(req, res) {
 
     return res.json(updated);
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("ticketEvents.markOrderPaid error:", error);
     return res.status(500).json({ message: "Erreur serveur (markOrderPaid)" });
   }
@@ -207,13 +306,16 @@ async function syncOrderWavePayment(req, res) {
         paymentProvider: true,
       },
     });
-    if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande billet introuvable" });
 
     const isWaveOrder =
       String(order.paymentMethod || "").toUpperCase() === "WAVE" ||
       String(order.paymentProvider || "").toUpperCase() === "WAVE";
     if (!isWaveOrder) {
-      return res.status(400).json({ message: "Cette commande ticket n'est pas une commande Wave." });
+      return res.status(400).json({
+        message: "Cette commande ticket n'est pas une commande Wave.",
+      });
     }
 
     const result = await ticketWavePaymentService.syncTicketWavePaymentStatus({
@@ -223,10 +325,12 @@ async function syncOrderWavePayment(req, res) {
 
     return res.json(result.order || result);
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("ticketEvents.syncOrderWavePayment error:", error);
-    return res
-      .status(error.statusCode || 500)
-      .json({ message: error.message || "Erreur serveur (syncOrderWavePayment)" });
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Erreur serveur (syncOrderWavePayment)",
+    });
   }
 }
 
@@ -236,16 +340,31 @@ async function cancelOrder(req, res) {
       where: { id: req.params.orderId, countryId: req.countryId },
       include: { tickets: true },
     });
-    if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande billet introuvable" });
     if (order.status === "PAID") {
-      return res.status(400).json({ message: "Une commande payée ne peut pas être annulée ici." });
+      return res
+        .status(400)
+        .json({ message: "Une commande payée ne peut pas être annulée ici." });
     }
     if (order.status === "CANCELLED" || order.status === "EXPIRED") {
-      return res.status(400).json({ message: "Cette commande est déjà dans un état terminal." });
+      return res
+        .status(400)
+        .json({ message: "Cette commande est déjà dans un état terminal." });
     }
 
     const { note } = req.body || {};
     const updated = await prisma.$transaction(async (tx) => {
+      await inventory.lockEvent(tx, order.eventId);
+      await inventory.lockOrder(tx, order.id);
+      const current = await tx.ticketOrder.findUnique({
+        where: { id: order.id },
+      });
+      if (current.status === "PAID")
+        inventory.fail(
+          "Le paiement a été confirmé. Cet achat ne peut plus être annulé.",
+          409,
+        );
       await tx.ticket.updateMany({
         where: { orderId: order.id, status: "RESERVED" },
         data: { status: "CANCELLED" },
@@ -266,6 +385,8 @@ async function cancelOrder(req, res) {
 
     return res.json(updated);
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("ticketEvents.cancelOrder error:", error);
     return res.status(500).json({ message: "Erreur serveur (cancelOrder)" });
   }
@@ -273,9 +394,13 @@ async function cancelOrder(req, res) {
 
 async function resendOrderTicketsEmail(req, res) {
   try {
-    const requestedEmail = normalizeEmail(req.body?.email || req.body?.recipientEmail || "");
+    const requestedEmail = normalizeEmail(
+      req.body?.email || req.body?.recipientEmail || "",
+    );
     if ((req.body?.email || req.body?.recipientEmail) && !requestedEmail) {
-      return res.status(400).json({ message: "Adresse email de renvoi invalide." });
+      return res
+        .status(400)
+        .json({ message: "Adresse email de renvoi invalide." });
     }
 
     const order = await prisma.ticketOrder.findFirst({
@@ -287,9 +412,12 @@ async function resendOrderTicketsEmail(req, res) {
         tickets: { include: { ticketType: true } },
       },
     });
-    if (!order) return res.status(404).json({ message: "Commande billet introuvable" });
+    if (!order)
+      return res.status(404).json({ message: "Commande billet introuvable" });
     if (order.status !== "PAID") {
-      return res.status(400).json({ message: "Seules les commandes payées peuvent être renvoyées." });
+      return res.status(400).json({
+        message: "Seules les commandes payées peuvent être renvoyées.",
+      });
     }
 
     const result = await sendTicketOrderEmail({
@@ -299,17 +427,26 @@ async function resendOrderTicketsEmail(req, res) {
     });
     if (!result.sent) {
       return res.status(400).json({
-        message: result.reason === "NO_EMAIL"
-          ? "Aucune adresse email n'est associée à cette commande."
-          : "Email non envoyé.",
+        message:
+          result.reason === "NO_EMAIL"
+            ? "Aucune adresse email n'est associée à cette commande."
+            : "Email non envoyé.",
         result,
       });
     }
 
-    return res.json({ ok: true, sentTo: result.to, recipientOverridden: Boolean(requestedEmail) });
+    return res.json({
+      ok: true,
+      sentTo: result.to,
+      recipientOverridden: Boolean(requestedEmail),
+    });
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("ticketEvents.resendOrderTicketsEmail error:", error);
-    return res.status(500).json({ message: "Erreur serveur (resendOrderTicketsEmail)" });
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (resendOrderTicketsEmail)" });
   }
 }
 
@@ -326,8 +463,13 @@ async function expireOrders(req, res) {
       eventId: eventId ? String(eventId) : null,
     });
 
-    return res.json({ expired: result.expiredCount, skippedPaid: result.skippedPaidCount });
+    return res.json({
+      expired: result.expiredCount,
+      skippedPaid: result.skippedPaidCount,
+    });
   } catch (error) {
+    if (error.statusCode)
+      return res.status(error.statusCode).json({ message: error.message });
     console.error("ticketEvents.expireOrders error:", error);
     return res.status(500).json({ message: "Erreur serveur (expireOrders)" });
   }

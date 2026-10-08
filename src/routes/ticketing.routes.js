@@ -16,7 +16,7 @@ const router = express.Router();
 const orderLookupLimiter = createRateLimiter({
   keyPrefix: "ticketing-order-lookup",
   windowMs: 10 * 60 * 1000,
-  max: 20,
+  max: 120,
 });
 
 /** Création de commande (avant tout paiement) : 10 / min / IP. */
@@ -51,9 +51,31 @@ router.use(resolveCountry);
 
 router.get("/events", ticketingController.listPublicEvents);
 router.get("/events/:slug", ticketingController.getPublicEvent);
-router.post("/orders", orderCreateLimiter, ticketingController.createTicketOrder);
-router.post("/orders/recover", orderRecoverLimiter, ticketingController.recoverTicketOrder);
-router.get("/orders/:orderNumber", orderLookupLimiter, ticketingController.getTicketOrder);
+router.post(
+  "/events/:slug/quote",
+  createRateLimiter({ keyPrefix: "ticket-quote", windowMs: 60000, max: 90 }),
+  ticketingController.quote,
+);
+router.post(
+  "/orders",
+  orderCreateLimiter,
+  ticketingController.createTicketOrder,
+);
+router.post(
+  "/orders/recover",
+  orderRecoverLimiter,
+  ticketingController.recoverTicketOrder,
+);
+router.post(
+  "/orders/resume",
+  orderLookupLimiter,
+  ticketingController.resumeTicketOrder,
+);
+router.get(
+  "/orders/:orderNumber",
+  orderLookupLimiter,
+  ticketingController.getTicketOrder,
+);
 router.post(
   "/orders/:orderNumber/wave/initiate",
   waveInitiateLimiter,

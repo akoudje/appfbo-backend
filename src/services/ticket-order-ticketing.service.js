@@ -36,7 +36,10 @@ function ticketOrderNumber() {
 function getTicketOrderAccessSecretCandidates() {
   const seen = new Set();
   const candidates = [];
-  for (const value of [process.env.CUSTOMER_JWT_SECRET, process.env.JWT_SECRET]) {
+  for (const value of [
+    process.env.CUSTOMER_JWT_SECRET,
+    process.env.JWT_SECRET,
+  ]) {
     const trimmed = String(value || "").trim();
     if (trimmed && !seen.has(trimmed)) {
       seen.add(trimmed);
@@ -49,7 +52,11 @@ function getTicketOrderAccessSecretCandidates() {
 function computeTicketOrderAccessToken(orderNumber, secret) {
   return crypto
     .createHmac("sha256", secret)
-    .update(String(orderNumber || "").trim().toUpperCase())
+    .update(
+      String(orderNumber || "")
+        .trim()
+        .toUpperCase(),
+    )
     .digest("base64url");
 }
 
@@ -70,7 +77,10 @@ function verifyTicketOrderAccessToken(orderNumber, token) {
     const expected = computeTicketOrderAccessToken(orderNumber, secret);
     const expectedBuf = Buffer.from(expected);
     const providedBuf = Buffer.from(provided);
-    if (expectedBuf.length === providedBuf.length && crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+    if (
+      expectedBuf.length === providedBuf.length &&
+      crypto.timingSafeEqual(expectedBuf, providedBuf)
+    ) {
       return true;
     }
   }
@@ -87,52 +97,47 @@ function paidOrderTicketInclude() {
 }
 
 async function ensureTicketsActivatedForPaidOrder(tx, order) {
-  // Verrou de ligne PostgreSQL : le webhook Wave et un sync manuel (bouton
-  // admin, retour client sur la page de paiement) peuvent invoquer cette
-  // fonction quasi simultanément pour la même commande, chacun avec son
-  // propre snapshot `order.tickets` chargé avant l'ouverture de sa
-  // transaction. Sans ce verrou, les deux peuvent constater "aucun billet"
-  // et en générer chacun un jeu complet. Le FOR UPDATE sérialise les appels
-  // concurrents sur cette ligne : le second attend que le premier committe,
-  // puis relit un compte de billets à jour avant de décider quoi que ce
-  // soit.
-  await tx.$queryRaw`SELECT id FROM "TicketOrder" WHERE id = ${order.id} FOR UPDATE`;
-
-  const existingTicketsCount = await tx.ticket.count({ where: { orderId: order.id } });
-  if (existingTicketsCount > 0) {
-    await tx.ticket.updateMany({
-      where: { orderId: order.id, status: "RESERVED" },
-      data: { status: "ACTIVE" },
-    });
-    return;
-  }
-
-  const ticketTypeId = order.ticketTypeId || order.ticketType?.id || null;
-  if (!ticketTypeId) {
-    throw new Error("Type de ticket introuvable pour générer les billets.");
-  }
-
-  const quantity = Math.max(1, Math.min(50, Number.parseInt(order.quantity, 10) || 1));
-  const holderFullName = order.holderFullName || order.buyerFullName;
-  const holderPhone = order.holderPhone || order.buyerPhone || null;
-  const holderEmail = order.holderEmail || order.buyerEmail || null;
-
-  for (let i = 0; i < quantity; i += 1) {
+  const inventory = require("./ticket-inventory.service");
+  await inventory.lockEvent(tx, order.eventId);
+  await inventory.lockOrder(tx, order.id);
+  const current = await tx.ticketOrder.findUnique({
+    where: { id: order.id },
+    include: { event: true, ticketType: true },
+  });
+  if (!current?.ticketType)
+    inventory.fail("Le type de billet est indisponible.", 409);
+  const qty = inventory.quantity(current.quantity);
+  const active = await tx.ticket.count({
+    where: { orderId: current.id, status: { in: ["ACTIVE", "USED"] } },
+  });
+  if (active >= qty) return;
+  await inventory.assertCapacity(
+    tx,
+    current.event,
+    current.ticketType,
+    qty,
+    current.id,
+  );
+  const existing = await tx.ticket.count({ where: { orderId: current.id } });
+  await tx.ticket.updateMany({
+    where: { orderId: current.id, status: { in: ["RESERVED", "CANCELLED"] } },
+    data: { status: "ACTIVE" },
+  });
+  for (let i = existing; i < qty; i++)
     await tx.ticket.create({
       data: {
-        countryId: order.countryId,
-        eventId: order.eventId,
-        ticketTypeId,
-        orderId: order.id,
+        countryId: current.countryId,
+        eventId: current.eventId,
+        ticketTypeId: current.ticketTypeId,
+        orderId: current.id,
         ticketCode: ticketCode(),
         qrToken: ticketQrToken(),
-        holderFullName,
-        holderPhone,
-        holderEmail,
+        holderFullName: current.holderFullName || current.buyerFullName,
+        holderPhone: current.holderPhone || current.buyerPhone || null,
+        holderEmail: current.holderEmail || current.buyerEmail || null,
         status: "ACTIVE",
       },
     });
-  }
 }
 
 module.exports = {
