@@ -1,13 +1,18 @@
 const prisma = require("../prisma");
+const inventory = require("./ticket-inventory.service");
 const paymentOrchestrator = require("../payments/payment-orchestrator.service");
-const { mapWaveSessionToInternal } = require("../payments/payment-status.mapper");
+const {
+  mapWaveSessionToInternal,
+} = require("../payments/payment-status.mapper");
 const { computePaymentPricing } = require("../payments/payment-pricing");
 const {
   ensureTicketsActivatedForPaidOrder,
   paidOrderTicketInclude,
   signTicketOrderAccessToken,
 } = require("./ticket-order-ticketing.service");
-const { sendTicketOrderEmail } = require("./ticket-email-notifications.service");
+const {
+  sendTicketOrderEmail,
+} = require("./ticket-email-notifications.service");
 const { publicFrontendBaseUrl } = require("./public-url.service");
 const {
   extractWaveProviderMetadata,
@@ -25,7 +30,11 @@ function buildTicketOrderUrl(orderNumber, countryCode = "CIV", req = null) {
 }
 
 function buildWaveUrls(order, req = null) {
-  const base = buildTicketOrderUrl(order.orderNumber, order.country?.code || "CIV", req);
+  const base = buildTicketOrderUrl(
+    order.orderNumber,
+    order.country?.code || "CIV",
+    req,
+  );
   return {
     successUrl: `${base}&wave=success`,
     errorUrl: `${base}&wave=error`,
@@ -36,10 +45,14 @@ function extractProviderMetadata(response = {}) {
   const raw = response.raw || response || {};
   const metadata = extractWaveProviderMetadata(raw);
   return {
-    providerSessionId: response.providerSessionId || metadata.providerSessionId || null,
-    providerTransactionId: response.providerTransactionId || metadata.providerTransactionId || null,
-    providerPayerPhone: response.providerPayerPhone || metadata.providerPayerPhone || null,
-    providerStatusLabel: response.providerStatusLabel || metadata.providerStatusLabel || null,
+    providerSessionId:
+      response.providerSessionId || metadata.providerSessionId || null,
+    providerTransactionId:
+      response.providerTransactionId || metadata.providerTransactionId || null,
+    providerPayerPhone:
+      response.providerPayerPhone || metadata.providerPayerPhone || null,
+    providerStatusLabel:
+      response.providerStatusLabel || metadata.providerStatusLabel || null,
     completedAt: metadata.completedAt || null,
   };
 }
@@ -83,7 +96,9 @@ async function findTicketOrderByNumber({ req, orderNumber }) {
   return prisma.ticketOrder.findFirst({
     where: {
       countryId: req.countryId,
-      orderNumber: String(orderNumber || "").trim().toUpperCase(),
+      orderNumber: String(orderNumber || "")
+        .trim()
+        .toUpperCase(),
     },
     include: {
       country: { select: { code: true } },
@@ -95,90 +110,110 @@ async function findTicketOrderByNumber({ req, orderNumber }) {
 }
 
 async function initiateTicketWavePayment({ req, orderNumber }) {
-  const order = await findTicketOrderByNumber({ req, orderNumber });
-  if (!order) {
-    const err = new Error("Commande billet introuvable");
-    err.statusCode = 404;
-    throw err;
-  }
-  if (order.status === "PAID" || order.paymentStatus === "SUCCEEDED") {
-    const err = new Error("Paiement deja confirme pour cet achat");
-    err.statusCode = 409;
-    throw err;
-  }
-  if (!["PENDING_PAYMENT", "DRAFT"].includes(order.status)) {
-    const err = new Error(`Impossible d'initier Wave depuis le statut ${order.status}`);
-    err.statusCode = 400;
-    throw err;
-  }
-  if (order.expiresAt && new Date(order.expiresAt).getTime() < Date.now()) {
-    await expireTicketOrder(order.id);
-    const err = new Error("Cet achat ticket a expire");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  // Comme pour les précommandes (voir payment-pricing.js), Wave prélève 1%
-  // de frais de service : ce montant est répercuté sur l'acheteur plutôt
-  // qu'absorbé, en l'ajoutant au prix du billet au moment du paiement.
-  const { amountToPayFcfa: amountFcfa, paymentServiceFeeFcfa } = computePaymentPricing({
-    preorderPaymentMode: "WAVE",
-    orderTotalFcfa: order.totalFcfa,
-  });
-  if (!Number.isFinite(amountFcfa) || amountFcfa <= 0) {
-    const err = new Error("Montant ticket invalide");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const urls = buildWaveUrls(order, req);
-  const simulation = isWaveSimulationEnabled();
-  const providerResponse = simulation
-    ? buildSimulatedProviderResponse({ order, successUrl: urls.successUrl })
-    : await paymentOrchestrator.createCheckoutSession("WAVE", {
-        amountFcfa,
-        successUrl: urls.successUrl,
-        errorUrl: urls.errorUrl,
-        clientReference: `TICKET:${order.id}`,
+  const snapshot = await findTicketOrderByNumber({ req, orderNumber });
+  if (!snapshot) inventory.fail("Achat introuvable.", 404);
+  return prisma.$transaction(
+    async (tx) => {
+      await inventory.lockOrder(tx, snapshot.id);
+      const order = await tx.ticketOrder.findUnique({
+        where: { id: snapshot.id },
+        include: paidOrderTicketInclude(),
       });
-  const metadata = extractProviderMetadata(providerResponse);
-
-  const updated = await prisma.ticketOrder.update({
-    where: { id: order.id },
-    data: {
-      status: "PENDING_PAYMENT",
-      paymentMethod: "WAVE",
-      paymentProvider: "WAVE",
-      paymentStatus: "PENDING_CUSTOMER_ACTION",
-      providerSessionId: metadata.providerSessionId,
-      providerTransactionId: metadata.providerTransactionId,
-      providerCheckoutUrl: providerResponse.checkoutUrl || null,
-      providerLaunchUrl: providerResponse.providerLaunchUrl || providerResponse.checkoutUrl || null,
-      providerPayerPhone: metadata.providerPayerPhone || null,
-      providerStatusLabel:
-        metadata.providerStatusLabel ||
-        providerResponse.paymentStatus ||
-        providerResponse.checkoutStatus ||
-        null,
-      providerPayloadJson: providerResponse.raw || null,
+      if (order.status === "PAID")
+        return { ok: true, order, checkoutUrl: null, alreadyPaid: true };
+      if (!["DRAFT", "PENDING_PAYMENT"].includes(order.status))
+        inventory.fail(
+          "Cet achat ne peut plus être payé. Retrouvez vos tickets ou démarrez un nouvel achat.",
+          409,
+        );
+      if (order.expiresAt && new Date(order.expiresAt) <= new Date())
+        inventory.fail(
+          "Le délai de paiement est écoulé. Vérifiez le statut d’un paiement déjà effectué.",
+          409,
+        );
+      const pricing = computePaymentPricing({
+        paymentMode: "WAVE",
+        orderTotalFcfa: order.totalFcfa,
+      });
+      const amountFcfa = order.amountToPayFcfa ?? pricing.amountToPayFcfa,
+        paymentServiceFeeFcfa =
+          order.paymentServiceFeeFcfa ?? pricing.paymentServiceFeeFcfa;
+      if (!Number.isSafeInteger(amountFcfa) || amountFcfa <= 0)
+        inventory.fail("Montant de paiement invalide.");
+      const currentUrl = order.providerLaunchUrl || order.providerCheckoutUrl;
+      if (
+        order.providerSessionId &&
+        currentUrl &&
+        order.paymentStatus !== "FAILED"
+      )
+        return {
+          ok: true,
+          order,
+          checkoutUrl: currentUrl,
+          reused: true,
+          paymentServiceFeeFcfa,
+          amountToPayFcfa: amountFcfa,
+        };
+      const urls = buildWaveUrls(order, req),
+        simulation = isWaveSimulationEnabled();
+      const providerResponse = simulation
+        ? buildSimulatedProviderResponse({ order, successUrl: urls.successUrl })
+        : await paymentOrchestrator.createCheckoutSession("WAVE", {
+            amountFcfa,
+            successUrl: urls.successUrl,
+            errorUrl: urls.errorUrl,
+            clientReference: `TICKET:${order.id}`,
+          });
+      const metadata = extractProviderMetadata(providerResponse);
+      if (!metadata.providerSessionId)
+        inventory.fail(
+          "Wave n’a pas pu préparer le paiement. Réessayez depuis votre achat.",
+          502,
+        );
+      const updated = await tx.ticketOrder.update({
+        where: { id: order.id },
+        data: {
+          paymentMethod: "WAVE",
+          paymentProvider: "WAVE",
+          paymentStatus: "PENDING_CUSTOMER_ACTION",
+          providerSessionId: metadata.providerSessionId,
+          providerTransactionId: metadata.providerTransactionId,
+          providerCheckoutUrl: providerResponse.checkoutUrl || null,
+          providerLaunchUrl:
+            providerResponse.providerLaunchUrl ||
+            providerResponse.checkoutUrl ||
+            null,
+          providerPayerPhone: metadata.providerPayerPhone,
+          providerStatusLabel: metadata.providerStatusLabel,
+          providerPayloadJson: providerResponse.raw || {},
+          paymentServiceFeeFcfa,
+          amountToPayFcfa: amountFcfa,
+        },
+        include: paidOrderTicketInclude(),
+      });
+      return {
+        ok: true,
+        simulated: simulation,
+        order: updated,
+        paymentServiceFeeFcfa,
+        amountToPayFcfa: amountFcfa,
+        checkoutUrl: updated.providerLaunchUrl || updated.providerCheckoutUrl,
+      };
     },
-    include: {
-      ...paidOrderTicketInclude(),
-    },
-  });
-
-  return {
-    ok: true,
-    simulated: simulation,
-    order: updated,
-    paymentServiceFeeFcfa,
-    amountToPayFcfa: amountFcfa,
-    checkoutUrl: updated.providerCheckoutUrl || updated.providerLaunchUrl,
-  };
+    { timeout: 45000, maxWait: 10000 },
+  );
 }
 
 async function expireTicketOrder(orderId) {
+  const snapshot = await prisma.ticketOrder.findUnique({
+    where: { id: orderId },
+  });
+  if (!snapshot) return null;
   return prisma.$transaction(async (tx) => {
+    await inventory.lockEvent(tx, snapshot.eventId);
+    await inventory.lockOrder(tx, orderId);
+    const current = await tx.ticketOrder.findUnique({ where: { id: orderId } });
+    if (!["DRAFT", "PENDING_PAYMENT"].includes(current.status)) return current;
     await tx.ticket.updateMany({
       where: { orderId, status: "RESERVED" },
       data: { status: "CANCELLED" },
@@ -189,7 +224,6 @@ async function expireTicketOrder(orderId) {
     });
   });
 }
-
 async function sendTicketEmailAfterPaid({ order, req = null }) {
   try {
     const result = await sendTicketOrderEmail({
@@ -213,7 +247,11 @@ async function sendTicketEmailAfterPaid({ order, req = null }) {
   }
 }
 
-async function applyWaveStatusToTicketOrder({ order, providerStatusRaw, req = null }) {
+async function applyWaveStatusToTicketOrder({
+  order,
+  providerStatusRaw,
+  req = null,
+}) {
   const mapped = mapWaveSessionToInternal(providerStatusRaw || {});
   const metadata = extractProviderMetadata({ raw: providerStatusRaw || {} });
   let detailsRaw = null;
@@ -232,10 +270,13 @@ async function applyWaveStatusToTicketOrder({ order, providerStatusRaw, req = nu
 
     if (lookupSessionId || lookupTransactionId) {
       try {
-        const details = await paymentOrchestrator.getCheckoutSessionDetails("WAVE", {
-          providerSessionId: lookupSessionId || null,
-          providerTransactionId: lookupTransactionId || null,
-        });
+        const details = await paymentOrchestrator.getCheckoutSessionDetails(
+          "WAVE",
+          {
+            providerSessionId: lookupSessionId || null,
+            providerTransactionId: lookupTransactionId || null,
+          },
+        );
         detailsRaw = details?.raw || null;
         detailsMetadata = extractProviderMetadata({ raw: detailsRaw || {} });
       } catch (error) {
@@ -253,11 +294,17 @@ async function applyWaveStatusToTicketOrder({ order, providerStatusRaw, req = nu
     providerSessionId:
       detailsMetadata?.providerSessionId || metadata.providerSessionId || null,
     providerTransactionId:
-      detailsMetadata?.providerTransactionId || metadata.providerTransactionId || null,
+      detailsMetadata?.providerTransactionId ||
+      metadata.providerTransactionId ||
+      null,
     providerPayerPhone:
-      detailsMetadata?.providerPayerPhone || metadata.providerPayerPhone || null,
+      detailsMetadata?.providerPayerPhone ||
+      metadata.providerPayerPhone ||
+      null,
     providerStatusLabel:
-      detailsMetadata?.providerStatusLabel || metadata.providerStatusLabel || null,
+      detailsMetadata?.providerStatusLabel ||
+      metadata.providerStatusLabel ||
+      null,
     completedAt: detailsMetadata?.completedAt || metadata.completedAt || null,
   };
   const providerPayloadForPersist = detailsRaw
@@ -280,26 +327,55 @@ async function applyWaveStatusToTicketOrder({ order, providerStatusRaw, req = nu
     !Number.isNaN(completedAtDate.getTime())
       ? completedAtDate
       : now;
-  const shouldSendTicketEmail = Boolean(mapped.markOrderPaid && order.status !== "PAID");
+  let shouldSendTicketEmail = false;
 
   const updated = await prisma.$transaction(async (tx) => {
+    await inventory.lockEvent(tx, order.eventId);
+    await inventory.lockOrder(tx, order.id);
+    const current = await tx.ticketOrder.findUnique({
+      where: { id: order.id },
+      include: paidOrderTicketInclude(),
+    });
+    if (
+      current.status === "PAID" &&
+      (!mapped.markOrderPaid || !current.ticketIssueCode)
+    )
+      return current;
+    if (
+      ["CANCELLED", "EXPIRED"].includes(current.status) &&
+      !mapped.markOrderPaid
+    )
+      return current;
+    order = current;
     const data = {
       paymentProvider: "WAVE",
       paymentStatus: mapped.paymentStatus || order.paymentStatus,
-      providerSessionId: resolvedMetadata.providerSessionId || order.providerSessionId,
+      providerSessionId:
+        resolvedMetadata.providerSessionId || order.providerSessionId,
       providerTransactionId:
         resolvedMetadata.providerTransactionId || order.providerTransactionId,
-      providerPayerPhone: resolvedMetadata.providerPayerPhone || order.providerPayerPhone,
+      providerPayerPhone:
+        resolvedMetadata.providerPayerPhone || order.providerPayerPhone,
       providerStatusLabel:
         resolvedMetadata.providerStatusLabel ||
         providerStatusRaw?.payment_status ||
         providerStatusRaw?.checkout_status ||
         order.providerStatusLabel,
-      providerPayloadJson: providerPayloadForPersist || order.providerPayloadJson,
+      providerPayloadJson:
+        providerPayloadForPersist || order.providerPayloadJson,
     };
 
     if (mapped.markOrderPaid) {
-      await ensureTicketsActivatedForPaidOrder(tx, order);
+      try {
+        await ensureTicketsActivatedForPaidOrder(tx, order);
+        data.ticketIssueCode = null;
+      } catch (error) {
+        if (error.code !== "CAPACITY_CONFLICT") throw error;
+        data.ticketIssueCode = "CAPACITY_CONFLICT";
+      }
+      shouldSendTicketEmail =
+        !data.ticketIssueCode &&
+        (current.status !== "PAID" || !!current.ticketIssueCode);
       data.status = "PAID";
       data.paidAt = order.paidAt || paidAtValue;
       data.paymentReference =
@@ -334,6 +410,22 @@ async function applyWaveStatusToTicketOrder({ order, providerStatusRaw, req = nu
   return updated;
 }
 
+async function repairPaidTickets(order){
+ let notify=false;
+ const updated=await prisma.$transaction(async tx=>{
+   await inventory.lockEvent(tx,order.eventId);await inventory.lockOrder(tx,order.id);
+   const current=await tx.ticketOrder.findUnique({where:{id:order.id},include:paidOrderTicketInclude()});
+   if(current.status!=='PAID')return current;
+   const count=current.tickets.filter(t=>['ACTIVE','USED'].includes(t.status)).length;
+   if(count>=current.quantity&&!current.ticketIssueCode)return current;
+   let ticketIssueCode=null;
+   try{await ensureTicketsActivatedForPaidOrder(tx,current);notify=count<current.quantity;}
+   catch(error){if(error.code!=='CAPACITY_CONFLICT')throw error;ticketIssueCode=error.code;}
+   return tx.ticketOrder.update({where:{id:current.id},data:{ticketIssueCode},include:paidOrderTicketInclude()});
+ });
+ if(notify)await sendTicketEmailAfterPaid({order:updated});
+ return updated;
+}
 async function syncTicketWavePaymentStatus({ req, orderNumber }) {
   const order = await findTicketOrderByNumber({ req, orderNumber });
   if (!order) {
@@ -341,15 +433,20 @@ async function syncTicketWavePaymentStatus({ req, orderNumber }) {
     err.statusCode = 404;
     throw err;
   }
+  if(order.status==='PAID')return {ok:true,order:await repairPaidTickets(order)};
   if (!order.providerSessionId) {
     return { ok: true, order };
   }
 
-  const providerStatusRaw = String(order.providerSessionId || "").startsWith("ticket_wave_sim_")
+  const providerStatusRaw = String(order.providerSessionId || "").startsWith(
+    "ticket_wave_sim_",
+  )
     ? simulatedStatusPayload(order)
-    : (await paymentOrchestrator.getCheckoutSession("WAVE", {
-        providerSessionId: order.providerSessionId,
-      })).raw || {};
+    : (
+        await paymentOrchestrator.getCheckoutSession("WAVE", {
+          providerSessionId: order.providerSessionId,
+        })
+      ).raw || {};
 
   const updated = await applyWaveStatusToTicketOrder({
     order,
@@ -360,7 +457,10 @@ async function syncTicketWavePaymentStatus({ req, orderNumber }) {
   return { ok: true, order: updated };
 }
 
-async function syncTicketWaveOrderFromWebhook({ ticketOrderId, providerStatusRaw }) {
+async function syncTicketWaveOrderFromWebhook({
+  ticketOrderId,
+  providerStatusRaw,
+}) {
   const order = await prisma.ticketOrder.findUnique({
     where: { id: ticketOrderId },
     include: {
@@ -378,4 +478,5 @@ module.exports = {
   initiateTicketWavePayment,
   syncTicketWavePaymentStatus,
   syncTicketWaveOrderFromWebhook,
+  expireTicketOrder,
 };

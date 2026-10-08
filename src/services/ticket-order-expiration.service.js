@@ -16,18 +16,34 @@ function parsePositiveInt(value, fallback) {
 }
 
 function isAutoExpireEnabled() {
-  return String(process.env.TICKET_ORDER_AUTO_EXPIRE_ENABLED || "true").toLowerCase() !== "false";
+  return (
+    String(
+      process.env.TICKET_ORDER_AUTO_EXPIRE_ENABLED || "true",
+    ).toLowerCase() !== "false"
+  );
 }
 
 function getSchedulerEveryMinutes() {
-  return Math.max(1, parsePositiveInt(process.env.TICKET_ORDER_AUTO_EXPIRE_CHECK_EVERY_MINUTES, 5));
+  return Math.max(
+    1,
+    parsePositiveInt(
+      process.env.TICKET_ORDER_AUTO_EXPIRE_CHECK_EVERY_MINUTES,
+      5,
+    ),
+  );
 }
 
 // Marge appliquée après expiresAt avant d'annuler pour de bon : laisse le
 // temps à un paiement Wave initié in extremis de se finaliser côté
 // opérateur avant que le webhook (ou notre sync) ne le confirme.
 function getWaveFinalizationGraceMinutes() {
-  return Math.max(0, parsePositiveInt(process.env.TICKET_ORDER_WAVE_FINALIZATION_GRACE_MINUTES, 15));
+  return Math.max(
+    0,
+    parsePositiveInt(
+      process.env.TICKET_ORDER_WAVE_FINALIZATION_GRACE_MINUTES,
+      15,
+    ),
+  );
 }
 
 /**
@@ -38,7 +54,11 @@ function getWaveFinalizationGraceMinutes() {
  * laissée telle quelle plutôt qu'annulée à tort — même garde-fou que
  * cancelPreorderAsExpiredUnpaid pour les précommandes.
  */
-async function expireStaleTicketOrders({ now = new Date(), countryId = null, eventId = null } = {}) {
+async function expireStaleTicketOrders({
+  now = new Date(),
+  countryId = null,
+  eventId = null,
+} = {}) {
   const graceMs = getWaveFinalizationGraceMinutes() * 60 * 1000;
 
   const candidates = await prisma.ticketOrder.findMany({
@@ -60,7 +80,13 @@ async function expireStaleTicketOrders({ now = new Date(), countryId = null, eve
   });
 
   if (!candidates.length) {
-    return { ok: true, checkedAt: now.toISOString(), expiredCount: 0, expired: [], skippedPaidCount: 0 };
+    return {
+      ok: true,
+      checkedAt: now.toISOString(),
+      expiredCount: 0,
+      expired: [],
+      skippedPaidCount: 0,
+    };
   }
 
   const toExpire = [];
@@ -73,11 +99,14 @@ async function expireStaleTicketOrders({ now = new Date(), countryId = null, eve
 
     if (isWaveOrder) {
       try {
-        const syncResult = await ticketWavePaymentService.syncTicketWavePaymentStatus({
-          req: { countryId: order.countryId },
-          orderNumber: order.orderNumber,
-        });
-        const updatedStatus = String(syncResult?.order?.status || "").toUpperCase();
+        const syncResult =
+          await ticketWavePaymentService.syncTicketWavePaymentStatus({
+            req: { countryId: order.countryId },
+            orderNumber: order.orderNumber,
+          });
+        const updatedStatus = String(
+          syncResult?.order?.status || "",
+        ).toUpperCase();
         if (updatedStatus === "PAID") {
           skippedPaid.push(order.orderNumber);
           continue;
@@ -86,10 +115,14 @@ async function expireStaleTicketOrders({ now = new Date(), countryId = null, eve
         // Échec technique du sync (Wave indisponible, etc.) : on n'annule
         // pas la commande pour autant, exactement comme pour les
         // précommandes — le pire cas est un nouveau tick 5 min plus tard.
-        console.warn("[ticket-order-expiration] wave sync before expire failed", {
-          orderNumber: order.orderNumber,
-          message: error?.message || String(error),
-        });
+        console.warn(
+          "[ticket-order-expiration] wave sync before expire failed",
+          {
+            orderNumber: order.orderNumber,
+            message: error?.message || String(error),
+          },
+        );
+        continue;
       }
     }
 
@@ -106,30 +139,26 @@ async function expireStaleTicketOrders({ now = new Date(), countryId = null, eve
     };
   }
 
-  const toExpireIds = toExpire.map((order) => order.id);
-  await prisma.$transaction([
-    prisma.ticket.updateMany({
-      where: { orderId: { in: toExpireIds }, status: "RESERVED" },
-      data: { status: "CANCELLED" },
-    }),
-    prisma.ticketOrder.updateMany({
-      where: { id: { in: toExpireIds } },
-      data: { status: "EXPIRED", paymentStatus: "EXPIRED" },
-    }),
-  ]);
+  const expired = [];
+  for (const order of toExpire) {
+    const updated = await ticketWavePaymentService.expireTicketOrder(order.id);
+    if (updated?.status === "EXPIRED") expired.push(order);
+  }
 
   return {
     ok: true,
     checkedAt: now.toISOString(),
-    expiredCount: toExpire.length,
-    expired: toExpire.map((order) => order.orderNumber),
+    expiredCount: expired.length,
+    expired: expired.map((order) => order.orderNumber),
     skippedPaidCount: skippedPaid.length,
   };
 }
 
 function startTicketOrderAutoExpireScheduler() {
   if (!isAutoExpireEnabled()) {
-    console.info("[ticket-order-expiration] scheduler disabled via TICKET_ORDER_AUTO_EXPIRE_ENABLED");
+    console.info(
+      "[ticket-order-expiration] scheduler disabled via TICKET_ORDER_AUTO_EXPIRE_ENABLED",
+    );
     return null;
   }
 
