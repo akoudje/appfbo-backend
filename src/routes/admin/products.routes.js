@@ -6,17 +6,48 @@ const productPackagingsController = require("../../controllers/admin/productPack
 
 const router = express.Router();
 
-router.get("/", requirePermission(Permission.PRODUCT_READ), productsController.listProducts);
+router.get(
+  "/",
+  requirePermission(Permission.PRODUCT_READ),
+  productsController.listProducts,
+);
 router.post(
   "/copy-from-country",
   requirePermission(Permission.PRODUCT_WRITE),
   productsController.copyProductsFromCountry,
 );
-router.get("/:id", requirePermission(Permission.PRODUCT_READ), productsController.getProductById);
+router.get(
+  "/export",
+  requirePermission(Permission.PRODUCT_READ),
+  requirePermission(Permission.EXPORT_READ),
+  productsController.exportProducts,
+);
+router.get(
+  "/:id/history",
+  requirePermission(Permission.PRODUCT_READ),
+  productsController.history,
+);
+router.get(
+  "/:id",
+  requirePermission(Permission.PRODUCT_READ),
+  productsController.getProductById,
+);
 
-router.post("/", requirePermission(Permission.PRODUCT_WRITE), productsController.createProduct);
-router.put("/:id", requirePermission(Permission.PRODUCT_WRITE), productsController.updateProduct);
-router.delete("/:id", requirePermission(Permission.PRODUCT_WRITE), productsController.deleteProduct);
+router.post(
+  "/",
+  requirePermission(Permission.PRODUCT_WRITE),
+  productsController.createProduct,
+);
+router.put(
+  "/:id",
+  requirePermission(Permission.PRODUCT_WRITE),
+  productsController.updateProduct,
+);
+router.delete(
+  "/:id",
+  requirePermission(Permission.PRODUCT_WRITE),
+  productsController.deleteProduct,
+);
 
 router.post(
   "/import",

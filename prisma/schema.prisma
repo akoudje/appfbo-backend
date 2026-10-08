@@ -2256,3 +2256,16 @@ model CountrySettingsChange {
   createdAt DateTime @default(now())
   @@index([countryId, createdAt])
 }
+
+model ProductAuditLog {
+  id String @id @default(cuid())
+  productId String
+  countryId String
+  actorId String?
+  actorName String?
+  action String
+  changes Json
+  createdAt DateTime @default(now())
+  @@index([productId, countryId, createdAt])
+  @@index([countryId, createdAt])
+}
