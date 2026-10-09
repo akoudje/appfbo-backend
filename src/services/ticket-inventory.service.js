@@ -82,7 +82,7 @@ async function assertCapacity(tx, event, type, qty, excludeOrderId = null) {
 }
 function salesState(event, now = new Date()) {
   if (event.status === "CANCELLED") return "CANCELLED";
-  if (new Date(event.endsAt || event.startsAt) <= now) return "ENDED";
+  if (event.endsAt && new Date(event.endsAt) <= now) return "ENDED";
   if (
     event.status !== "PUBLISHED" ||
     (event.salesCloseAt && new Date(event.salesCloseAt) <= now)

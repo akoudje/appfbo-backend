@@ -312,6 +312,7 @@ function fixture(capacity = 3) {
     db,
     api,
     wave,
+    inventory: load("services/ticket-inventory.service.js"),
     request,
     buy,
     get state() {
@@ -430,12 +431,65 @@ test("invalid quantities, emails and phones do not create purchases", async () =
 test("closed or finished events refuse checkout creation", async () => {
   for (const patch of [
     { salesCloseAt: new Date("2020-01-01") },
-    { startsAt: new Date("2020-01-01") },
+    {
+      startsAt: new Date("2020-01-01T10:00:00Z"),
+      endsAt: new Date("2020-01-01T12:00:00Z"),
+    },
   ]) {
     const f = fixture();
     Object.assign(f.state.events[0], patch);
     const r = await f.buy();
     assert.equal(r.code, 409);
+  }
+});
+test("a published event without an end date stays open after its start", () => {
+  const { salesState } = fixture().inventory;
+  const now = new Date("2026-10-09T18:00:00Z");
+  for (const endsAt of [undefined, null]) {
+    assert.equal(
+      salesState(
+        {
+          status: "PUBLISHED",
+          startsAt: "2026-10-09T17:00:00Z",
+          endsAt,
+        },
+        now,
+      ),
+      "OPEN",
+    );
+  }
+});
+test("an explicit event end closes sales at the exact end time", () => {
+  const { salesState } = fixture().inventory;
+  const now = new Date("2026-10-09T18:00:00Z");
+  const event = { status: "PUBLISHED", startsAt: "2026-10-09T17:00:00Z" };
+  for (const [endsAt, expected] of [
+    ["2026-10-09T19:00:00Z", "OPEN"],
+    ["2026-10-09T18:00:00Z", "ENDED"],
+    ["2026-10-09T17:30:00Z", "ENDED"],
+  ]) {
+    assert.equal(salesState({ ...event, endsAt }, now), expected);
+  }
+});
+test("events without an end date still respect status and sale dates", () => {
+  const { salesState } = fixture().inventory;
+  const now = new Date("2026-10-09T18:00:00Z");
+  const event = {
+    status: "PUBLISHED",
+    startsAt: "2026-10-09T17:00:00Z",
+    endsAt: null,
+  };
+  for (const [patch, expected] of [
+    [{ status: "DRAFT" }, "CLOSED"],
+    [{ status: "CLOSED" }, "CLOSED"],
+    [{ status: "CANCELLED" }, "CANCELLED"],
+    [{ salesOpenAt: "2026-10-09T19:00:00Z" }, "UPCOMING"],
+    [{ salesOpenAt: "2026-10-09T18:00:00Z" }, "OPEN"],
+    [{ salesCloseAt: "2026-10-09T19:00:00Z" }, "OPEN"],
+    [{ salesCloseAt: "2026-10-09T18:00:00Z" }, "CLOSED"],
+    [{ salesCloseAt: "2026-10-09T17:30:00Z" }, "CLOSED"],
+  ]) {
+    assert.equal(salesState({ ...event, ...patch }, now), expected);
   }
 });
 test("quote returns exact price and refuses unavailable places", async () => {
