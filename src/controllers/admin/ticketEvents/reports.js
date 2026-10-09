@@ -3,6 +3,7 @@
 
 const multer = require("multer");
 const prisma = require("../../../prisma");
+const inventory = require("../../../services/ticket-inventory.service");
 const { publicFrontendBaseUrl } = require("../../../services/public-url.service");
 const { normalizeEmail, sendEmail } = require("../../../services/email.service");
 const {
@@ -49,9 +50,14 @@ function uploadRestitutionFileMiddleware(req, res, next) {
 async function buildEventSummaryData(req, eventId) {
   const event = await prisma.ticketEvent.findFirst({
     where: { id: eventId, countryId: req.countryId },
-    select: { id: true, slug: true, title: true, startsAt: true, venueName: true, capacity: true },
+    select: {
+      id: true, slug: true, title: true, startsAt: true, venueName: true, capacity: true,
+      ticketTypes: { select: { id: true, capacity: true, active: true } },
+    },
   });
   if (!event) return null;
+  const seatCounts = await inventory.availability([event], prisma);
+  const availability = inventory.summarizeAvailability(event, seatCounts);
 
   const ticketCounts = await prisma.ticket.groupBy({
     by: ["status"],
@@ -95,14 +101,14 @@ async function buildEventSummaryData(req, eventId) {
 
   return {
     event,
+    availability,
     publicUrl: `${publicFrontendBaseUrl(req)}/events/${encodeURIComponent(event.slug)}`,
     totals: {
       ...totals,
       usedTickets: counts.USED || 0,
       activeTickets: counts.ACTIVE || 0,
       reservedTickets: counts.RESERVED || 0,
-      remainingCapacity: event.capacity == null ? null : Math.max(0,
-        event.capacity - (counts.USED || 0) - (counts.ACTIVE || 0) - (counts.RESERVED || 0)),
+      remainingCapacity: availability.globalRemaining,
       allOrdersCount: orders.length,
       cancelledOrdersCount: orders.filter((o) => o.status === "CANCELLED").length,
       pendingOrdersCount: orders.filter((o) => o.status === "PENDING_PAYMENT" || o.status === "DRAFT").length,

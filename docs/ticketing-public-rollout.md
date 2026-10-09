@@ -64,3 +64,13 @@ Si une catégorie se remplit après actualisation, les autres catégories resten
 Cette compatibilité rétablit le parcours existant pendant un déploiement progressif. Les garanties serveur nouvelles (réservation atomique et reprise par identifiant de tentative) nécessitent toujours la livraison du backend actuel et sa migration. Elle ne remplace pas cette mise à jour.
 
 Tests complémentaires frontend : `node --test ticketing-model.test.mjs ticketing-contracts.test.mjs ticketing-selection.test.mjs`. Contrôle navigateur avec APIs simulées : ancien contrat, contrat actuel, route de devis absente, panne de devis, vente fermée, catégorie épuisée après rafraîchissement, conservation des coordonnées et confirmation du total avant Wave. Aucun achat réel n’est exécuté par ces contrôles.
+
+## Compteur de disponibilités et commandes admin
+
+La synthèse admin fournit `availability.remaining` à partir des capacités des billets actifs, limitées par la capacité globale lorsqu’elle est renseignée. Les billets utilisés et actifs ainsi que les réservations encore valides consomment les places. Les achats en attente sans billets émis sont aussi comptés, sans compter deux fois les achats possédant déjà des billets réservés. Une capacité de zéro reste zéro ; une catégorie active sans limite et sans capacité globale est affichée comme « Sans limite ».
+
+Les statistiques de ventes restent calculées sur l’ensemble de l’événement et ne dépendent pas du filtre de la table. Le filtre initial des commandes est `PAID`, y compris après une réinitialisation ou un changement d’événement. Le choix explicite d’un autre statut ou de tous les statuts reste disponible et est conservé pendant la pagination.
+
+L’admin accepte les anciennes synthèses pour un tarif unique, ainsi que plusieurs tarifs lorsque les compteurs par catégorie suffisent à confirmer le résultat. Lorsque l’ancienne API ne fournit pas la répartition des réservations entre plusieurs catégories, le compteur indique « À confirmer » plutôt que d’inventer leur répartition. Le nouveau backend fournit le calcul complet. Aucun endpoint public supplémentaire n’est requis. Ces changements n’ajoutent aucune migration ; le prérequis de migration billetterie indiqué plus haut reste applicable au déploiement du backend complet.
+
+Vérifications : `node --test ticket-events-regression.test.cjs public-ticketing-regression.test.cjs` côté backend et `node --test ticket-events-model.test.mjs` côté admin. Contrôle navigateur isolé : compteur sur ancien et nouveau contrat, statut initial payé, filtres attente/annulé/tous, réinitialisation, pagination et changement d’événement. Aucune commande ni aucun paiement réel n’est créé.

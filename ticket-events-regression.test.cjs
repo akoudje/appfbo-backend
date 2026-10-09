@@ -14,7 +14,14 @@ function loadController(name, prisma) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'src/controllers/admin/ticketEvents', name), 'utf8'), {
     module, console, process, Buffer,
     require: (id) => id === '../../../prisma' ? prisma : id === './shared' ? shared :
-      id === 'multer' ? multer : id.endsWith('/public-url.service') ? { publicFrontendBaseUrl: () => 'https://public.example' } : {},
+      id === 'multer' ? multer : id.endsWith('/ticket-inventory.service') ? loadInventory(prisma) : id.endsWith('/public-url.service') ? { publicFrontendBaseUrl: () => 'https://public.example' } : {},
+  });
+  return module.exports;
+}
+function loadInventory(prisma) {
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'src/services/ticket-inventory.service.js'), 'utf8'), {
+    module, process, require: () => prisma,
   });
   return module.exports;
 }
@@ -69,17 +76,27 @@ test('legacy API clients keep the existing response without pagination', async (
   assert.equal(res.body.pagination, undefined);
 });
 
-function summaryDb(capacity = 500) {
+function summaryDb(capacity = 500, ticketTypes = [{ id: 'standard', active: true, capacity: null }]) {
   return {
     ticketEvent: { findFirst: async ({ where }) => {
       assert.equal(where.countryId, 'CIV'); assert.equal(where.id, 'event-1');
-      return { id: 'event-1', slug: 'event-one', capacity };
+      return { id: 'event-1', slug: 'event-one', capacity, ticketTypes };
     } },
-    ticket: { groupBy: async ({ where }) => {
+    ticket: { groupBy: async ({ where, by }) => {
+      const rows = [{ status: 'ACTIVE', _count: { _all: 200 } }, { status: 'USED', _count: { _all: 60 } }, { status: 'RESERVED', _count: { _all: 10 } }];
+      if (by.includes('eventId')) {
+        assert.equal(where.eventId.in[0], 'event-1');
+        assert.ok(where.OR, 'inventory must use held-seat rules');
+        return rows.map(row => ({ ...row, eventId: 'event-1', ticketTypeId: 'standard' }));
+      }
       assert.equal(where.countryId, 'CIV'); assert.equal(where.eventId, 'event-1');
-      return [{ status: 'ACTIVE', _count: { _all: 200 } }, { status: 'USED', _count: { _all: 60 } }, { status: 'RESERVED', _count: { _all: 10 } }];
+      return rows;
     } },
-    ticketOrder: { findMany: async (query) => {
+    ticketOrder: { groupBy: async ({ where }) => {
+      assert.equal(where.eventId.in[0], 'event-1');
+      assert.ok(where.tickets.none, 'orders with reserved tickets must not be counted twice');
+      return [];
+    }, findMany: async (query) => {
       assert.equal(query.where.countryId, 'CIV'); assert.equal(query.where.eventId, 'event-1');
       assert.equal(query.take, undefined); assert.equal(query.where.status, undefined); assert.equal(query.where.q, undefined);
       return [...Array.from({ length: 260 }, () => ({ status: 'PAID', paymentMethod: 'WAVE', quantity: 1, totalFcfa: 1000 })), { status: 'PENDING_PAYMENT', quantity: 10, totalFcfa: 10000 }];
@@ -98,6 +115,43 @@ test('summary uses all event orders and ignores table filters', async () => {
   assert.equal(res.body.totals.remainingCapacity, 230);
   assert.equal(res.body.totals.pendingOrdersCount, 1);
   assert.equal(res.body.publicUrl, 'https://public.example/events/event-one');
+});
+
+test('summary derives available places from ticket capacities when the global capacity is absent', async () => {
+  const controller = loadController('reports.js', summaryDb(null, [{ id: 'standard', active: true, capacity: 3500 }]));
+  const res = response();
+  await controller.getEventSummary({ countryId: 'CIV', params: { id: 'event-1' } }, res);
+  assert.equal(res.code, 200);
+  assert.equal(res.body.availability.remaining, 3230);
+  assert.equal(res.body.availability.source, 'TICKET_TYPES');
+  assert.equal(res.body.totals.remainingCapacity, null);
+});
+
+test('availability respects per-category caps, inactive categories and the shared global limit', () => {
+  const inventory = loadInventory({});
+  const event = { id: 'event-1', capacity: 100, ticketTypes: [
+    { id: 'standard', active: true, capacity: 50 },
+    { id: 'vip', active: true, capacity: 40 },
+    { id: 'disabled', active: false, capacity: 500 },
+  ] };
+  const counts = new Map([['event:event-1', 25], ['type:standard', 60], ['type:vip', 10]]);
+  assert.equal(inventory.summarizeAvailability(event, counts).remaining, 30);
+  event.capacity = 30;
+  assert.equal(inventory.summarizeAvailability(event, counts).remaining, 5);
+  event.capacity = 0;
+  assert.equal(inventory.summarizeAvailability(event, counts).remaining, 0);
+});
+
+test('availability distinguishes unlimited seats from zero and includes ticketless pending holds', async () => {
+  const db = summaryDb(null, [{ id: 'standard', active: true, capacity: 300 }]);
+  db.ticketOrder.groupBy = async () => [{ eventId: 'event-1', ticketTypeId: 'standard', _sum: { quantity: 8 } }];
+  const controller = loadController('reports.js', db), res = response();
+  await controller.getEventSummary({ countryId: 'CIV', params: { id: 'event-1' } }, res);
+  assert.equal(res.body.availability.remaining, 22);
+  const inventory = loadInventory({});
+  assert.equal(inventory.summarizeAvailability({ id: 'event-1', capacity: null, ticketTypes: [{ active: true, capacity: null }] }, new Map()).remaining, null);
+  assert.equal(inventory.summarizeAvailability({ id: 'event-1', capacity: 0, ticketTypes: [{ active: true, capacity: null }] }, new Map()).remaining, 0);
+  assert.equal(inventory.summarizeAvailability({ id: 'event-1', capacity: null, ticketTypes: [{ active: false, capacity: 100 }] }, new Map()).remaining, 0);
 });
 
 test('undefined capacity stays unknown; exceeded capacity never becomes negative', async () => {
