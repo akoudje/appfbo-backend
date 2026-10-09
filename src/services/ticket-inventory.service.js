@@ -82,7 +82,7 @@ async function assertCapacity(tx, event, type, qty, excludeOrderId = null) {
 }
 function salesState(event, now = new Date()) {
   if (event.status === "CANCELLED") return "CANCELLED";
-  if (new Date(event.endsAt || event.startsAt) <= now) return "ENDED";
+  if (event.endsAt && new Date(event.endsAt) <= now) return "ENDED";
   if (
     event.status !== "PUBLISHED" ||
     (event.salesCloseAt && new Date(event.salesCloseAt) <= now)
@@ -131,6 +131,26 @@ async function availability(events, client = prisma) {
   }
   return totals;
 }
+function summarizeAvailability(event, counts) {
+  const globalRemaining = event.capacity == null
+    ? null
+    : Math.max(0, event.capacity - (counts.get("event:" + event.id) || 0));
+  const types = (event.ticketTypes || []).filter((type) => type.active);
+  if (!types.length) return { remaining: 0, globalRemaining, source: "NO_ACTIVE_TICKETS" };
+  const unlimited = types.some((type) => type.capacity == null);
+  const typeRemaining = types.reduce((sum, type) => sum + (
+    type.capacity == null ? 0 : Math.max(0, type.capacity - (counts.get("type:" + type.id) || 0))
+  ), 0);
+  return {
+    remaining: globalRemaining == null
+      ? unlimited ? null : typeRemaining
+      : unlimited ? globalRemaining : Math.min(globalRemaining, typeRemaining),
+    globalRemaining,
+    source: globalRemaining == null
+      ? unlimited ? "UNLIMITED" : "TICKET_TYPES"
+      : unlimited ? "EVENT" : "EVENT_AND_TICKET_TYPES",
+  };
+}
 module.exports = {
   fail,
   quantity,
@@ -144,4 +164,5 @@ module.exports = {
   salesState,
   timeZone,
   availability,
+  summarizeAvailability,
 };

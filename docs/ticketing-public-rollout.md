@@ -16,6 +16,8 @@ Un paiement tardif sans capacité disponible reste enregistré comme payé, avec
 
 Avant livraison, examiner les achats historiques en attente : ils sont désormais pris en compte dans les capacités. Une réservation historique déjà supérieure à la capacité doit être traitée par l’équipe ; aucune commande n’est supprimée automatiquement par ce changement.
 
+Le début de l’événement ne ferme pas automatiquement les ventes lorsqu’aucune date de fin n’est renseignée : seuls le statut, les dates d’ouverture/clôture des ventes et une date de fin explicite les contrôlent.
+
 ## Prix et reprise
 
 - `POST /api/ticketing/events/:slug/quote` confirme la quantité, le prix unitaire, le sous-total, les frais et le montant payable. Les ventes fermées ou capacités insuffisantes sont refusées. Le frontend n’autorise pas la continuation avant réception du devis serveur.
@@ -48,3 +50,27 @@ Le PDF propose un billet individuel ou un document groupé, une page par billet.
 - Navigateur avec API entièrement simulée : composants React réels à 390/1024/1440 px sans débordement, quantité et total serveur, conservation du lien et du jeton, suivi sécurisé, paiement absent sur achat expiré, PDF à deux pages et mise en page d’impression sans boutons.
 
 Après déploiement, utiliser un événement de test pour confirmer le retour Wave réel, l’email reçu, la lecture du QR par l’application de contrôle et la reprise d’une tentative interrompue. Vérifier également un événement complet et une vente en caisse. Ces vérifications réelles de prestataire et de scan physique n’ont pas été exécutées dans les tests locaux.
+
+## Compatibilité du parcours public pendant le déploiement
+
+Le frontend accepte aussi l’ancien catalogue contenant `status` sans `salesStatus`. Un événement publié ne devient pas terminé simplement parce que son heure de début est passée ; la fin et les périodes de vente explicites restent respectées.
+
+Avec l’ancienne API, ou uniquement si la route de devis est absente (404 de route), le formulaire prépare l’achat puis présente le sous-total, les frais et le total effectivement renvoyés par le serveur avant d’ouvrir Wave. Aucun pourcentage de frais n’est inventé dans le navigateur. Les erreurs de devis métier, les erreurs serveur et les totaux incohérents ne permettent pas de contourner la confirmation du montant.
+
+Un lien Wave déjà préparé pour le même achat, le même pays et le même jeton peut être réutilisé après confirmation du total, tant que l’achat reste payable et non expiré. Les achats payés, échoués ou remboursés ne réutilisent pas ce lien. Le pays et le jeton restent conservés même avec les anciennes réponses de commande.
+
+Si une catégorie se remplit après actualisation, les autres catégories restent accessibles. Une nouvelle catégorie ou quantité proposée doit être confirmée avant la continuation ; les coordonnées saisies sont conservées.
+
+Cette compatibilité rétablit le parcours existant pendant un déploiement progressif. Les garanties serveur nouvelles (réservation atomique et reprise par identifiant de tentative) nécessitent toujours la livraison du backend actuel et sa migration. Elle ne remplace pas cette mise à jour.
+
+Tests complémentaires frontend : `node --test ticketing-model.test.mjs ticketing-contracts.test.mjs ticketing-selection.test.mjs`. Contrôle navigateur avec APIs simulées : ancien contrat, contrat actuel, route de devis absente, panne de devis, vente fermée, catégorie épuisée après rafraîchissement, conservation des coordonnées et confirmation du total avant Wave. Aucun achat réel n’est exécuté par ces contrôles.
+
+## Compteur de disponibilités et commandes admin
+
+La synthèse admin fournit `availability.remaining` à partir des capacités des billets actifs, limitées par la capacité globale lorsqu’elle est renseignée. Les billets utilisés et actifs ainsi que les réservations encore valides consomment les places. Les achats en attente sans billets émis sont aussi comptés, sans compter deux fois les achats possédant déjà des billets réservés. Une capacité de zéro reste zéro ; une catégorie active sans limite et sans capacité globale est affichée comme « Sans limite ».
+
+Les statistiques de ventes restent calculées sur l’ensemble de l’événement et ne dépendent pas du filtre de la table. Le filtre initial des commandes est `PAID`, y compris après une réinitialisation ou un changement d’événement. Le choix explicite d’un autre statut ou de tous les statuts reste disponible et est conservé pendant la pagination.
+
+L’admin accepte les anciennes synthèses pour un tarif unique, ainsi que plusieurs tarifs lorsque les compteurs par catégorie suffisent à confirmer le résultat. Lorsque l’ancienne API ne fournit pas la répartition des réservations entre plusieurs catégories, le compteur indique « À confirmer » plutôt que d’inventer leur répartition. Le nouveau backend fournit le calcul complet. Aucun endpoint public supplémentaire n’est requis. Ces changements n’ajoutent aucune migration ; le prérequis de migration billetterie indiqué plus haut reste applicable au déploiement du backend complet.
+
+Vérifications : `node --test ticket-events-regression.test.cjs public-ticketing-regression.test.cjs` côté backend et `node --test ticket-events-model.test.mjs` côté admin. Contrôle navigateur isolé : compteur sur ancien et nouveau contrat, statut initial payé, filtres attente/annulé/tous, réinitialisation, pagination et changement d’événement. Aucune commande ni aucun paiement réel n’est créé.
