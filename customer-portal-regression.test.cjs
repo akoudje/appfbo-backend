@@ -41,6 +41,67 @@ test('for-other filter preserves owner scope and excludes the customers own orde
   const api = controller('customerOrders.controller.js', { preorder: { findMany: async ({ where }) => { assert.equal(where.OR[0].fboId, 'fbo'); assert.equal(where.AND[0].fboId.not, 'fbo'); assert.equal(where.AND[0].placedByFboNumero, '225-000-111-222'); return []; }, count: async () => 0 } });
   const res = response(); await api.listMyOrders(request({}, { relation: 'PLACED_FOR_OTHER' }), res); assert.equal(res.code, 200);
 });
+
+test('grouped client views preserve ownership, exclude paid orders from payment tasks and separate history', async () => {
+  for (const status of ['TO_PAY', 'HISTORY', 'ACTIVE']) {
+    let where;
+    const api = controller('customerOrders.controller.js', { preorder: {
+      findMany: async (args) => { where = args.where; return []; },
+      count: async () => 0,
+    } });
+    const res = response(); await api.listMyOrders(request({}, { status }), res);
+    assert.equal(res.code, 200);
+    assert.equal(where.OR[0].fboId, 'fbo');
+    assert.equal(res.body.viewerNumeroFbo, '225-000-111-222');
+    const filter = where.AND[0];
+    if (status === 'TO_PAY') {
+      assert.deepEqual(Array.from(filter.status.in), ['INVOICED', 'PAYMENT_PENDING']);
+      assert.equal(filter.paymentStatus.not, 'PAID');
+    } else if (status === 'HISTORY') {
+      assert.deepEqual(Array.from(filter.status.in), ['CANCELLED', 'FULFILLED']);
+    } else {
+      assert.ok(filter.status.notIn.includes('FULFILLED'));
+      assert.ok(filter.status.notIn.includes('CANCELLED'));
+    }
+  }
+});
+
+test('reordering recalculates from the current directory grade and refuses an unavailable directory without writes', async () => {
+  const options = require('./src/services/country-order-options.service');
+  const directory = require('./src/services/fboDirectory.service');
+  for (const available of [true, false]) {
+    let draft;
+    const source = { id: 'order', items: [{ productId: 'p', qty: 2 }], fbo: { id: 'fbo', numeroFbo: '225-000-111-222', nomComplet: 'Ancien nom', grade: 'CLIENT_PRIVILEGIE', email: 'client@example.test' }, country: { settings: {} } };
+    const db = {
+      preorder: {
+        findFirst: async ({ where }) => where.id ? source : null,
+        create: async ({ data }) => { draft = data; return { id: 'draft', ...data }; },
+        update: async () => ({}),
+      },
+      product: { findMany: async () => [{ id: 'p' }] },
+      preorderItem: { createMany: async () => ({}) },
+      preorderLog: { create: async () => ({}) },
+    };
+    db.$transaction = async fn => fn(db);
+    const api = controller('customerOrders.controller.js', db, {
+      '../services/fboDirectory.service': { ...directory, fetchFboDirectoryProfile: async () => { if (!available) throw Error('offline'); return { exists: true, full_name: 'KONÉ AMENAN', grade: 'MANAGER' }; } },
+      '../services/country-order-options.service': options,
+      '../helpers/preorder-number': { formatDateKey: () => '20300101', formatPreorderNumber: () => 'CIV-001' },
+      '../services/pricing.service': { computePreorderTotals: async () => ({ totals: {} }) },
+    });
+    const res = response(); await api.reorderMyOrder(request(), res);
+    if (available) {
+      assert.equal(res.code, 200);
+      assert.equal(draft.fboGrade, 'MANAGER');
+      assert.equal(draft.fboNomComplet, 'KONÉ AMENAN');
+      assert.equal(res.body.identityVerified, true);
+      assert.equal(res.body.fbo.grade, 'MANAGER');
+    } else {
+      assert.equal(res.code, 503);
+      assert.equal(draft, undefined);
+    }
+  }
+});
 test('client responses allow only customer fields, including nested products and proofs', () => {
   const data = customerOrderResponse({ id: 'o', country: { code: 'CIV', settings: { secret: 'x' } }, totalFcfa: 10000, preorderPaymentMode: 'WAVE', invoiceInternalNote: 'private', bankProofUploadToken: 'secret', logs: [{ note: 'internal' }], messages: [{ id: 'm', channel: 'SMS', errorMessage: 'provider credentials', toPhone: 'private' }], items: [{ id: 'i', product: { nom: 'Aloe', cost: 12 }, internalMargin: 50 }], bankPaymentProofs: [{ id: 'p', originalFileName: 'proof.pdf', reviewedById: 'admin', internalNote: 'private' }] });
   assert.equal(data.invoiceInternalNote, undefined); assert.equal(data.bankProofUploadToken, undefined); assert.equal(data.logs, undefined);

@@ -6,6 +6,7 @@ const customerAuthController = require("../controllers/customerAuth.controller")
 const customerOrdersController = require("../controllers/customerOrders.controller");
 const customerBankProofController = require("../controllers/customerBankProof.controller");
 const customerNotificationsController = require("../controllers/customerNotifications.controller");
+const { createCustomerDraft } = require("../controllers/preorders.controller");
 
 const router = express.Router();
 
@@ -44,6 +45,7 @@ router.post("/auth/otp/verify", otpVerifyLimiter, customerAuthController.verifyO
 router.post("/auth/logout", customerAuthController.logout);
 
 router.get("/me", requireCustomerAuth, customerAuthController.me);
+router.post("/me/preorders", requireCustomerAuth, createRateLimiter({ keyPrefix: "customer_draft", windowMs: 60000, max: 10, keyFn: req => ({ ip: req.ip, fboId: req.customer.fboId, country: req.countryId }) }), createCustomerDraft);
 router.get("/me/dashboard", requireCustomerAuth, customerAuthController.dashboard);
 router.get("/me/orders", requireCustomerAuth, customerOrdersController.listMyOrders);
 router.get("/me/notifications", requireCustomerAuth, customerNotificationsController.listMyNotifications);
