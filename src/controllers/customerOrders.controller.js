@@ -1,4 +1,5 @@
 const prisma = require("../prisma");
+const { fetchFboDirectoryProfile, normalizeGrade } = require("../services/fboDirectory.service");
 const { customerOrderResponse } = require("../utils/customerOrderResponse");
 const { computePreorderTotals } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
@@ -82,6 +83,8 @@ async function listMyOrders(req, res) {
     if (q) where.AND.push({ OR: ["preorderNumber", "factureReference", "fboNomComplet", "fboNumero"].map((field) => ({ [field]: { contains: q, mode: "insensitive" } })) });
     if (["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID", "READY", "FULFILLED", "CANCELLED"].includes(status)) where.AND.push({ status });
     if (status === "ACTIVE") where.AND.push({ status: { notIn: ["CANCELLED", "FULFILLED"] } });
+    if (status === "TO_PAY") where.AND.push({ status: { in: ["INVOICED", "PAYMENT_PENDING"] }, paymentStatus: { not: "PAID" } });
+    if (status === "HISTORY") where.AND.push({ status: { in: ["CANCELLED", "FULFILLED"] } });
     if (relation === "SELF") where.AND.push({ fboId });
     if (relation === "PLACED_FOR_OTHER") where.AND.push({ fboId: { not: fboId }, placedByFboNumero: numeroFbo });
 
@@ -145,6 +148,7 @@ async function listMyOrders(req, res) {
         }));
       }),
       total,
+      viewerNumeroFbo: numeroFbo,
       page,
       pageSize: ORDERS_PAGE_SIZE,
       hasMore: skip + rows.length < total,
@@ -245,6 +249,7 @@ async function getMyOrder(req, res) {
 
     return res.json({
       ...customerOrderResponse(attachCustomerPaymentWindow(order)),
+      viewerNumeroFbo: numeroFbo,
       relationType,
       ecobankPay: paymentContext.ecobankPay,
       piSpi: paymentContext.piSpi,
@@ -405,6 +410,11 @@ async function reorderMyOrder(req, res) {
     if (!sourceOrder) {
       return res.status(404).json({ message: "Commande source introuvable" });
     }
+    let verified;
+    try { verified = await fetchFboDirectoryProfile(sourceOrder.fbo.numeroFbo); } catch { return res.status(503).json({ message: "Impossible de vérifier votre grade actuel. Réessayez avant de recommander." }); }
+    const verifiedName = String(verified?.full_name || verified?.fullName || verified?.nomComplet || "").trim().toUpperCase();
+    const verifiedGrade = normalizeGrade(verified?.grade);
+    if (verified?.exists === false || !verifiedName || !verifiedGrade) return res.status(503).json({ message: "Votre profil FBO doit être vérifié avant de recommander." });
 
     if (!Array.isArray(sourceOrder.items) || sourceOrder.items.length === 0) {
       return res.status(400).json({ message: "La commande source ne contient aucun produit." });
@@ -481,9 +491,9 @@ async function reorderMyOrder(req, res) {
           countryId,
           fboId: sourceOrder.fbo.id,
           fboNumero: sourceOrder.fbo.numeroFbo,
-          fboNomComplet: sourceOrder.fbo.nomComplet,
+          fboNomComplet: verifiedName,
           fboEmail: sourceOrder.fbo.email || null,
-          fboGrade: sourceOrder.fbo.grade,
+          fboGrade: verifiedGrade,
           pointDeVente: sourceOrder.fbo.pointDeVente,
           preorderPaymentMode: normalizedPaymentMode,
           deliveryMode: normalizedDeliveryMode,
@@ -552,6 +562,8 @@ async function reorderMyOrder(req, res) {
       preorderId: createdPreorder.id,
       preorderNumber: createdPreorder.preorderNumber,
       itemsCount: reorderItems.length,
+      identityVerified: true,
+      fbo: { numeroFbo: sourceOrder.fbo.numeroFbo, nomComplet: verifiedName, grade: verifiedGrade, email: sourceOrder.fbo.email || "", phone: sourceOrder.factureWhatsappTo || "" },
     });
   } catch (e) {
     console.error("reorderMyOrder error:", e);

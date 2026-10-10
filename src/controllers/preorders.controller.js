@@ -1,6 +1,8 @@
 // src/controllers/preorders.controller.js
 
 const prisma = require("../prisma");
+const crypto = require("crypto");
+const { matchingFboNames } = require("../utils/fboIdentity");
 const {
   computePreorderTotals,
   computeCatalogProductsForPreorder,
@@ -249,6 +251,7 @@ function findItemsExceedingProductLimits(items, productsById, globalMaxQtyPerPro
 }
 
 async function createDraft(req, res) {
+  let identitySnapshot = null;
   try {
     const {
       numeroFbo,
@@ -275,6 +278,7 @@ async function createDraft(req, res) {
     }
 
     const normalizedNumeroFbo = normalizeNumeroFbo(numeroFbo);
+    if (normalizedNumeroFbo.replace(/\D/g, "").length !== 12) return res.status(400).json({ error: "Le numéro FBO doit contenir 12 chiffres." });
     let directoryProfile = { exists: false };
     let directoryLookupWarning = null;
     try {
@@ -295,11 +299,18 @@ async function createDraft(req, res) {
     }
     const clientName = String(nomComplet || "").trim();
     const clientGrade = normalizeGrade(grade);
+    if (req.requireVerifiedFbo && !directoryProfile.exists) {
+      return res.status(503).json({ error: "Votre profil ne peut pas être vérifié pour le moment. Réessayez avant d’accéder à vos tarifs personnalisés.", code: "FBO_VERIFICATION_REQUIRED" });
+    }
 
     if (directoryProfile.exists && (!directoryProfile.fullName || !directoryProfile.grade)) {
       return res.status(502).json({
         error: "Profil FBO incomplet dans le service FBO",
       });
+    }
+    const trustedSelf = req.trustedCustomerNumeroFbo === normalizedNumeroFbo;
+    if (directoryProfile.exists && !trustedSelf && !matchingFboNames(clientName, directoryProfile.fullName)) {
+      return res.status(400).json({ error: "Le nom et le numéro FBO ne correspondent pas. Vérifiez les informations du bénéficiaire.", code: "FBO_IDENTITY_MISMATCH" });
     }
 
     const normalizedNomComplet = (
@@ -307,13 +318,14 @@ async function createDraft(req, res) {
     ).toUpperCase();
     const normalizedGrade = directoryProfile.exists
       ? directoryProfile.grade
-      : clientGrade;
+      : "CLIENT_PRIVILEGIE";
 
-    if (!normalizedNomComplet || !normalizedGrade) {
+    if (!normalizedNomComplet || (!directoryProfile.exists && !clientGrade)) {
       return res.status(400).json({
         error: "Nom complet et grade sont requis pour continuer",
       });
     }
+    identitySnapshot = { numeroFbo: normalizedNumeroFbo, name: normalizedNomComplet, grade: normalizedGrade, verified: directoryProfile.exists };
     // Le consentement n'est plus exigé à la création du brouillon : consulter le
     // catalogue avec son numéro FBO ne nécessite pas d'accord préalable. Il est
     // en revanche obligatoire à la soumission finale (voir submit()).
@@ -384,6 +396,9 @@ async function createDraft(req, res) {
 
       if (existingDraft) {
         if (existingDraft.fboNumero === normalizedNumeroFbo) {
+          if (existingDraft.fboGrade !== normalizedGrade || !matchingFboNames(existingDraft.fboNomComplet, normalizedNomComplet)) {
+            return res.status(409).json({ error: "Votre profil FBO a changé. Recommencez la vérification pour recalculer vos tarifs.", code: "FBO_PROFILE_CHANGED" });
+          }
           return res.json({
             preorderId: existingDraft.id,
             preorderNumber: existingDraft.preorderNumber,
@@ -391,6 +406,7 @@ async function createDraft(req, res) {
             fboNomComplet: existingDraft.fboNomComplet,
             fboGrade: existingDraft.fboGrade,
             reused: true,
+            identityVerified: directoryProfile.exists,
           });
         }
 
@@ -443,9 +459,8 @@ async function createDraft(req, res) {
     const fbo = await prisma.fbo.upsert({
       where: { numeroFbo: normalizedNumeroFbo },
       update: {
-        nomComplet: normalizedNomComplet,
-        ...(hasEmailField ? { email: normalizedEmail } : {}),
-        grade: normalizedGrade,
+        ...(directoryProfile.exists ? { nomComplet: normalizedNomComplet, grade: normalizedGrade } : {}),
+        ...(hasEmailField && normalizedEmail && trustedSelf ? { email: normalizedEmail } : {}),
         pointDeVente: normalizedPointDeVente,
       },
       create: {
@@ -483,9 +498,9 @@ async function createDraft(req, res) {
         data: scopeCreate(req, {
           fboId: fbo.id,
           fboNumero: fbo.numeroFbo,
-          fboNomComplet: fbo.nomComplet,
-          fboEmail: fbo.email || null,
-          fboGrade: fbo.grade,
+          fboNomComplet: normalizedNomComplet,
+          fboEmail: normalizedEmail || null,
+          fboGrade: normalizedGrade,
           pointDeVente: fbo.pointDeVente,
           placedByFboNumero:
             normalizedPlacedByFboNumero &&
@@ -568,6 +583,7 @@ async function createDraft(req, res) {
       directoryLookupWarning,
       fboNomComplet: preorder.fboNomComplet,
       fboGrade: preorder.fboGrade,
+      identityVerified: directoryProfile.exists,
     });
   } catch (e) {
     if (e?.code === "P2002") {
@@ -576,9 +592,9 @@ async function createDraft(req, res) {
       if (countryId && clientDraftKey) {
         const existingDraft = await prisma.preorder.findFirst({
           where: { countryId, clientDraftKey },
-          select: { id: true, preorderNumber: true, status: true, fboNomComplet: true, fboGrade: true },
+          select: { id: true, preorderNumber: true, status: true, fboNumero: true, fboNomComplet: true, fboGrade: true },
         });
-        if (existingDraft) {
+        if (existingDraft && identitySnapshot && existingDraft.fboNumero === identitySnapshot.numeroFbo && existingDraft.fboGrade === identitySnapshot.grade && matchingFboNames(existingDraft.fboNomComplet, identitySnapshot.name)) {
           return res.json({
             preorderId: existingDraft.id,
             preorderNumber: existingDraft.preorderNumber,
@@ -586,6 +602,7 @@ async function createDraft(req, res) {
             fboNomComplet: existingDraft.fboNomComplet,
             fboGrade: existingDraft.fboGrade,
             reused: true,
+            identityVerified: identitySnapshot.verified,
           });
         }
       }
@@ -1537,7 +1554,44 @@ async function getSmsStatus(req, res) {
   }
 }
 
+async function createCustomerDraft(req, res) {
+  try {
+    if (!req.customer?.fboId) return res.status(401).json({ error: "Session expirée. Reconnectez-vous." });
+    const profile = await prisma.fbo.findUnique({ where: { id: req.customer.fboId }, select: { id: true, numeroFbo: true, nomComplet: true, email: true } });
+    if (!profile || (req.customer.email && normalizeEmail(req.customer.email) !== normalizeEmail(profile.email))) return res.status(401).json({ error: "Session expirée. Reconnectez-vous." });
+    if (req.body?.sessionFboNumero && String(req.body.sessionFboNumero).replace(/\D/g, "") !== profile.numeroFbo.replace(/\D/g, "")) return res.status(409).json({ error: "La session client a changé. Reconnectez-vous avant de commander.", code: "CUSTOMER_SESSION_CHANGED" });
+    const key = getClientIdempotencyKey(req, "clientDraftKey");
+    if (!key) return res.status(400).json({ error: "Identifiant de brouillon requis." });
+    const beneficiary = String(req.body?.numeroFbo || profile.numeroFbo).trim();
+    const self = beneficiary.replace(/\D/g, "") === profile.numeroFbo.replace(/\D/g, "");
+    const latest = self ? await prisma.preorder.findFirst({ where: { fboId: profile.id, countryId: req.countryId, status: { not: "DRAFT" } }, orderBy: { createdAt: "desc" }, select: { factureWhatsappTo: true } }) : null;
+    const draftReq = Object.create(req);
+    draftReq.requireVerifiedFbo = true;
+    draftReq.trustedCustomerNumeroFbo = self ? profile.numeroFbo : null;
+    draftReq.body = {
+      numeroFbo: self ? profile.numeroFbo : beneficiary,
+      nomComplet: self ? profile.nomComplet : req.body?.nomComplet,
+      email: self ? profile.email : req.body?.email,
+      paymentMode: null,
+      deliveryMode: null,
+      placedByFboNumero: self ? "" : profile.numeroFbo,
+      placedByFboName: self ? "" : profile.nomComplet,
+      placedByFboEmail: self ? "" : profile.email,
+      clientDraftKey: crypto.createHash("sha256").update(`${profile.id}:${key}`).digest("hex"),
+      personalDataConsentAccepted: false,
+    };
+    draftReq.headers = { ...req.headers, "x-idempotency-key": draftReq.body.clientDraftKey };
+    const json = res.json.bind(res);
+    res.json = body => json(body?.preorderId ? { ...body, contact: { email: self ? profile.email : "", phone: latest?.factureWhatsappTo || "" }, orderFor: self ? "SELF" : "OTHER" } : body);
+    return await createDraft(draftReq, res);
+  } catch (error) {
+    console.error("createCustomerDraft:", error);
+    return res.status(500).json({ error: "Impossible de préparer votre précommande." });
+  }
+}
+
 module.exports = {
+  createCustomerDraft,
   createDraft,
   checkFboDirectory,
   getCatalog,
