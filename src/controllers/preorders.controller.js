@@ -309,7 +309,9 @@ async function createDraft(req, res) {
       });
     }
     const trustedSelf = req.trustedCustomerNumeroFbo === normalizedNumeroFbo;
-    if (directoryProfile.exists && !trustedSelf && !matchingFboNames(clientName, directoryProfile.fullName)) {
+    // Un numéro reconnu suffit : le répertoire fournit le nom et le grade.
+    // Vérifier un nom uniquement s'il a été explicitement fourni par un client.
+    if (directoryProfile.exists && clientName && !trustedSelf && !matchingFboNames(clientName, directoryProfile.fullName)) {
       return res.status(400).json({ error: "Le nom et le numéro FBO ne correspondent pas. Vérifiez les informations du bénéficiaire.", code: "FBO_IDENTITY_MISMATCH" });
     }
 
