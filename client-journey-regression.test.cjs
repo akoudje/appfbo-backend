@@ -47,6 +47,41 @@ test('authenticated shortcut uses the directory grade and owner contacts, ignori
   assert.notEqual(draft.clientDraftKey,'draft-key');assert.equal(draft.clientDraftKey.length,64);
 });
 
+test('a recognized public number needs no manually entered name or grade and uses the canonical directory profile', async () => {
+  const f = fixture(), response = res();
+  await f.api.createDraft(req({ numeroFbo: '225-000-111-222' }, null), response);
+  assert.equal(response.code, 200);
+  assert.equal(response.body.identityVerified, true);
+  assert.equal(response.body.fboNomComplet, 'KONÉ AMENAN');
+  assert.equal(response.body.fboGrade, 'MANAGER');
+  const draft = f.writes.find(w => w.type === 'draft').data;
+  assert.equal(draft.fboNomComplet, 'KONÉ AMENAN');
+  assert.equal(draft.fboGrade, 'MANAGER');
+  assert.equal(draft.fboEmail, null);
+  assert.equal(f.writes.find(w => w.type === 'fbo').update.email, undefined);
+});
+
+test('a recognized foreign beneficiary is resolved automatically without copying the session owner contacts', async () => {
+  const f = fixture(), response = res();
+  await f.api.createCustomerDraft(req({ numeroFbo: '225-000-333-444' }), response);
+  assert.equal(response.code, 200);
+  assert.equal(response.body.orderFor, 'OTHER');
+  assert.equal(response.body.fboNomComplet, 'KONÉ AMENAN');
+  assert.equal(response.body.fboGrade, 'MANAGER');
+  assert.equal(response.body.contact.email, '');
+  assert.equal(response.body.contact.phone, '');
+  assert.equal(f.writes.find(w => w.type === 'draft').data.placedByFboNumero, '225-000-111-222');
+});
+
+test('unrecognized public numbers still require a manually entered name and grade', async () => {
+  for (const body of [{ numeroFbo: '225-000-111-222' }, { numeroFbo: '225-000-111-222', nomComplet: 'Declared Client' }, { numeroFbo: '225-000-111-222', grade: 'MANAGER' }]) {
+    const f = fixture({ exists: false }), response = res();
+    await f.api.createDraft(req(body, null), response);
+    assert.equal(response.code, 400);
+    assert.equal(f.writes.length, 0);
+  }
+});
+
 test('a foreign beneficiary must match the directory name and never receives owner contacts',async()=>{
   const f=fixture(),r=res();await f.api.createCustomerDraft(req({numeroFbo:'225-000-333-444',nomComplet:'Amenan Kone',placedByFboNumero:'forged'}),r);
   assert.equal(r.code,200);assert.equal(r.body.orderFor,'OTHER');assert.equal(r.body.contact.email,'');assert.equal(r.body.contact.phone,'');
