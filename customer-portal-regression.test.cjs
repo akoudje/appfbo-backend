@@ -78,7 +78,7 @@ test('reordering recalculates from the current directory grade and refuses an un
         create: async ({ data }) => { draft = data; return { id: 'draft', ...data }; },
         update: async () => ({}),
       },
-      product: { findMany: async () => [{ id: 'p' }] },
+      product: { findMany: async () => [{ id: 'p', countryProducts: [{ stockQty: 9, maxQtyPerOrder: 5 }], gradePrices: [{ prixFcfa: 5000 }] }] },
       preorderItem: { createMany: async () => ({}) },
       preorderLog: { create: async () => ({}) },
     };
@@ -87,7 +87,7 @@ test('reordering recalculates from the current directory grade and refuses an un
       '../services/fboDirectory.service': { ...directory, fetchFboDirectoryProfile: async () => { if (!available) throw Error('offline'); return { exists: true, full_name: 'KONÉ AMENAN', grade: 'MANAGER' }; } },
       '../services/country-order-options.service': options,
       '../helpers/preorder-number': { formatDateKey: () => '20300101', formatPreorderNumber: () => 'CIV-001' },
-      '../services/pricing.service': { computePreorderTotals: async () => ({ totals: {} }) },
+      '../services/pricing.service': { computePreorderTotals: async () => ({ totals: {} }), usesDirectGradePricing: require('./src/services/pricing.service').usesDirectGradePricing },
     });
     const res = response(); await api.reorderMyOrder(request(), res);
     if (available) {
@@ -116,6 +116,55 @@ test('cancellation cannot overwrite a concurrently invoiced or paid order and wr
 });
 test('cancellation of another customers order is rejected before any writes', async () => {
   const res = response(); await controller('customerOrders.controller.js', { preorder: { findFirst: async () => null } }).cancelMyOrder(request(), res); assert.equal(res.code, 404);
+});
+
+test('a stale submitted order marked as paid is refused before starting cancellation', async () => {
+  const db = { preorder: { findFirst: async () => ({ id: 'order', status: 'SUBMITTED', paymentStatus: 'PAID' }) }, $transaction: async () => assert.fail('Paid order must not be mutated') };
+  const res = response(); await controller('customerOrders.controller.js', db).cancelMyOrder(request(), res);
+  assert.equal(res.code, 400);
+});
+
+test('client capabilities hide foreign reorder actions and internal ownership fields', async () => {
+  const db = { preorder: {
+    findMany: async () => [
+      { id: 'self', fboId: 'fbo', fboNumero: '225-000-111-222', status: 'SUBMITTED', paymentStatus: 'UNPAID', _count: { items: 6 } },
+      { id: 'other', fboId: 'other', fboNumero: '225-000-333-444', status: 'SUBMITTED', paymentStatus: 'UNPAID', _count: { items: 2 } },
+      { id: 'paid', fboId: 'fbo', fboNumero: '225-000-111-222', status: 'SUBMITTED', paymentStatus: 'PAID', _count: { items: 1 } },
+    ], count: async () => 3,
+  } };
+  const res = response(); await controller('customerOrders.controller.js', db).listMyOrders(request(), res);
+  assert.equal(res.code, 200);
+  assert.equal(res.body.data[0].capabilities.canCancel, true); assert.equal(res.body.data[0].capabilities.canReorder, true);
+  assert.equal(res.body.data[1].capabilities.canReorder, false); assert.equal(res.body.data[2].capabilities.canCancel, false);
+  assert.equal(res.body.data[0].itemsCount, 6); assert.equal(res.body.data[0].fboId, undefined); assert.equal(res.body.data[0]._count, undefined);
+});
+
+test('reordered baskets use country availability and current limits, reporting every omitted or reduced line', async () => {
+  let createdItems;
+  const source = { id: 'order', preorderPaymentMode: 'WAVE', deliveryMode: 'LIVRAISON', items: ['p1','p2','p3','p4','p5'].map(productId => ({ productId, qty: productId === 'p1' ? 9 : 1, productNameSnapshot: productId })), fbo: { id: 'fbo', numeroFbo: '225-000-111-222', email: 'client@example.test' }, country: { settings: { maxQtyPerProduct: 5, enableWave: false, enableCash: true, enablePickup: true } } };
+  const db = {
+    preorder: { findFirst: async ({ where }) => { if (where.id) { assert.equal(where.fboId, 'fbo'); assert.equal(where.countryId, 'BFA'); return source; } return null; }, create: async ({ data }) => ({ id: 'new', ...data }), update: async () => ({}) },
+    product: { findMany: async ({ where }) => { assert.equal(where.countryProducts.some.countryId, 'BFA'); assert.equal(where.countryProducts.some.actif, true); return [
+      { id: 'p1', countryProducts: [{ stockQty: 3, maxQtyPerOrder: 2 }], gradePrices: [{ prixFcfa: 5000 }] },
+      { id: 'p3', countryProducts: [{ stockQty: 0 }], gradePrices: [{ prixFcfa: 5000 }] },
+      { id: 'p4', countryProducts: [{ stockQty: 9 }], gradePrices: [] },
+      { id: 'p5', countryProducts: [{ stockQty: 9, maxQtyPerOrder: null }], gradePrices: [{ prixFcfa: 5000 }] },
+    ]; } },
+    preorderItem: { createMany: async ({ data }) => { createdItems = data; } }, preorderLog: { create: async () => ({}) },
+  };
+  db.$transaction = async fn => fn(db);
+  const api = controller('customerOrders.controller.js', db, {
+    '../services/fboDirectory.service': { ...require('./src/services/fboDirectory.service'), fetchFboDirectoryProfile: async () => ({ exists: true, full_name: 'CLIENT ACTUEL', grade: 'MANAGER' }) },
+    '../services/country-order-options.service': require('./src/services/country-order-options.service'),
+    '../helpers/preorder-number': { formatDateKey: () => '20300101', formatPreorderNumber: () => 'BFA-001' },
+    '../services/pricing.service': { usesDirectGradePricing: require('./src/services/pricing.service').usesDirectGradePricing, computePreorderTotals: async () => ({ totals: { totalFcfa: 15000 } }) },
+  });
+  const req = request(); req.countryId = 'BFA'; req.country = { id: 'BFA', code: 'BFA' };
+  const res = response(); await api.reorderMyOrder(req, res);
+  assert.equal(res.code, 200); assert.equal(createdItems.length, 2); assert.equal(createdItems[0].qty, 2);
+  assert.equal(res.body.adjustments.length, 4); assert.equal(res.body.countryCode, 'BFA');
+  assert.equal(res.body.preorderPaymentMode, null); assert.equal(res.body.deliveryMode, null);
+  assert.equal(source.items[0].qty, 9);
 });
 
 function otpDb() {

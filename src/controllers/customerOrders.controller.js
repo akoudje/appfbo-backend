@@ -1,7 +1,7 @@
 const prisma = require("../prisma");
 const { fetchFboDirectoryProfile, normalizeGrade } = require("../services/fboDirectory.service");
 const { customerOrderResponse } = require("../utils/customerOrderResponse");
-const { computePreorderTotals } = require("../services/pricing.service");
+const { computePreorderTotals, usesDirectGradePricing } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
 const {
@@ -58,6 +58,13 @@ function attachCustomerPaymentWindow(order) {
 
 const ORDERS_PAGE_SIZE = 20;
 
+function customerCapabilities(order, fboId) {
+  return {
+    canCancel: order.status === "SUBMITTED" && order.paymentStatus !== "PAID",
+    canReorder: order.fboId === fboId && (order._count?.items ?? order.items?.length ?? 0) > 0,
+  };
+}
+
 async function listMyOrders(req, res) {
   try {
     const fboId = req.customer?.fboId;
@@ -93,6 +100,8 @@ async function listMyOrders(req, res) {
         where,
         select: {
           id: true,
+          fboId: true,
+          _count: { select: { items: true } },
           country: {
             select: {
               code: true,
@@ -141,11 +150,11 @@ async function listMyOrders(req, res) {
       data: rows.map((row) => {
         const relationType =
           row.fboNumero === numeroFbo ? "SELF" : "PLACED_FOR_OTHER";
-        return customerOrderResponse(attachCustomerPaymentWindow({
+        return { ...customerOrderResponse(attachCustomerPaymentWindow({
           ...row,
           relationType,
           latestBankProof: row.bankPaymentProofs?.[0] || null,
-        }));
+        })), itemsCount: row._count?.items || 0, capabilities: customerCapabilities(row, fboId) };
       }),
       total,
       viewerNumeroFbo: numeroFbo,
@@ -251,6 +260,7 @@ async function getMyOrder(req, res) {
       ...customerOrderResponse(attachCustomerPaymentWindow(order)),
       viewerNumeroFbo: numeroFbo,
       relationType,
+      capabilities: customerCapabilities(order, fboId),
       ecobankPay: paymentContext.ecobankPay,
       piSpi: paymentContext.piSpi,
       bankTransfer: paymentContext.bankTransfer,
@@ -296,7 +306,7 @@ async function cancelMyOrder(req, res) {
       return res.json({ ok: true, alreadyDone: true, status: order.status });
     }
 
-    if (!CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)) {
+    if (!CUSTOMER_CANCELLABLE_STATUSES.includes(order.status) || order.paymentStatus === "PAID") {
       return res.status(400).json({
         message:
           "Cette commande a déjà été facturée ou traitée : elle ne peut plus être annulée depuis l'espace client. Contactez le support si besoin.",
@@ -376,6 +386,8 @@ async function reorderMyOrder(req, res) {
           select: {
             productId: true,
             qty: true,
+            productNameSnapshot: true,
+            product: { select: { nom: true } },
           },
         },
         fbo: {
@@ -400,6 +412,7 @@ async function reorderMyOrder(req, res) {
                 enablePiSpi: true,
                 enableDelivery: true,
                 enablePickup: true,
+                maxQtyPerProduct: true,
               },
             },
           },
@@ -424,19 +437,33 @@ async function reorderMyOrder(req, res) {
     const availableProducts = await prisma.product.findMany({
       where: {
         id: { in: uniqueProductIds },
-        countryId,
-        actif: true,
+        countryProducts: { some: { countryId, actif: true } },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        countryProducts: { where: { countryId }, select: { stockQty: true, maxQtyPerOrder: true } },
+        gradePrices: { where: { countryId, grade: verifiedGrade }, select: { prixFcfa: true } },
+      },
     });
 
-    const availableSet = new Set(availableProducts.map((p) => p.id));
-    const reorderItems = sourceOrder.items
-      .filter((it) => availableSet.has(it.productId))
-      .map((it) => ({
-        productId: it.productId,
-        qty: Math.max(1, Number.parseInt(it.qty, 10) || 1),
-      }));
+    const productsById = new Map(availableProducts.map(product => [product.id, product]));
+    const adjustments = [];
+    const globalLimit = Math.max(1, Number(sourceOrder.country?.settings?.maxQtyPerProduct || 10));
+    const reorderItems = [];
+    for (const item of sourceOrder.items) {
+      const product = productsById.get(item.productId);
+      const availability = product?.countryProducts?.[0];
+      const label = String(item.productNameSnapshot || item.product?.nom || "Un produit").slice(0,120);
+      if (!availability || availability.stockQty <= 0 || (usesDirectGradePricing(countryCode) && !product.gradePrices?.length)) {
+        adjustments.push(label + " : retiré du panier, actuellement indisponible pour cette commande.");
+        continue;
+      }
+      const requested = Math.max(1, Number.parseInt(item.qty, 10) || 1);
+      const limit = Math.min(globalLimit, availability.maxQtyPerOrder > 0 ? availability.maxQtyPerOrder : globalLimit, availability.stockQty);
+      const qty = Math.min(requested, limit);
+      if (qty < requested) adjustments.push(label + " : quantité ajustée de " + requested + " à " + qty + " selon la disponibilité et la limite actuelle.");
+      reorderItems.push({ productId: item.productId, qty });
+    }
 
     if (!reorderItems.length) {
       return res.status(400).json({
@@ -562,6 +589,10 @@ async function reorderMyOrder(req, res) {
       preorderId: createdPreorder.id,
       preorderNumber: createdPreorder.preorderNumber,
       itemsCount: reorderItems.length,
+      countryCode,
+      adjustments,
+      preorderPaymentMode: createdPreorder.preorderPaymentMode,
+      deliveryMode: createdPreorder.deliveryMode,
       identityVerified: true,
       fbo: { numeroFbo: sourceOrder.fbo.numeroFbo, nomComplet: verifiedName, grade: verifiedGrade, email: sourceOrder.fbo.email || "", phone: sourceOrder.factureWhatsappTo || "" },
     });
