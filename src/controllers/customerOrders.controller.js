@@ -90,7 +90,10 @@ async function listMyOrders(req, res) {
     if (q) where.AND.push({ OR: ["preorderNumber", "factureReference", "fboNomComplet", "fboNumero"].map((field) => ({ [field]: { contains: q, mode: "insensitive" } })) });
     if (["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID", "READY", "FULFILLED", "CANCELLED"].includes(status)) where.AND.push({ status });
     if (status === "ACTIVE") where.AND.push({ status: { notIn: ["CANCELLED", "FULFILLED"] } });
-    if (status === "TO_PAY") where.AND.push({ status: { in: ["INVOICED", "PAYMENT_PENDING"] }, paymentStatus: { not: "PAID" } });
+    if (status === "TO_PAY") where.AND.push({ OR: [
+      { status: { in: ["INVOICED", "PAYMENT_PENDING"] }, paymentStatus: { not: "PAID" } },
+      { status: { in: ["PAID", "READY"] }, shippingFeeFcfa: { gt: 0 }, OR: [{ shippingPaymentLink: { is: { status: { not: "PAID" } } } }, { shippingPaymentLink: { is: null } }] },
+    ] });
     if (status === "HISTORY") where.AND.push({ status: { in: ["CANCELLED", "FULFILLED"] } });
     if (relation === "SELF") where.AND.push({ fboId });
     if (relation === "PLACED_FOR_OTHER") where.AND.push({ fboId: { not: fboId }, placedByFboNumero: numeroFbo });
@@ -100,6 +103,11 @@ async function listMyOrders(req, res) {
         where,
         select: {
           id: true,
+          countryId: true,
+          deliveryMode: true,
+          shippingRecipientName: true, shippingRecipientPhone: true, shippingDestinationCity: true,
+          shippingFeeFcfa: true, shippingWeightKg: true, shippingParcelCount: true,
+          shippingPaymentLink: true,
           fboId: true,
           _count: { select: { items: true } },
           country: {
@@ -184,6 +192,7 @@ async function getMyOrder(req, res) {
         ],
       },
       include: {
+        shippingPaymentLink: true,
         country: {
           select: {
             code: true,
@@ -524,6 +533,7 @@ async function reorderMyOrder(req, res) {
           pointDeVente: sourceOrder.fbo.pointDeVente,
           preorderPaymentMode: normalizedPaymentMode,
           deliveryMode: normalizedDeliveryMode,
+          ...(require("../services/shipping.service").isShipping(normalizedDeliveryMode) ? { shippingRecipientName: sourceOrder.shippingRecipientName, shippingRecipientPhone: sourceOrder.shippingRecipientPhone, shippingDestinationCity: sourceOrder.shippingDestinationCity } : {}),
           status: "DRAFT",
           paymentStatus: "UNPAID",
           billingWorkStatus: "NONE",
@@ -593,6 +603,7 @@ async function reorderMyOrder(req, res) {
       adjustments,
       preorderPaymentMode: createdPreorder.preorderPaymentMode,
       deliveryMode: createdPreorder.deliveryMode,
+      shippingRecipientName: createdPreorder.shippingRecipientName, shippingRecipientPhone: createdPreorder.shippingRecipientPhone, shippingDestinationCity: createdPreorder.shippingDestinationCity,
       identityVerified: true,
       fbo: { numeroFbo: sourceOrder.fbo.numeroFbo, nomComplet: verifiedName, grade: verifiedGrade, email: sourceOrder.fbo.email || "", phone: sourceOrder.factureWhatsappTo || "" },
     });

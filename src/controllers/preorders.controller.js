@@ -940,6 +940,8 @@ async function getSummary(req, res) {
   }
 }
 
+const { recipientInput } = require("../services/shipping.service");
+
 async function submit(req, res) {
   const preorderId = req.params.id;
   const {
@@ -1112,7 +1114,10 @@ async function submit(req, res) {
       });
     }
 
+    const recipient = recipientInput({ ...preorder, ...req.body }, normalizedDeliveryMode, preorder.country?.code);
+
     if (
+      Object.keys(recipient).some(key => recipient[key] !== preorder[key]) ||
       (hasEmailField && normalizedEmail !== preorder.fboEmail) ||
       (normalizedPaymentMode &&
         normalizedPaymentMode !==
@@ -1132,6 +1137,7 @@ async function submit(req, res) {
             ? { preorderPaymentMode: normalizedPaymentMode }
             : {}),
           deliveryMode: normalizedDeliveryMode,
+          ...recipient,
           ...(requestedConsentAccepted && !preorder.personalDataConsentAccepted
             ? {
                 personalDataConsentAccepted: true,

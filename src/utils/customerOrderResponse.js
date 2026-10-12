@@ -1,3 +1,4 @@
+const { shippingPaymentSummary } = require('../services/shipping.service');
 const { computePaymentPricing } = require('../payments/payment-pricing');
 
 function pick(source, fields) {
@@ -14,8 +15,10 @@ function customerOrderResponse(order) {
     'bankPaymentStatus', 'bankPaymentDueAt', 'createdAt', 'updatedAt', 'submittedAt',
     'invoicedAt', 'paidAt', 'preparationLaunchedAt', 'preparedAt', 'fulfilledAt', 'cancelledAt',
     'manualPaymentReceivedAt', 'pickupPointLabel', 'pickupCode', 'pickupSecretCode',
+    'shippingRecipientName', 'shippingRecipientPhone', 'shippingDestinationCity', 'shippingFeeFcfa', 'shippingWeightKg', 'shippingParcelCount', 'shippingQuotedAt',
     'deliveryAddress', 'deliveryTrackingNumber', 'relationType',
   ]);
+  result.shippingPayment = shippingPaymentSummary(order);
   result.country = pick(order.country, ['code', 'name']);
   result.paymentPricing = computePaymentPricing({ preorderPaymentMode: order.preorderPaymentMode, orderTotalFcfa: order.totalFcfa });
   if (Array.isArray(order.items)) result.items = order.items.map((item) => ({

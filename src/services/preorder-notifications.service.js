@@ -109,6 +109,7 @@ function buildPreparationStartedSmsMessage({ preorder }) {
 }
 
 function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
+  if (require("./shipping.service").isShipping(preorder?.deliveryMode)) return prependNotificationPrefix(preorder, preorder.shippingFeeFcfa === 0 ? `Colis ${preorder.parcelNumber || preorder.preorderNumber} prêt pour expédition. Expédition offerte.` : `Colis ${preorder.parcelNumber || preorder.preorderNumber} prêt. Retrouvez les frais d’expédition et leur paiement dans votre espace client.`);
   const customer = preorder?.fboNomComplet || "";
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
@@ -124,6 +125,7 @@ function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
 }
 
 function buildOrderFulfilledSmsMessage({ preorder }) {
+  if (require("./shipping.service").isShipping(preorder?.deliveryMode)) return prependNotificationPrefix(preorder, `Colis ${preorder.parcelNumber || preorder.preorderNumber} remis à ${require("./shipping.service").carrierLabel(preorder.deliveryMode)} pour expédition. Merci pour votre confiance.`);
   const customer = preorder?.fboNomComplet || "";
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
@@ -220,6 +222,11 @@ function buildDefaultEmailBodyByPurpose({
   supportPhone = null,
   pickupAddress = null,
 }) {
+  if (require('./shipping.service').isShipping(preorder?.deliveryMode) && ['ORDER_READY', 'ORDER_FULFILLED'].includes(String(purpose).toUpperCase())) {
+    return String(purpose).toUpperCase() === 'ORDER_READY'
+      ? preorder.shippingFeeFcfa === 0 ? smsMessage : [smsMessage, 'Les produits sont déjà payés. Les frais d’expédition sont à régler séparément avant la remise au transporteur.', 'Retrouvez le montant et le bouton de paiement dans votre espace client.'].join('\n\n')
+      : smsMessage;
+  }
   const normalizedPurpose = String(purpose || "").trim().toUpperCase();
   const customer = preorder?.fboNomComplet || "Client";
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
@@ -859,6 +866,9 @@ function resolveConfiguredTemplates({
   fallbackEmailSubject,
   fallbackEmailBody,
 }) {
+  if (require('./shipping.service').isShipping(context?.preorder?.deliveryMode) && ['ORDER_READY', 'ORDER_FULFILLED'].includes(normalizePurposeKey(purpose))) {
+    return { smsMessage: fallbackSms, emailSubject: fallbackEmailSubject, emailBody: fallbackEmailBody, emailHtml: buildDefaultEmailHtml({ subject: fallbackEmailSubject, body: fallbackEmailBody, preorder: context.preorder }) };
+  }
   const purposeKey = normalizePurposeKey(purpose);
   const smsPurposeCandidates = buildSmsTemplateCandidates({ purpose, context });
   const emailPurposeCandidates = buildEmailTemplateCandidates({ purpose, context });

@@ -744,6 +744,26 @@ async function getSubmittedOrdersExport(req, res) {
   }
 }
 
+const { setShippingQuote, assertShippingPaid, assertShippingQuoted, isShipping, carrierLabel } = require("../../services/shipping.service");
+
+async function syncShippingPayment(req, res) {
+  try {
+    const order = await prisma.preorder.findFirst({ where: scopeWhere(req, { id: req.params.id }), include: { shippingPaymentLink: true } });
+    if (!order) return res.status(404).json({ message: 'Commande introuvable' });
+    if (order.shippingPaymentLink) await require('../../services/external-wave-payment.service').syncExternalWavePaymentLink(order.shippingPaymentLink);
+    return res.json({ ok: true });
+  } catch (error) { return res.status(error.statusCode || 500).json({ message: error.message }); }
+}
+
+async function updateShippingQuote(req, res) {
+  try {
+    const order = await prisma.preorder.findFirst({ where: scopeWhere(req, { id: req.params.id }), include: { country: { include: { settings: true } } } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    const saved = await prisma.$transaction(tx => setShippingQuote(tx, order, req.body || {}, req.user.id));
+    return res.json(saved);
+  } catch (error) { return res.status(error.statusCode || 500).json({ message: error.message }); }
+}
+
 async function getOrderById(req, res) {
   try {
     const { id } = req.params;
@@ -754,6 +774,7 @@ async function getOrderById(req, res) {
       {},
       {
         include: {
+          shippingPaymentLink: { select: { providerSessionId: true, status: true, providerStatus: true, baseAmountFcfa: true, amountFcfa: true, serviceFeeFcfa: true } },
           items: {
             include: { product: true },
             orderBy: { createdAt: "asc" },
@@ -917,6 +938,7 @@ async function getOrderById(req, res) {
         {},
         {
           include: {
+            shippingPaymentLink: { select: { providerSessionId: true, status: true, providerStatus: true, baseAmountFcfa: true, amountFcfa: true, serviceFeeFcfa: true } },
             items: {
               include: { product: true },
               orderBy: { createdAt: "asc" },
@@ -3070,6 +3092,7 @@ async function prepareOrder(req, res) {
 
     const updated = await prisma.$transaction(async (tx) => {
       await claimOrderSnapshot(tx, order);
+      await assertShippingQuoted(tx, order);
       await ensurePreparationChecklist(tx, order);
       const blocking = await tx.preparationAnomaly.count({ where: { preorderId: order.id, blocking: true, resolvedAt: null } });
       const checklist = await tx.preparationChecklistItem.findMany({ where: { preorderId: order.id } });
@@ -3534,6 +3557,7 @@ async function fulfillOrder(req, res) {
 
     const updated = await prisma.$transaction(async (tx) => {
       await claimOrderSnapshot(tx, order);
+      await assertShippingPaid(tx, order);
       if (await tx.preparationAnomaly.count({ where: { preorderId: order.id, blocking: true, resolvedAt: null } })) {
         const error = new Error("Résolvez les anomalies bloquantes avant de confirmer la remise."); error.statusCode = 409; throw error;
       }
@@ -3549,7 +3573,7 @@ async function fulfillOrder(req, res) {
           pickupPointLabel: pickupPointLabel
             ? String(pickupPointLabel).trim()
             : order.pickupPointLabel,
-          deliveryCarrier: deliveryCarrier
+          deliveryCarrier: isShipping(order.deliveryMode) ? carrierLabel(order.deliveryMode) : deliveryCarrier
             ? String(deliveryCarrier).trim()
             : order.deliveryCarrier,
           internalNote: note ? String(note).trim() : order.internalNote,
@@ -3596,7 +3620,7 @@ async function fulfillOrder(req, res) {
           pickupPointLabel: pickupPointLabel
             ? String(pickupPointLabel).trim()
             : order.pickupPointLabel,
-          deliveryCarrier: deliveryCarrier
+          deliveryCarrier: isShipping(order.deliveryMode) ? carrierLabel(order.deliveryMode) : deliveryCarrier
             ? String(deliveryCarrier).trim()
             : order.deliveryCarrier,
         },
@@ -3736,6 +3760,7 @@ async function regularizeFulfillmentNoNotification(req, res) {
 
     const updated = await prisma.$transaction(async (tx) => {
       await claimOrderSnapshot(tx, order);
+      await assertShippingPaid(tx, order);
       await ensurePreparationChecklist(tx, order);
 
       if (mustDebitStock) {
@@ -3813,7 +3838,7 @@ async function regularizeFulfillmentNoNotification(req, res) {
           pickupPointLabel: pickupPointLabel
             ? String(pickupPointLabel).trim()
             : order.pickupPointLabel,
-          deliveryCarrier: deliveryCarrier
+          deliveryCarrier: isShipping(order.deliveryMode) ? carrierLabel(order.deliveryMode) : deliveryCarrier
             ? String(deliveryCarrier).trim()
             : order.deliveryCarrier,
           pickupRecipientType:
@@ -3990,6 +4015,8 @@ async function cancelOrder(req, res) {
 }
 
 module.exports = {
+  updateShippingQuote,
+  syncShippingPayment,
   listOrders,
   exportOrders,
   getSubmittedOrdersExport,

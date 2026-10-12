@@ -17,8 +17,8 @@ function publicExternalPaymentUrl(token, req = null) {
 function buildWaveUrls(link, req = null) {
   const base = publicExternalPaymentUrl(link.token, req);
   return {
-    successUrl: `${base}?wave=success`,
-    errorUrl: `${base}?wave=error`,
+    successUrl: `${base}?wave=success&country=${encodeURIComponent(link.country?.code || req?.country?.code || "CIV")}`,
+    errorUrl: `${base}?wave=error&country=${encodeURIComponent(link.country?.code || req?.country?.code || "CIV")}`,
   };
 }
 
@@ -76,14 +76,25 @@ async function initiateExternalWavePayment({ req, token }) {
     throw err;
   }
 
+  if (link.source === 'SHIPPING') {
+    const order = await prisma.preorder.findFirst({ where: { shippingPaymentLinkId: link.id, countryId: link.countryId, paymentStatus: 'PAID', status: { in: ['PAID', 'READY'] } } });
+    if (!order || order.shippingFeeFcfa !== link.baseAmountFcfa) { const error = new Error('Cette demande de frais d’expédition n’est plus active.'); error.statusCode = 409; throw error; }
+    if (link.providerSessionId && link.providerCheckoutUrl) return { ok: true, link, checkoutUrl: link.providerCheckoutUrl };
+    const claim = await prisma.externalPaymentLink.updateMany({ where: { id: link.id, status: 'ACTIVE', providerSessionId: null, providerStatus: { in: ['INITIATED', 'FAILED'] } }, data: { providerStatus: 'PROCESSING' } });
+    if (!claim.count) { const error = new Error('Le paiement est déjà en cours. Actualisez cette page.'); error.statusCode = 409; throw error; }
+  }
   const urls = buildWaveUrls(link, req);
   const clientReference = link.id;
-  const providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
+  let providerResponse;
+  try { providerResponse = await paymentOrchestrator.createCheckoutSession("WAVE", {
     amountFcfa: link.amountFcfa,
     successUrl: urls.successUrl,
     errorUrl: urls.errorUrl,
     clientReference,
-  });
+  }); } catch (error) {
+    if (link.source === 'SHIPPING') await prisma.externalPaymentLink.updateMany({ where: { id: link.id, status: 'ACTIVE', providerStatus: 'PROCESSING', providerSessionId: null }, data: { providerStatus: 'FAILED' } });
+    throw error;
+  }
   const metadata = extractProviderMetadata(providerResponse);
 
   const updated = await prisma.externalPaymentLink.update({
@@ -114,6 +125,22 @@ async function initiateExternalWavePayment({ req, token }) {
 }
 
 async function syncExternalWaveLinkFromSession({ link, providerStatusRaw }) {
+  if (link.source === 'SHIPPING') {
+    // Read current state: webhook retries and late events must never downgrade a paid quote.
+    link = await prisma.externalPaymentLink.findUnique({ where: { id: link.id } });
+    if (!link || link.status === 'PAID' || link.status === 'CANCELLED') return link;
+    let session = providerStatusRaw || {};
+    if (session.payment_status === 'succeeded' || session.checkout_status === 'complete') {
+      if ((session.amount == null || !session.currency || !session.client_reference) && link.providerSessionId) {
+        const verified = await paymentOrchestrator.getCheckoutSession('WAVE', { providerSessionId: link.providerSessionId });
+        session = verified.raw || {};
+        providerStatusRaw = session;
+      }
+      if (session.payment_status !== 'succeeded' || String(session.id || '') !== String(link.providerSessionId || '') || !link.providerSessionId || Number(session.amount) !== link.amountFcfa || session.currency !== link.currencyCode || String(session.client_reference || '') !== link.id) {
+        const error = new Error('Confirmation d’expédition incohérente : session, montant ou devise incorrects.'); error.statusCode = 409; throw error;
+      }
+    }
+  }
   const mapped = mapWaveSessionToInternal(providerStatusRaw || {});
   const metadata = extractProviderMetadata({ raw: providerStatusRaw || {} });
   const nextData = {
@@ -139,6 +166,13 @@ async function syncExternalWaveLinkFromSession({ link, providerStatusRaw }) {
     nextData.cancelledAt = link.cancelledAt || new Date();
   }
 
+  if (link.source === 'SHIPPING') {
+    await prisma.externalPaymentLink.updateMany({
+      where: { id: link.id, providerSessionId: link.providerSessionId, status: { notIn: ['PAID', 'CANCELLED'] } },
+      data: nextData,
+    });
+    return prisma.externalPaymentLink.findUnique({ where: { id: link.id } });
+  }
   return prisma.externalPaymentLink.update({
     where: { id: link.id },
     data: nextData,

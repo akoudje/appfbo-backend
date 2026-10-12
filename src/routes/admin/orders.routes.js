@@ -115,6 +115,9 @@ router.post(
   ordersController.resendConfirmationSms,
 );
 
+router.post("/:id/shipping-payment/sync", requirePermission(Permission.PREPARATION_UPDATE), ordersController.syncShippingPayment);
+router.post("/:id/shipping-quote", requirePermission(Permission.PREPARATION_UPDATE), ordersController.updateShippingQuote);
+
 router.post(
   "/:id/prepare",
   requirePermission(Permission.PREPARATION_UPDATE),

@@ -39,6 +39,8 @@ Vérifier en recette : numéro reconnu seul jusqu'au catalogue (aucun champ nom/
 
 ## Validation locale
 
+Pour le retrait FLP présélectionné et les nouvelles expéditions La Poste / Coditrans, consulter [shipping-rollout.md](shipping-rollout.md). Ce complément nécessite une migration et un paiement d’expédition distinct, déterminé par le préparateur.
+
 ```powershell
 node --test client-journey-regression.test.cjs customer-portal-regression.test.cjs orders-regression.test.cjs
 ```
