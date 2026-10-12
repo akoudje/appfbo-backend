@@ -197,6 +197,21 @@ function buildEmailSubjectByPurpose({ purpose, preorder }) {
   if (normalizedPurpose === "PAYMENT_CONFIRMED") {
     return `FOREVER CI - Paiement confirmé (${preorderNumber})`;
   }
+  if (normalizedPurpose === "REMINDER") {
+    return `FOREVER CI - Rappel de paiement (${preorderNumber})`;
+  }
+  if (normalizedPurpose === "AUTO_CANCEL") {
+    return `FOREVER CI - Précommande annulée (${preorderNumber})`;
+  }
+  if (normalizedPurpose === "CUSTOMER_CANCEL") {
+    return `FOREVER CI - Annulation confirmée (${preorderNumber})`;
+  }
+  if (normalizedPurpose === "PICKUP_REMINDER") {
+    return `FOREVER CI - Rappel de retrait (${preorderNumber})`;
+  }
+  if (normalizedPurpose === "PICKUP_OVERDUE") {
+    return `FOREVER CI - Retrait en retard (${preorderNumber})`;
+  }
   return `FOREVER CI - Notification commande (${preorderNumber})`;
 }
 
@@ -402,8 +417,21 @@ function buildDefaultEmailBodyByPurpose({
       .join("\n");
   }
 
-  // Filet de sécurité pour les purposes sans corps dédié (ex. CUSTOMER_CANCEL,
-  // SHIPPING_PAYMENT_LINK, PICKUP_REMINDER, PICKUP_OVERDUE...). smsMessage est
+  if (normalizedPurpose === "CUSTOMER_CANCEL") {
+    return [
+      `Bonjour ${customer},`,
+      "",
+      `Votre précommande ${preorderNumber} a bien été annulée, comme demandé depuis votre espace client.`,
+      "Vous pouvez soumettre une nouvelle précommande à tout moment si vous le souhaitez.",
+      supportLine,
+      "",
+      "Equipe FOREVER",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  // Filet de sécurité pour les purposes sans corps dédié. smsMessage est
   // écrit pour le SMS (préfixé "FOREVER: {ref}.", sans accents, sa propre
   // salutation) : on retire ce qui fait déjà doublon avec l'email (préfixe,
   // salutation) plutôt que de l'empiler tel quel sous une 2e salutation.

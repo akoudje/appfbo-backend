@@ -61,6 +61,28 @@ function buildPickupReminderMessage(preorder, overdueAt) {
   return `Bonjour ${customer}, votre colis ${reference} est pret depuis plusieurs jours. Merci de le retirer avant le ${deadline} avec votre code de retrait, faute de quoi des frais de stockage pourront s'appliquer.`;
 }
 
+// purpose: "PICKUP_REMINDER" n'ayant pas de corps d'email dédié dans
+// preorder-notifications.service.js (il manque ici l'échéance calculée),
+// on fournit directement un emailMessage propre plutôt que de laisser
+// retomber le texte SMS ci-dessus (sans accents) dans l'email.
+function buildPickupReminderEmailBody(preorder, overdueAt) {
+  const customer = String(preorder?.fboNomComplet || "Client").trim();
+  const reference = String(
+    preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-",
+  ).trim();
+  const deadline = overdueAt
+    ? overdueAt.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
+    : "bientôt";
+  return [
+    `Bonjour ${customer},`,
+    "",
+    `Votre colis ${reference} est prêt depuis plusieurs jours et attend toujours d'être retiré.`,
+    `Merci de le retirer avant le ${deadline}, muni de votre code de retrait, faute de quoi des frais de stockage pourront s'appliquer.`,
+    "",
+    "Equipe FOREVER",
+  ].join("\n");
+}
+
 async function hasExistingLog(preorderId, action, sinceDate) {
   const existing = await prisma.preorderLog.findFirst({
     where: {
@@ -131,6 +153,7 @@ async function sendPickupReminders({ now = new Date() } = {}) {
         // ci-dessous, même bug.
         purpose: "PICKUP_REMINDER",
         message: buildPickupReminderMessage(preorder, overdueAt),
+        emailMessage: buildPickupReminderEmailBody(preorder, overdueAt),
         actorName: "SYSTEM_PICKUP_REMINDER",
       });
 
@@ -208,6 +231,18 @@ async function flagOverduePickups({ now = new Date() } = {}) {
           `Bonjour ${preorder.fboNomComplet || "Client"}, votre colis ${preorder.parcelNumber || preorder.preorderNumber} ` +
           `n'a toujours pas ete retire (${daysLate} jour${daysLate > 1 ? "s" : ""} apres mise a disposition). ` +
           `Merci de le retirer rapidement, des frais de stockage peuvent desormais s'appliquer.`,
+        // purpose "PICKUP_OVERDUE" n'a pas de corps d'email dédié dans
+        // preorder-notifications.service.js (il manque ici daysLate), donc
+        // on fournit directement un emailMessage propre (accents, pas de
+        // salutation dupliquée) plutôt que de laisser retomber le texte SMS.
+        emailMessage: [
+          `Bonjour ${preorder.fboNomComplet || "Client"},`,
+          "",
+          `Votre colis ${preorder.parcelNumber || preorder.preorderNumber} n'a toujours pas été retiré, ${daysLate} jour${daysLate > 1 ? "s" : ""} après sa mise à disposition.`,
+          "Merci de le retirer rapidement : des frais de stockage peuvent désormais s'appliquer.",
+          "",
+          "Equipe FOREVER",
+        ].join("\n"),
         actorName: "SYSTEM_PICKUP_OVERDUE",
       });
 
