@@ -169,6 +169,13 @@ async function sendWithMailerSend({ to, subject, body, html = null, metadata = {
           },
         },
       ],
+      // Le tracking de clics de MailerSend réécrit nos liens (paiement,
+      // billets, dépôt de preuve...) vers une redirection click.mailersend.net
+      // qui a produit des 404 sur des liens pourtant valides. On préfère
+      // désactiver ce tracking plutôt que de risquer un lien d'action cassé.
+      settings: {
+        track_clicks: false,
+      },
     };
 
     const response = await fetch(cfg.apiUrl, {
