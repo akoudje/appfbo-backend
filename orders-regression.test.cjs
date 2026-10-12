@@ -10,6 +10,7 @@ function controller(db, file='orders.controller.js') {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'src/controllers/admin',file),'utf8'), {module,console:{error(){}},process,Buffer,require(id){
     if(id==='../../prisma')return db;
     if(id.endsWith('/shipping.service'))return require('./src/services/shipping.service');
+    if(id.endsWith('/shipping-notifications.service'))return {withShippingNotification:order=>order,notifyShippingPayment:async()=>({status:'QUEUED'})};
     if(id.endsWith('/order-write-guard'))return {claimOrderSnapshot};
     if(id.endsWith('/order-query'))return query;
     if(id.endsWith('/countryScope'))return country;

@@ -745,6 +745,17 @@ async function getSubmittedOrdersExport(req, res) {
 }
 
 const { setShippingQuote, assertShippingPaid, assertShippingQuoted, isShipping, carrierLabel } = require("../../services/shipping.service");
+const { notifyShippingPayment, withShippingNotification } = require("../../services/shipping-notifications.service");
+
+async function resendShippingPaymentNotification(req, res) {
+  try {
+    const shippingNotification = await notifyShippingPayment({ orderId: req.params.id, countryId: pickCountryId(req), actorName: actorLabel(req) });
+    return res.json({ shippingNotification });
+  } catch (error) {
+    const status = Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
+    return res.status(status).json({ message: status === 500 ? "Impossible d’envoyer la notification d’expédition. Réessayez dans un instant." : error.message });
+  }
+}
 
 async function syncShippingPayment(req, res) {
   try {
@@ -764,7 +775,12 @@ async function updateShippingQuote(req, res) {
     const order = await prisma.preorder.findFirst({ where: scopeWhere(req, { id: req.params.id }), include: { country: { include: { settings: true } } } });
     if (!order) return res.status(404).json({ message: "Commande introuvable" });
     const saved = await prisma.$transaction(tx => setShippingQuote(tx, order, req.body || {}, req.user.id));
-    return res.json(saved);
+    const body = withShippingNotification(saved);
+    if (!saved.shippingQuoteUnchanged || ['NONE', 'FAILED', 'PARTIAL'].includes(body.shippingNotification?.status)) {
+      try { body.shippingNotification = await notifyShippingPayment({ orderId: saved.id, countryId: order.countryId, actorName: actorLabel(req) }); }
+      catch { body.shippingNotification = { status: "FAILED", message: "Les frais sont enregistrés, mais la notification n’a pas pu être envoyée. Utilisez « Notifier le client ».", channels: [] }; }
+    }
+    return res.json(body);
   } catch (error) {
     const status = Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
     if (status === 500) console.error("updateShippingQuote error:", error);
@@ -782,7 +798,7 @@ async function getOrderById(req, res) {
       {},
       {
         include: {
-          shippingPaymentLink: { select: { providerSessionId: true, status: true, providerStatus: true, baseAmountFcfa: true, amountFcfa: true, serviceFeeFcfa: true } },
+          shippingPaymentLink: { select: { token: true, providerSessionId: true, status: true, providerStatus: true, baseAmountFcfa: true, amountFcfa: true, serviceFeeFcfa: true } },
           items: {
             include: { product: true },
             orderBy: { createdAt: "asc" },
@@ -946,7 +962,7 @@ async function getOrderById(req, res) {
         {},
         {
           include: {
-            shippingPaymentLink: { select: { providerSessionId: true, status: true, providerStatus: true, baseAmountFcfa: true, amountFcfa: true, serviceFeeFcfa: true } },
+            shippingPaymentLink: { select: { token: true, providerSessionId: true, status: true, providerStatus: true, baseAmountFcfa: true, amountFcfa: true, serviceFeeFcfa: true } },
             items: {
               include: { product: true },
               orderBy: { createdAt: "asc" },
@@ -1002,10 +1018,10 @@ async function getOrderById(req, res) {
         },
       );
 
-      return res.json(hydratedOrder);
+      return res.json(withShippingNotification(hydratedOrder));
     }
 
-    return res.json(order);
+    return res.json(withShippingNotification(order));
   } catch (e) {
     console.error("getOrderById error:", e);
     return res.status(500).json({ message: "Erreur serveur (getOrderById)" });
@@ -4023,6 +4039,7 @@ async function cancelOrder(req, res) {
 }
 
 module.exports = {
+  resendShippingPaymentNotification,
   updateShippingQuote,
   syncShippingPayment,
   listOrders,

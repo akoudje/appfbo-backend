@@ -1,6 +1,7 @@
 const express = require("express");
 const { Permission } = require("../../auth/permissions");
 const { requirePermission } = require("../../middlewares/rbac");
+const { createRateLimiter } = require("../../middlewares/rateLimit");
 const ordersController = require("../../controllers/admin/orders.controller");
 const as400GatewayController = require("../../controllers/admin/as400Gateway.controller");
 
@@ -116,6 +117,7 @@ router.post(
 );
 
 router.post("/:id/shipping-payment/sync", requirePermission(Permission.PREPARATION_UPDATE), ordersController.syncShippingPayment);
+router.post("/:id/shipping-payment/notify", requirePermission(Permission.PREPARATION_UPDATE), createRateLimiter({ windowMs: 60000, max: 2, keyPrefix: "shipping-payment-notification", keyFn: req => `${req.countryId}:${req.params.id}` }), ordersController.resendShippingPaymentNotification);
 router.post("/:id/shipping-quote", requirePermission(Permission.PREPARATION_UPDATE), ordersController.updateShippingQuote);
 
 router.post(

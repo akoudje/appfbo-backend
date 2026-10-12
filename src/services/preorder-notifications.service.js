@@ -431,6 +431,7 @@ function shouldSendSmsForPurpose(purpose = "") {
     "PAYMENT_LINK",
     "REMINDER",
     "ORDER_READY",
+    "SHIPPING_PAYMENT_LINK",
   ]).has(key);
 }
 
@@ -446,6 +447,7 @@ const ORDER_MESSAGE_PURPOSE_VALUES = new Set([
 
 function resolvePersistedOrderMessagePurpose(purpose = "") {
   const key = String(purpose || "").trim().toUpperCase();
+  if (key === "SHIPPING_PAYMENT_LINK") return "PAYMENT_LINK";
   if (ORDER_MESSAGE_PURPOSE_VALUES.has(key)) return key;
 
   // Compatibilité rétroactive: certains flux utilisent PREORDER_SUBMITTED
@@ -502,10 +504,11 @@ async function findRecentDuplicateOrderMessage({
       purpose,
       channel,
       body: String(message || ""),
+      status: { in: ["QUEUED", "SENT", "DELIVERED", "READ"] },
       ...(channel === "EMAIL"
         ? {}
         : { toPhone: toPhone ? String(toPhone) : null }),
-      createdAt: { gte: since },
+      ...(channel === "SMS" ? { OR: [{ status: "QUEUED" }, { createdAt: { gte: since } }] } : { createdAt: { gte: since } }),
     },
     orderBy: { createdAt: "desc" },
     select: {
@@ -790,6 +793,10 @@ function resolveConfiguredTemplates({
   fallbackEmailSubject,
   fallbackEmailBody,
 }) {
+  if (normalizePurposeKey(purpose) === "SHIPPING_PAYMENT_LINK") {
+    return { smsMessage: prependNotificationPrefix(context.preorder, fallbackSms), emailSubject: fallbackEmailSubject, emailBody: fallbackEmailBody,
+      emailHtml: buildDefaultEmailHtml({ subject: fallbackEmailSubject, body: fallbackEmailBody, preorder: context.preorder, ctaHref: context.paymentLink, ctaLabel: "Payer les frais d’expédition", supportPhone: context.supportPhone }) };
+  }
   if (require('./shipping.service').isShipping(context?.preorder?.deliveryMode) && ['ORDER_READY', 'ORDER_FULFILLED'].includes(normalizePurposeKey(purpose))) {
     return { smsMessage: fallbackSms, emailSubject: fallbackEmailSubject, emailBody: fallbackEmailBody, emailHtml: buildDefaultEmailHtml({ subject: fallbackEmailSubject, body: fallbackEmailBody, preorder: context.preorder }) };
   }
@@ -1089,6 +1096,7 @@ async function sendPreorderNotification({
   }
 
   const persistedPurpose = resolvePersistedOrderMessagePurpose(purpose);
+  const pushPurpose = String(purpose).toUpperCase() === "SHIPPING_PAYMENT_LINK" ? "SHIPPING_PAYMENT_LINK" : persistedPurpose;
 
   const resolvedPhone = toPhone || resolveNotificationPhone(preorder);
   const resolvedWhatsapp = toWhatsapp || resolvedPhone;
@@ -1156,7 +1164,7 @@ async function sendPreorderNotification({
   if (!resolvedPhone && !resolvedWhatsapp && !resolvedEmail) {
     const pushResult = await sendPreorderMobilePush({
       preorder,
-      purpose: persistedPurpose,
+      purpose: pushPurpose,
       message: resolvedSmsMessage,
     });
     return {
@@ -1174,7 +1182,7 @@ async function sendPreorderNotification({
   if (effectiveChannels.length === 0) {
     const pushResult = await sendPreorderMobilePush({
       preorder,
-      purpose: persistedPurpose,
+      purpose: pushPurpose,
       message: resolvedSmsMessage,
     });
     return {
@@ -1215,7 +1223,8 @@ async function sendPreorderNotification({
     if (duplicateMessage) {
       const attempt = {
         channel: item.channel,
-        sent: true,
+        sent: duplicateMessage.status !== "QUEUED",
+        queued: duplicateMessage.status === "QUEUED",
         to: item.to,
         messageId: duplicateMessage.id,
         provider: duplicateMessage.provider || null,
@@ -1331,7 +1340,7 @@ async function sendPreorderNotification({
   const anyAccepted = attempts.some((a) => a.sent || a.queued);
   const pushResult = await sendPreorderMobilePush({
     preorder,
-    purpose: persistedPurpose,
+    purpose: pushPurpose,
     message: resolvedSmsMessage,
   });
 

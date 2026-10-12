@@ -1,4 +1,5 @@
 const prisma = require("../prisma");
+const { isShipping, carrierLabel, shippingPaymentSummary } = require("../services/shipping.service");
 const { getPaymentExpiryHours } = require("../services/notification-template-defaults");
 
 const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
@@ -92,6 +93,14 @@ function buildNotificationsFromOrders(orders, numeroFbo) {
           : null),
     };
     const windowState = paymentWindow(enrichedOrder);
+    const shipping = shippingPaymentSummary(order);
+    if (isShipping(order.deliveryMode) && ['PAID', 'READY'].includes(status) && shipping?.status === 'TO_PAY' && order.shippingFeeFcfa > 0) notifications.push({
+      key: `${id}:shipping-payment:${order.shippingPaymentLinkId || 'quote'}`,
+      orderId: id, preorderNumber: reference, relationType, severity: "warning",
+      title: "Frais d’expédition à payer",
+      body: `${reference} ${relationLabel} : ${formatFcfa(shipping.amountToPayFcfa)} à régler pour l’expédition par ${carrierLabel(order.deliveryMode)}.`,
+      eventAt: order.shippingQuotedAt || order.updatedAt || order.createdAt,
+    });
 
     if (windowState?.expired) {
       notifications.push({
@@ -125,7 +134,7 @@ function buildNotificationsFromOrders(orders, numeroFbo) {
         relationType,
         severity: "success",
         title: "Commande prête",
-        body: `${reference} ${relationLabel} est prête au retrait.${order?.paymentCollectionCode ? ` Code: ${order.paymentCollectionCode}.` : ""}`,
+        body: isShipping(order.deliveryMode) ? `${reference} ${relationLabel} est prête pour l’expédition.` : `${reference} ${relationLabel} est prête au retrait.${order?.paymentCollectionCode ? ` Code: ${order.paymentCollectionCode}.` : ""}`,
         eventAt: order?.preparedAt || order?.updatedAt || order?.createdAt,
       });
     }
@@ -222,6 +231,12 @@ async function loadScopedOrdersForCustomer({ fboId, numeroFbo }) {
     },
     select: {
       id: true,
+      countryId: true,
+      deliveryMode: true,
+      shippingFeeFcfa: true,
+      shippingPaymentLinkId: true,
+      shippingQuotedAt: true,
+      shippingPaymentLink: { select: { source: true, countryId: true, status: true, providerStatus: true, baseAmountFcfa: true, amountFcfa: true, serviceFeeFcfa: true } },
       preorderNumber: true,
       status: true,
       paymentStatus: true,
