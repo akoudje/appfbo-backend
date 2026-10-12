@@ -217,6 +217,22 @@ function buildPaymentActionLine({ paymentLink, isBankTransferFlow, isEcobankPayF
     : "Ouvrez le lien ci-dessus, joignez votre preuve de virement et validez l'envoi.";
 }
 
+// smsMessage est écrit pour le SMS : préfixé "FOREVER: {ref}." par
+// prependNotificationPrefix, parfois ré-ouvert par sa propre salutation
+// "Bonjour {customer},". Utilisé tel quel comme corps d'email (fallback des
+// purposes sans template dédié), il produisait une salutation et une
+// référence répétées plusieurs fois dans le même message.
+function stripSmsArtifactsForEmail(smsMessage = "", customer = "") {
+  let text = compactText(smsMessage || "");
+  text = text.replace(/^FOREVER:\s*[^.]*\.\s*/i, "");
+  if (customer) {
+    const escapedCustomer = customer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text.replace(new RegExp(`^Bonjour\\s+${escapedCustomer}\\s*,?\\s*`, "i"), "");
+  }
+  text = text.trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
 function buildDefaultEmailBodyByPurpose({
   purpose,
   preorder,
@@ -371,15 +387,37 @@ function buildDefaultEmailBodyByPurpose({
       .join("\n");
   }
 
+  if (normalizedPurpose === "AUTO_CANCEL") {
+    const expiryHours = getPaymentExpiryHours();
+    return [
+      `Bonjour ${customer},`,
+      "",
+      `Votre précommande ${preorderNumber} a été annulée faute de paiement confirmé dans le délai maximal de ${expiryHours}h après préfacturation.`,
+      "Vous pouvez soumettre une nouvelle précommande à tout moment si vous le souhaitez.",
+      supportLine,
+      "",
+      "Equipe FOREVER",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  // Filet de sécurité pour les purposes sans corps dédié (ex. CUSTOMER_CANCEL,
+  // SHIPPING_PAYMENT_LINK, PICKUP_REMINDER, PICKUP_OVERDUE...). smsMessage est
+  // écrit pour le SMS (préfixé "FOREVER: {ref}.", sans accents, sa propre
+  // salutation) : on retire ce qui fait déjà doublon avec l'email (préfixe,
+  // salutation) plutôt que de l'empiler tel quel sous une 2e salutation.
+  const cleanedMessage = stripSmsArtifactsForEmail(smsMessage, customer);
   return [
     `Bonjour ${customer},`,
     "",
-    `Mise à jour de votre commande ${preorderNumber}.`,
-    "",
-    compactText(smsMessage || ""),
+    cleanedMessage || `Mise à jour de votre commande ${preorderNumber}.`,
+    supportLine,
     "",
     "Equipe FOREVER",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildDefaultEmailHtml({
