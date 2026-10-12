@@ -678,9 +678,10 @@ async function exportOrders(req, res) {
 
 async function getSubmittedOrdersExport(req, res) {
   try {
+    // Les numéros sont stockés en majuscules ; on tolère « Po-civ-… » collé tel quel.
     const preorderNumbers = String(req.query.preorderNumbers || "")
       .split(/[\s,;]+/)
-      .map((n) => n.trim())
+      .map((n) => n.trim().toUpperCase())
       .filter(Boolean);
 
     const where = preorderNumbers.length
@@ -696,6 +697,13 @@ async function getSubmittedOrdersExport(req, res) {
         fboNomComplet: true,
         fboNumero: true,
         createdAt: true,
+        status: true,
+        paymentStatus: true,
+        factureReference: true,
+        as400InvoiceTotalFcfa: true,
+        indicativeTotalFcfa: true,
+        totalFcfa: true,
+        cancelReason: true,
         items: {
           orderBy: { createdAt: "asc" },
           select: {
@@ -722,6 +730,12 @@ async function getSubmittedOrdersExport(req, res) {
         fboNomComplet: order.fboNomComplet || "",
         fboNumero: order.fboNumero || "",
         createdAt: order.createdAt,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        factureReference: order.factureReference || "",
+        as400InvoiceTotalFcfa: order.as400InvoiceTotalFcfa ?? null,
+        indicativeTotalFcfa: order.indicativeTotalFcfa ?? order.totalFcfa ?? null,
+        cancelReason: order.cancelReason || "",
         items: Array.isArray(order.items)
           ? order.items.map((item) => ({
               id: item.id,
