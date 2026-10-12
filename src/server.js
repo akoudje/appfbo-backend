@@ -215,7 +215,10 @@ app.use(express.urlencoded({ extended: true }));
 /* =========================================================
    Health check
    ========================================================= */
-app.get("/health", (req, res) => res.json({ ok: true }));
+app.get("/health", (req, res) => res.set("Cache-Control", "no-store").json({
+  ok: true,
+  revision: process.env.RENDER_GIT_COMMIT || null,
+}));
 
 /* =========================================================
    Routes publiques

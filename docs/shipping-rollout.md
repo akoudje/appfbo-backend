@@ -30,6 +30,10 @@ Aucune modification des anciennes commandes de retrait ou de livraison à domici
 
 ## Validation
 
+La tarification d’expédition est journalisée avec l’action Prisma existante `REPRICE` et le marqueur `meta.event: SHIPPING_QUOTE`. Ce marqueur ne constitue pas une nouvelle valeur d’énumération et ne nécessite pas de migration. Les erreurs serveur inattendues du devis et de la vérification de paiement sont conservées dans les logs internes ; l’interface reçoit un message sans détails Prisma ni identifiants internes.
+
+Sur Render, `/health` expose `revision`, issu de la variable système `RENDER_GIT_COMMIT`, pour confirmer la version réellement en ligne avant de tester une correction. Un push ou une fusion GitHub ne garantit pas à lui seul que le nouveau backend a fini son déploiement.
+
 Tests de devis et paiement : `node --test shipping-regression.test.cjs`.
 Non-régressions : `node --test customer-portal-regression.test.cjs client-journey-regression.test.cjs orders-regression.test.cjs preparation-regression.test.cjs external-payment-links-regression.test.cjs`.
 Contrôles locaux : schéma Prisma, lint ciblé, compilations web et export du bundle Android, tests des étiquettes et du protocole JK01.

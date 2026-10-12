@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { PreorderLogAction } = require('@prisma/client');
 const shipping = require('./src/services/shipping.service');
 const options = require('./src/services/country-order-options.service');
 const { customerOrderResponse } = require('./src/utils/customerOrderResponse');
@@ -15,7 +16,10 @@ function fixture(overrides = {}) {
     preparationChecklistItem: { findMany: async () => overrides.lines || [{ checked: true }] },
     preparationAnomaly: { count: async () => overrides.blocking || 0 },
     externalPaymentLink: { findUnique: async () => overrides.link || null, updateMany: async args => { writes.push(['cancel',args]); return { count: overrides.cancelCount ?? 1 }; }, create: async args => { writes.push(['link',args]); return { id: 'link', ...args.data }; } },
-    preorderLog: { create: async args => { writes.push(['log',args]); return {}; } },
+    preorderLog: { create: async args => {
+      assert.ok(Object.values(PreorderLogAction).includes(args.data.action), 'Log action must be accepted by the real Prisma enum');
+      writes.push(['log',args]); return {};
+    } },
   };
   return { db, writes };
 }
@@ -104,6 +108,62 @@ test('a preparer quote creates a separate payment and cannot alter the paid prod
   for(const key of ['totalFcfa','as400InvoiceTotalFcfa','fraisLivraisonFcfa','paymentStatus','status']) assert.equal(data[key],undefined);
   assert.equal(data.shippingQuotedById,'preparer'); assert.equal(data.shippingPaymentLinkId,'link');
   assert.equal(writes.find(([kind])=>kind==='log')[1].data.actorAdminId,'preparer');
+  assert.equal(writes.find(([kind])=>kind==='log')[1].data.meta.event, 'SHIPPING_QUOTE');
+});
+test('free shipping is also saved with an enum-valid audit entry and no payment link', async () => {
+  const { db, writes } = fixture();
+  const saved = await shipping.setShippingQuote(db, order, { shippingFeeFcfa: 0, shippingWeightKg: 1.2 }, 'preparer');
+  assert.equal(saved.shippingFeeFcfa, 0);
+  assert.equal(saved.shippingPaymentLinkId, null);
+  assert.equal(writes.some(([kind]) => kind === 'link'), false);
+  assert.equal(writes.find(([kind]) => kind === 'log')[1].data.meta.event, 'SHIPPING_QUOTE');
+});
+
+function shippingController(db) {
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync('./src/controllers/admin/orders.controller.js', 'utf8'), {
+    module, Buffer, Date, process: { env: {} }, console: { error() {} }, require(name) {
+      if (name === '../../prisma') return db;
+      if (name === '../../services/shipping.service') return shipping;
+      if (name === '../../helpers/countryScope') return require('./src/helpers/countryScope');
+      if (name === '../../auth/permissions') return require('./src/auth/permissions');
+      return {};
+    },
+  });
+  return module.exports;
+}
+const response = () => ({ code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+const quoteRequest = () => ({ params: { id: order.id }, countryId: 'ci', user: { id: 'preparer' }, body: { shippingFeeFcfa: 2500, shippingWeightKg: 2.4 } });
+
+test('the quote HTTP handler records a valid Prisma audit action before returning success', async () => {
+  const { db, writes } = fixture();
+  db.preorder.findFirst = async ({ where }) => { assert.equal(where.countryId, 'ci'); return order; };
+  db.$transaction = async fn => fn(db);
+  const res = response();
+  await shippingController(db).updateShippingQuote(quoteRequest(), res);
+  assert.equal(res.code, 200);
+  assert.equal(res.body.shippingFeeFcfa, 2500);
+  assert.equal(res.body.shippingPaymentLinkId, 'link');
+  assert.equal(writes.find(([kind]) => kind === 'log')[1].data.meta.event, 'SHIPPING_QUOTE');
+});
+
+test('the quote HTTP handler hides Prisma details and internal identifiers on a server failure', async () => {
+  const secret = 'internal-order-id-private';
+  const db = { preorder: { findFirst: async () => order }, $transaction: async () => { throw new Error(`Invalid prisma.preorderLog.create() invocation: ${secret}`); } };
+  const res = response();
+  await shippingController(db).updateShippingQuote(quoteRequest(), res);
+  assert.equal(res.code, 500);
+  assert.equal(res.body.code, 'SHIPPING_QUOTE_FAILED');
+  assert.equal(JSON.stringify(res.body).includes(secret), false);
+  assert.equal(JSON.stringify(res.body).includes('prisma'), false);
+});
+
+test('expected business validation remains readable instead of becoming a generic server error', async () => {
+  const db = { preorder: { findFirst: async () => order }, $transaction: async () => { const error = new Error('Terminez la vérification du colis.'); error.statusCode = 409; throw error; } };
+  const res = response();
+  await shippingController(db).updateShippingQuote(quoteRequest(), res);
+  assert.equal(res.code, 409);
+  assert.equal(res.body.message, 'Terminez la vérification du colis.');
 });
 test('incomplete preparation, unpaid products, disabled Wave and stale snapshots never create payment links', async () => {
   for(const setup of [{lines:[{checked:false}]},{blocking:1},{claimCount:0},{modified:{status:'INVOICED'}},{modified:{country:{code:'CIV',settings:{enableWave:false}}}}]) {
