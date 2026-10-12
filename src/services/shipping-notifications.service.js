@@ -54,7 +54,9 @@ function notificationSummary(order) {
 
 function withShippingNotification(order) {
   if (!order) return order;
-  const result = { ...order, shippingNotification: notificationSummary(order) };
+  const result = { ...order, shippingNotification: notificationSummary(order), shippingReceiptAvailable: Boolean(order.shippingReceiptFileUrl) };
+  delete result.shippingReceiptFileUrl;
+  delete result.shippingReceiptMimeType;
   delete result.shippingQuoteUnchanged;
   if (order.shippingPaymentLink) result.shippingPaymentLink = Object.fromEntries(['providerSessionId', 'status', 'providerStatus', 'baseAmountFcfa', 'amountFcfa', 'serviceFeeFcfa'].filter(key => order.shippingPaymentLink[key] !== undefined).map(key => [key, order.shippingPaymentLink[key]]));
   return result;

@@ -166,6 +166,21 @@ test('free or already paid shipping never requests another payment', async () =>
   }
 });
 
+test('handover notification carries the actual reference in email and queues a compact SMS without pickup wording', async () => {
+  const f=fixture({order:{status:'FULFILLED',deliveryTracking:'CODI-ISSIA-001',shippingDestinationCity:'ISSIA',shippingHandedOverAt:'2026-10-12T18:00:00Z',fulfilledAt:'2026-10-12T18:02:00Z'}});
+  const messages=moduleFrom('./src/services/preorder-notifications.service.js',{'./shipping.service':shipping,'./sms.orange.service':{MAX_SMS_LENGTH:160}});
+  const sms=messages.buildOrderFulfilledSmsMessage({preorder:f.order});
+  const generic=moduleFrom('./src/services/preorder-notifications.service.js',{
+    '../prisma':{countrySettings:{findUnique:async()=>null},orderMessage:{findFirst:async()=>null,create:async({data})=>({...data,id:'message'}),update:async({data})=>({...data,id:'message'})},orderMessageEvent:{create:async()=>({})}},
+    './shipping.service':shipping,'./sms.orange.service':{MAX_SMS_LENGTH:160},'./notification-template-defaults':{getPaymentExpiryHours:()=>2},
+    './email.service':{normalizeEmail:value=>value,sendEmail:async args=>{f.emails.push(args);return {accepted:true};}},'./email-templates/layout':require('./src/services/email-templates/layout'),
+    './mobile-push.service':{sendPreorderMobilePush:async()=>({sent:false})},
+  });
+  const result=await generic.sendPreorderNotification({preorder:f.order,purpose:'ORDER_FULFILLED',message:sms});
+  assert.equal(result.smsQueued,true);assert.equal(result.emailSent,true);assert.ok(sms.length<=160);assert.match(f.emails[0].body,/CODI-ISSIA-001/);assert.match(f.emails[0].body,/ISSIA/);assert.equal(f.emails[0].body.includes('Code de retrait'),false);
+  const long=messages.buildOrderFulfilledSmsMessage({preorder:{...f.order,deliveryTracking:'x'.repeat(120)}});assert.ok(long.length<=160);assert.match(long,/espace client/);
+});
+
 test('another country, replaced links, cancelled orders and mismatching fees cannot trigger messages', async () => {
   const foreign = fixture(); await assert.rejects(foreign.api.notifyShippingPayment({ ...request, countryId: 'other' }), error => error.statusCode === 404);
   for (const patch of [{ link: { status: 'CANCELLED' } }, { link: { countryId: 'other' } }, { link: { baseAmountFcfa: 1 } }, { order: { status: 'CANCELLED' } }]) {

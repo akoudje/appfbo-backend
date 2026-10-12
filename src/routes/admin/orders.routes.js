@@ -3,6 +3,7 @@ const { Permission } = require("../../auth/permissions");
 const { requirePermission } = require("../../middlewares/rbac");
 const { createRateLimiter } = require("../../middlewares/rateLimit");
 const ordersController = require("../../controllers/admin/orders.controller");
+const shippingController = require("../../controllers/admin/shipping.controller");
 const as400GatewayController = require("../../controllers/admin/as400Gateway.controller");
 
 const router = express.Router();
@@ -10,6 +11,9 @@ const { protectPickupSecrets } = require("../../middlewares/protectPickupSecrets
 router.use(protectPickupSecrets);
 
 router.get("/", requirePermission(Permission.PREORDER_READ), ordersController.listOrders);
+router.get('/shipments', requirePermission(Permission.PREPARATION_UPDATE), shippingController.listShipments);
+router.post('/:id/shipping-receipt', requirePermission(Permission.PREPARATION_UPDATE), shippingController.receiptMiddleware, shippingController.uploadReceipt);
+router.get('/:id/shipping-receipt', requirePermission(Permission.PREPARATION_UPDATE), shippingController.downloadReceipt);
 router.get("/export", requirePermission(Permission.EXPORT_READ), ordersController.exportOrders);
 router.get(
   "/submitted-export",

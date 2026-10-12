@@ -10,6 +10,7 @@ function controller(db, file='orders.controller.js') {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'src/controllers/admin',file),'utf8'), {module,console:{error(){}},process,Buffer,require(id){
     if(id==='../../prisma')return db;
     if(id.endsWith('/shipping.service'))return require('./src/services/shipping.service');
+    if(id.endsWith('/shipping-workspace.service'))return require('./src/services/shipping-workspace.service');
     if(id.endsWith('/shipping-notifications.service'))return {withShippingNotification:order=>order,notifyShippingPayment:async()=>({status:'QUEUED'})};
     if(id.endsWith('/order-write-guard'))return {claimOrderSnapshot};
     if(id.endsWith('/order-query'))return query;
@@ -28,7 +29,8 @@ function fixture(patch={}) {
   let balance=100, movements=[], logs=[], checks=[{preorderItemId:'line',checked:true}], blocking=0;
   const matches=(where,row)=>Object.entries(where).every(([key,value])=>value===undefined || (value && typeof value==='object' && 'not' in value ? row[key]!==value.not && row[key]!=null : value===null ? row[key]==null : row[key]===value));
   const tx={
-    preorder:{updateMany:async({where,data})=>{if(!matches(where,order))return {count:0};order={...order,...data};return {count:1};},update:async({data})=>{order={...order,...data};return structuredClone(order);}},
+    preorder:{findUnique:async()=>structuredClone(order),updateMany:async({where,data})=>{if(!matches(where,order))return {count:0};order={...order,...data};return {count:1};},update:async({data})=>{order={...order,...data};return structuredClone(order);}},
+    externalPaymentLink:{findUnique:async()=>structuredClone(order.shippingPaymentLink||null)},
     countryProduct:{update:async({data})=>{balance+=data.stockQty.increment;return {};},updateMany:async({data,where})=>{if(balance<where.stockQty.gte)return {count:0};balance-=data.stockQty.decrement;return {count:1};}},
     stockMovement:{create:async({data})=>{movements.push(data);return data;}},preorderLog:{create:async({data})=>{logs.push(data);return data;}},
     preparationAnomaly:{count:async()=>blocking},preparationChecklistItem:{upsert:async()=>({}),findMany:async()=>structuredClone(checks),updateMany:async({data})=>{checks=checks.map(row=>({...row,...data}));return {count:checks.length};},update:async({data})=>{checks[0]={...checks[0],...data};return checks[0];}},
@@ -61,6 +63,21 @@ test('concurrent regularizations debit a legacy reservation once',async()=>{
 });
 test('preparation checks are revalidated inside the transaction',async()=>{
   for(const issue of ['uncheck','block']){const f=fixture({status:'PAID',stockDeductedAt:null});f[issue]();const res=response();await f.api.prepareOrder(request({}),res);assert.equal(res.code,409);assert.equal(f.state.balance,100);assert.equal(f.state.order.status,'PAID');}
+});
+test('shipping handover requires paid fees and a reference and records the actual carrier handover',async()=>{
+  const preparedAt=new Date(Date.now()-300000), handedAt=new Date(Date.now()-60000).toISOString();
+  const patch={deliveryMode:'EXPEDITION_CODITRANS',shippingFeeFcfa:100,shippingPaymentLinkId:'link',preparedAt,shippingPaymentLink:{source:'SHIPPING',countryId:'CIV',status:'PAID',providerStatus:'SUCCEEDED',baseAmountFcfa:100}};
+  const noRef=fixture(patch),invalid=response();await noRef.api.fulfillOrder(request({}),invalid);assert.equal(invalid.code,400);assert.equal(noRef.state.order.status,'READY');
+  const unpaid=fixture({...patch,shippingPaymentLink:{...patch.shippingPaymentLink,status:'ACTIVE',providerStatus:'INITIATED'}}),blocked=response();await unpaid.api.fulfillOrder(request({deliveryTracking:'CODI-001',shippingHandedOverAt:handedAt}),blocked);assert.equal(blocked.code,409);assert.equal(unpaid.state.order.status,'READY');assert.equal(unpaid.state.logs.length,0);
+  const f=fixture(patch),res=response();await f.api.fulfillOrder(request({deliveryTracking:'CODI-001',shippingHandedOverAt:handedAt}),res);
+  assert.equal(res.code,200);assert.equal(f.state.order.status,'FULFILLED');assert.equal(f.state.order.deliveryCarrier,'Coditrans');assert.equal(f.state.order.fulfillmentMode,'SHIPPING');assert.equal(f.state.order.deliveryTracking,'CODI-001');assert.equal(f.state.order.shippingHandedOverAt.toISOString(),handedAt);assert.equal(f.state.balance,100);assert.equal(f.state.logs.length,1);
+});
+test('concurrent shipping handovers close the parcel once and cannot bypass a blocking anomaly',async()=>{
+  const patch={deliveryMode:'EXPEDITION_POSTE',shippingFeeFcfa:0};
+  const blocked=fixture(patch);blocked.block();const no=response();await blocked.api.fulfillOrder(request({deliveryTracking:'POSTE-1'}),no);assert.equal(no.code,409);assert.equal(blocked.state.order.status,'READY');
+  const f=fixture(patch),responses=[response(),response()];await Promise.all(responses.map(res=>f.api.fulfillOrder(request({deliveryTracking:'POSTE-1'}),res)));
+  assert.deepEqual(responses.map(res=>res.code).sort(),[200,409]);assert.equal(f.state.logs.length,1);
+  const again=response();await f.api.fulfillOrder(request({deliveryTracking:'POSTE-1'}),again);assert.equal(again.body.alreadyDone,true);assert.equal(f.state.logs.length,1);
 });
 test('concurrent cashier launches reserve once and preserve an existing reservation',async()=>{
   for(const reserved of [false,true]) {

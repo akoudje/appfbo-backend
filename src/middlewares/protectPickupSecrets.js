@@ -13,7 +13,7 @@ function sanitizePickupResponse(payload) {
     if (!value || typeof value !== "object") return value;
     const notification = value.channel && ["ORDER_READY", "REMINDER"].includes(value.purpose);
     return Object.fromEntries(Object.entries(value)
-      .filter(([key]) => key !== "pickupSecretCode" && key !== "pickupCode" && (!notification || MESSAGE_FIELDS.has(key)))
+      .filter(([key]) => !["pickupSecretCode", "pickupCode", "shippingReceiptFileUrl", "shippingReceiptMimeType"].includes(key) && (!notification || MESSAGE_FIELDS.has(key)))
       .map(([key, nested]) => [key, clean(nested)]));
   }
   return clean(serialized);

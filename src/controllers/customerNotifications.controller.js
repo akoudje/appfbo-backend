@@ -162,8 +162,8 @@ function buildNotificationsFromOrders(orders, numeroFbo) {
         preorderNumber: reference,
         relationType,
         severity: "success",
-        title: "Commande clôturée",
-        body: `${reference} ${relationLabel} a été clôturée.`,
+        title: isShipping(order.deliveryMode) ? 'Colis remis au transporteur' : "Commande clôturée",
+        body: isShipping(order.deliveryMode) ? `${reference} remis à ${carrierLabel(order.deliveryMode)}${order.deliveryTracking ? '. Bordereau : ' + order.deliveryTracking : ''}.` : `${reference} ${relationLabel} a été clôturée.`,
         eventAt: order?.fulfilledAt || order?.updatedAt || order?.createdAt,
       });
     }
