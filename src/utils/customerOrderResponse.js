@@ -16,7 +16,7 @@ function customerOrderResponse(order) {
     'invoicedAt', 'paidAt', 'preparationLaunchedAt', 'preparedAt', 'fulfilledAt', 'cancelledAt',
     'manualPaymentReceivedAt', 'pickupPointLabel', 'pickupCode', 'pickupSecretCode',
     'shippingRecipientName', 'shippingRecipientPhone', 'shippingDestinationCity', 'shippingFeeFcfa', 'shippingWeightKg', 'shippingParcelCount', 'shippingQuotedAt',
-    'deliveryAddress', 'deliveryTrackingNumber', 'relationType',
+    'deliveryAddress', 'deliveryTrackingNumber', 'deliveryTracking', 'deliveryCarrier', 'shippingHandedOverAt', 'relationType',
   ]);
   result.shippingPayment = shippingPaymentSummary(order);
   result.country = pick(order.country, ['code', 'name']);

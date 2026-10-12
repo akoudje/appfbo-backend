@@ -133,7 +133,7 @@ async function sendPreorderMobilePush({
 
     const messages = validTokens.map((to) => ({
       to,
-      title: title || titleForPurpose(purpose),
+      title: title || (purpose === 'ORDER_FULFILLED' && require('./shipping.service').isShipping(preorder.deliveryMode) ? 'Colis remis au transporteur' : titleForPurpose(purpose)),
       body: compactBody(message),
       data,
       sound: "default",

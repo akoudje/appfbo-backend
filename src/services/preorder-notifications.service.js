@@ -126,7 +126,13 @@ function buildOrderReadySmsMessage({ preorder, pickupSecretCode }) {
 }
 
 function buildOrderFulfilledSmsMessage({ preorder }) {
-  if (require("./shipping.service").isShipping(preorder?.deliveryMode)) return prependNotificationPrefix(preorder, `Colis ${preorder.parcelNumber || preorder.preorderNumber} remis à ${require("./shipping.service").carrierLabel(preorder.deliveryMode)} pour expédition. Merci pour votre confiance.`);
+  if (require("./shipping.service").isShipping(preorder?.deliveryMode)) {
+    const carrier = require("./shipping.service").carrierLabel(preorder.deliveryMode);
+    return firstSmsCandidate([
+      prependNotificationPrefix(preorder, `Colis remis a ${carrier}. Bordereau: ${preorder.deliveryTracking || '-'}. Suivi dans votre espace client.`),
+      prependNotificationPrefix(preorder, `Colis remis a ${carrier}. Retrouvez le bordereau dans votre espace client.`),
+    ]);
+  }
   const customer = preorder?.fboNomComplet || "";
   const parcelNumber =
     preorder?.parcelNumber || preorder?.preorderNumber || preorder?.id || "-";
@@ -181,6 +187,7 @@ function formatOptionalContactLine(label, value) {
 function buildEmailSubjectByPurpose({ purpose, preorder }) {
   const normalizedPurpose = String(purpose || "").trim().toUpperCase();
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
+  if (normalizedPurpose === 'ORDER_FULFILLED' && require('./shipping.service').isShipping(preorder?.deliveryMode)) return `FOREVER - Colis remis au transporteur (${preorderNumber})`;
 
   if (normalizedPurpose === "INVOICE" || normalizedPurpose === "PAYMENT_LINK") {
     return `FOREVER CI - Précommande ${preorderNumber} disponible pour paiement`;
@@ -229,7 +236,7 @@ function buildDefaultEmailBodyByPurpose({
   if (require('./shipping.service').isShipping(preorder?.deliveryMode) && ['ORDER_READY', 'ORDER_FULFILLED'].includes(String(purpose).toUpperCase())) {
     return String(purpose).toUpperCase() === 'ORDER_READY'
       ? preorder.shippingFeeFcfa === 0 ? smsMessage : [smsMessage, 'Les produits sont déjà payés. Les frais d’expédition sont à régler séparément avant la remise au transporteur.', 'Retrouvez le montant et le bouton de paiement dans votre espace client.'].join('\n\n')
-      : smsMessage;
+      : [smsMessage, `Bordereau : ${preorder.deliveryTracking || 'Non renseigné'}`, `Destination : ${preorder.shippingDestinationCity || '-'}`, `Remis au transporteur le : ${new Date(preorder.shippingHandedOverAt || preorder.fulfilledAt).toLocaleString('fr-FR', { timeZone: 'Africa/Abidjan' })}`, 'La remise au transporteur ne constitue pas une confirmation de livraison au destinataire.'].join('\n\n');
   }
   const normalizedPurpose = String(purpose || "").trim().toUpperCase();
   const customer = preorder?.fboNomComplet || "Client";
@@ -1143,7 +1150,7 @@ async function sendPreorderNotification({
   const resolvedEmailHtml = configuredTemplates.emailHtml;
   const preorderCountryCode = preorder?.country?.code || preorder?.countryCode || "CIV";
 
-  const smsAllowed = shouldSendSmsForPurpose(purpose);
+  const smsAllowed = shouldSendSmsForPurpose(purpose) || (persistedPurpose === 'ORDER_FULFILLED' && require('./shipping.service').isShipping(preorder?.deliveryMode));
   const forcedChannel = String(forceChannel || "").trim().toUpperCase();
   const channels = [];
 

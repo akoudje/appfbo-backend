@@ -23,6 +23,22 @@
 
 ## Déploiement
 
+### Vue de suivi des expéditions
+
+La page admin `/preparation/shipments` et le bouton « Expéditions · La Poste et Coditrans » dans l’application préparateur affichent cinq étapes : à préparer (y compris finaliser un colis dont les frais sont déjà réglés), frais à fixer, attente du paiement des frais, prêts à expédier et remis au transporteur. Les compteurs et les lignes utilisent les mêmes filtres de pays, transporteur, destination et recherche, avec pagination côté serveur. La liste est actualisée toutes les 30 secondes.
+
+La destination et les coordonnées du destinataire du colis sont affichées distinctement de celles du client FBO. Les badges séparent le paiement des produits de celui de l’expédition. La notification « colis prêt » est nommée « Notification expédition » pour les deux transporteurs et ne présente pas un code de retrait.
+
+Une remise au transporteur exige une référence de bordereau et une date comprise entre la préparation et le moment de l’enregistrement. Le backend contrôle de nouveau le paiement des frais et les anomalies sous verrou avant de confirmer la remise. La référence, le transporteur, la date réelle et l’opérateur sont conservés ; l’état `FULFILLED` reste utilisé par les traitements existants mais est présenté comme « Remis au transporteur », sans affirmer une livraison au destinataire. Les anciennes remises sans référence restent consultables et ne sont pas réécrites.
+
+Le préparateur peut joindre une photo JPG/PNG ou un PDF (8 Mo maximum) sur le web, et prendre ou choisir une photo dans l’APK. Les fichiers sont stockés dans Cloudinary en mode `authenticated` et servis par une route protégée par `PREPARATION_UPDATE`, dans le pays de la commande. Aucun lien Cloudinary du bordereau n’est envoyé au client ni exposé dans les réponses opérationnelles. Une pièce déjà jointe n’est pas remplacée silencieusement par un nouvel envoi. La consultation des PDF dans l’APK passe actuellement par l’espace web.
+
+Après une remise normale, le client reçoit une notification email/SMS/push avec la référence, et retrouve le bordereau (référence et date, sans pièce interne) dans son espace client. La régularisation administrative conserve son comportement sans notification et exige aussi une référence pour une nouvelle expédition.
+
+**Avant de déployer ce suivi**, appliquer `20261012190000_shipping_workspace` avec `npx prisma migrate deploy`, puis générer le client Prisma. Cette migration ajoute la date réelle de remise, le stockage du bordereau et l’index de la file ; elle ne modifie aucun paiement existant. Déployer backend, admin et frontend client, puis recompiler/distribuer l’APK **0.1.6 (versionCode 7)** : le nouveau sélecteur photo est un module natif. Aucune migration de production ni compilation EAS payante n’est lancée par la validation locale.
+
+Tests complémentaires : `node --test shipping-workspace.test.cjs shipping-notifications.test.cjs orders-regression.test.cjs`.
+
 Appliquer **avant de démarrer le nouveau backend** la migration `20261011120000_shipping_quotes` :
 
 ```sh

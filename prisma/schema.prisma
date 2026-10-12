@@ -1012,8 +1012,12 @@ model Preorder {
   shippingParcelCount Int?
   shippingQuotedAt DateTime?
   shippingQuotedById String?
+  shippingHandedOverAt DateTime?
+  shippingReceiptFileUrl String?
+  shippingReceiptMimeType String?
   shippingPaymentLinkId String? @unique
   shippingPaymentLink ExternalPaymentLink? @relation("ShippingPayment", fields: [shippingPaymentLinkId], references: [id], onDelete: Restrict)
+  @@index([countryId, deliveryMode, status])
 
   // Protection des données personnelles
   personalDataConsentAccepted  Boolean   @default(false)

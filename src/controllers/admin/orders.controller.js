@@ -582,6 +582,11 @@ async function listOrders(req, res) {
           fboNomComplet: true,
           pointDeVente: true,
           deliveryMode: true,
+          shippingRecipientName: true,
+          shippingRecipientPhone: true,
+          shippingDestinationCity: true,
+          shippingFeeFcfa: true,
+          shippingPaymentLink: { select: { status: true, providerStatus: true, amountFcfa: true } },
           parcelNumber: true,
           factureReference: true,
           paymentCollectionCode: true,
@@ -3593,6 +3598,7 @@ async function fulfillOrder(req, res) {
       }
     }
 
+    const handover = require('../../services/shipping-workspace.service').handoverInput(req.body || {}, order);
     const updated = await prisma.$transaction(async (tx) => {
       await claimOrderSnapshot(tx, order);
       await assertShippingPaid(tx, order);
@@ -3634,6 +3640,7 @@ async function fulfillOrder(req, res) {
             ? normalizedPickupConfirmationNote || null
             : order.pickupConfirmationNote,
           fulfilledById: order.fulfilledById || req.user?.id || null,
+          ...handover,
         },
       });
 
@@ -3646,6 +3653,7 @@ async function fulfillOrder(req, res) {
           fromStatus: order.status,
           toStatus: "FULFILLED",
           deliveryTracking: saved.deliveryTracking,
+          shippingHandedOverAt: saved.shippingHandedOverAt,
           parcelNumber: order.parcelNumber,
           pickupCodeVerified: isPickupOrder,
           pickupRecipientType: isPickupOrder ? normalizedPickupRecipientType : null,
@@ -3795,6 +3803,7 @@ async function regularizeFulfillmentNoNotification(req, res) {
       order.pickupSecretCode ||
       String(Math.floor(100000 + Math.random() * 900000));
     const mustDebitStock = !order.stockDeductedAt;
+    const handover = require('../../services/shipping-workspace.service').handoverInput(req.body || {}, order);
 
     const updated = await prisma.$transaction(async (tx) => {
       await claimOrderSnapshot(tx, order);
@@ -3888,6 +3897,7 @@ async function regularizeFulfillmentNoNotification(req, res) {
           pickupConfirmationNote:
             normalizedPickupConfirmationNote || order.pickupConfirmationNote,
           internalNote: regularizationNote,
+          ...handover,
         },
       });
 
