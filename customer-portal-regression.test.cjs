@@ -21,6 +21,7 @@ function controller(file, db, extras = {}) {
       if (name === 'jsonwebtoken') return { sign: () => 'signed-session' };
       if (name === '../utils/customerOrderResponse') return { customerOrderResponse };
       if (name === '../services/notification-template-defaults') return { getPaymentExpiryHours: () => 3 };
+      if (name === '../services/email-templates/layout') return require('./src/services/email-templates/layout');
       return extras[name] || {};
     },
   });

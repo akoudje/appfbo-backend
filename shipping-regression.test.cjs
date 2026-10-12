@@ -26,7 +26,54 @@ test('payment modes preserve carrier selection without breaking the legacy picku
     assert.equal(options.resolveDeliveryModeForPayment(payment, 'EXPEDITION_CODITRANS'), 'EXPEDITION_CODITRANS');
     assert.equal(options.resolveDeliveryModeForPayment(payment, null), 'RETRAIT_SITE_FLP');
   }
-  assert.equal(options.validateCountryOrderOptions({settings:{enableDelivery:false},paymentMode:'WAVE',deliveryMode:'EXPEDITION_POSTE'}).ok, false);
+});
+test('disabling legacy home delivery keeps both carriers available and preserves pickup settings', () => {
+  const settings = { enableDelivery: false, enablePickup: true };
+  for (const deliveryMode of ['RETRAIT_SITE_FLP', 'EXPEDITION_POSTE', 'EXPEDITION_CODITRANS']) {
+    assert.equal(options.validateCountryOrderOptions({ settings, paymentMode: 'WAVE', deliveryMode }).ok, true);
+  }
+  assert.equal(options.validateCountryOrderOptions({ settings, deliveryMode: 'LIVRAISON' }).ok, false);
+  assert.equal(options.validateCountryOrderOptions({ settings: { ...settings, enablePickup: false }, deliveryMode: 'RETRAIT_SITE_FLP' }).ok, false);
+  assert.equal(options.validateCountryOrderOptions({ settings, deliveryMode: 'UNKNOWN' }).ok, false);
+});
+test('the submit endpoint persists each selected carrier with home delivery disabled', async () => {
+  for (const deliveryMode of ['EXPEDITION_CODITRANS', 'EXPEDITION_POSTE']) {
+    const draft = { ...order, status: 'DRAFT', fboNumero: '225-000-111-222', fboGrade: 'MANAGER', personalDataConsentAccepted: true,
+      deliveryMode: 'RETRAIT_SITE_FLP', country: { id: 'ci', code: 'CIV', settings: { enableDelivery: false, enablePickup: true, enableWave: true } },
+      items: [{ productId: 'product', qty: 1, product: { countryProducts: [{ maxQtyPerOrder: 10 }] } }],
+    };
+    const writes = [];
+    const db = {
+      preorder: { findFirst: async () => draft, update: async ({ data }) => { writes.push(data); Object.assign(draft, data); return { ...draft }; } },
+      preorderItem: { update: async () => ({}) }, preorderLog: { create: async () => ({}) },
+    };
+    db.$transaction = async fn => fn(db);
+    const module = { exports: {} };
+    vm.runInNewContext(fs.readFileSync('./src/controllers/preorders.controller.js', 'utf8'), {
+      module, Date, Map, process: { env: {} }, console: { log() {}, error() {} }, require(name) {
+        if (name === '../prisma') return db;
+        if (name === 'crypto') return require('node:crypto');
+        if (name === '../services/country-order-options.service') return options;
+        if (name === '../services/shipping.service') return shipping;
+        if (name === '../helpers/countryScope') return require('./src/helpers/countryScope');
+        if (name === '../services/pricing.service') return { computePreorderTotals: async () => ({ preorder: draft, items: [{ productId: 'product', prixUnitaireFcfa: 40000, lineTotalFcfa: 40000 }], totals: { totalFcfa: 40000, totalProduitsFcfa: 40000, fraisLivraisonFcfa: 0 } }) };
+        if (name === '../services/sms.service') return { normalizePhoneForCountry: phone => phone, buildPreorderSmsMessage: () => 'Notification simulée' };
+        if (name === '../services/preorder-notifications.service') return { sendPreorderNotification: async () => ({ smsQueued: true, sent: false, attempts: [] }) };
+        if (name === '../services/realtime-events.service') return { publishRealtimeEvent() {} };
+        return {};
+      },
+    });
+    const req = { params: { id: draft.id }, countryId: 'ci', country: draft.country, headers: {}, body: { ...recipient, deliveryMode, paymentMode: 'WAVE', phoneNormalized: '+2250700000000', email: 'client@example.test', personalDataConsentAccepted: true } };
+    const res = { code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
+    await module.exports.submit(req, res);
+    assert.equal(res.code, 200, JSON.stringify(res.body));
+    assert.equal(res.body.status, 'SUBMITTED');
+    assert.equal(draft.deliveryMode, deliveryMode);
+    assert.equal(draft.shippingDestinationCity, recipient.shippingDestinationCity);
+    assert.equal(draft.shippingRecipientPhone, '+2250700000000');
+    assert.equal(writes.some(data => data.status === 'SUBMITTED'), true);
+    assert.equal(res.body.totals.fraisLivraisonFcfa, 0);
+  }
 });
 test('shipping requires separate recipient coordinates and pickup discards them', () => {
   assert.equal(shipping.recipientInput(recipient, 'EXPEDITION_POSTE').shippingRecipientPhone, '+2250700000000');
