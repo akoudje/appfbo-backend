@@ -5,6 +5,7 @@ const { normalizeEmail, sendEmail } = require("./email.service");
 const { MAX_SMS_LENGTH } = require("./sms.orange.service");
 const { getPaymentExpiryHours } = require("./notification-template-defaults");
 const { sendPreorderMobilePush } = require("./mobile-push.service");
+const { renderLayout, renderButton, textToHtml } = require("./email-templates/layout");
 
 function compactText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -169,20 +170,6 @@ function formatCc(value) {
     minimumFractionDigits: 3,
     maximumFractionDigits: 3,
   }).format(Math.max(0, num))} CC`;
-}
-
-function buildPublicAssetUrl(filename = "") {
-  const cleanFilename = String(filename || "").trim().replace(/^\/+/, "");
-  if (!cleanFilename) return "";
-
-  const base =
-    String(process.env.EMAIL_PUBLIC_ASSETS_BASE_URL || "").trim() ||
-    String(process.env.FRONTEND_PUBLIC_URL || "").trim() ||
-    String(process.env.APP_PUBLIC_BASE_URL || "").trim() ||
-    "https://appfbo-frontend.vercel.app";
-
-  const normalizedBase = base.replace(/\/+$/, "");
-  return `${normalizedBase}/${cleanFilename}`;
 }
 
 function formatOptionalContactLine(label, value) {
@@ -371,122 +358,25 @@ function buildDefaultEmailBodyByPurpose({
   ].join("\n");
 }
 
-function escapeHtml(value = "") {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Une ligne "Code XXX: valeur" (code de retrait, code encaissement...) est un
-// code que le client doit noter/présenter — on la sort du paragraphe pour la
-// mettre en évidence dans un encart, plutôt que la noyer dans du texte plat.
-const CODE_LINE_PATTERN = /^(Code[^:]{0,40}):\s*(.+)$/i;
-
-function buildHighlightBoxHtml({ label, value }) {
-  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 16px;">
-    <tr>
-      <td style="background:#fff7d6;border:1px solid #f0cf57;border-radius:10px;padding:14px 18px;text-align:center;">
-        <div style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#8d7a5c;">${escapeHtml(
-          label,
-        )}</div>
-        <div style="font-size:28px;font-weight:800;letter-spacing:0.06em;color:#111111;font-family:'Courier New',Courier,monospace;">${escapeHtml(
-          value,
-        )}</div>
-      </td>
-    </tr>
-  </table>`;
-}
-
-function textToHtmlParagraphs(value = "") {
-  const blocks = String(value || "")
-    .split(/\n{2,}/)
-    .map((b) => b.trim())
-    .filter(Boolean);
-
-  return blocks
-    .map((block) => {
-      const lines = block.split("\n");
-      const pieces = [];
-      let textBuffer = [];
-
-      const flushText = () => {
-        if (!textBuffer.length) return;
-        pieces.push(
-          `<p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;">${escapeHtml(
-            textBuffer.join("\n"),
-          ).replace(/\n/g, "<br/>")}</p>`,
-        );
-        textBuffer = [];
-      };
-
-      for (const line of lines) {
-        const match = line.match(CODE_LINE_PATTERN);
-        if (match) {
-          flushText();
-          pieces.push(buildHighlightBoxHtml({ label: match[1].trim(), value: match[2].trim() }));
-        } else {
-          textBuffer.push(line);
-        }
-      }
-      flushText();
-
-      return pieces.join("");
-    })
-    .join("");
-}
-
-function buildDefaultEmailHtml({ subject, body, preorder }) {
-  const logoUrl =
-    String(process.env.EMAIL_BRAND_LOGO_URL || "").trim() ||
-    buildPublicAssetUrl("forever-corporate-logo.png");
+function buildDefaultEmailHtml({
+  subject,
+  body,
+  preorder,
+  ctaHref = "",
+  ctaLabel = "",
+  supportPhone = "",
+}) {
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
-  const safeSubject = escapeHtml(subject || `Notification commande ${preorderNumber}`);
-  const content = textToHtmlParagraphs(body);
+  const safeSubject = subject || `Notification commande ${preorderNumber}`;
+  const bodyHtml = textToHtml(body) + renderButton({ href: ctaHref, label: ctaLabel });
 
-  return `<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${safeSubject}</title>
-  </head>
-  <body style="margin:0;padding:0;background:#f5f6f8;font-family:Arial,Helvetica,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f6f8;padding:24px 0;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="max-width:640px;width:100%;background:#ffffff;border:1px solid #ececec;">
-            <tr>
-              <td style="padding:20px 24px;border-bottom:1px solid #f1f1f1;background:#fffef9;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                  <tr>
-                    <td align="left">
-                      <img src="${escapeHtml(logoUrl)}" alt="Forever" style="height:48px;max-width:200px;object-fit:contain;" />
-                    </td>
-                    <td align="right" style="color:#7a7a7a;font-size:12px;">Précommande ${escapeHtml(preorderNumber)}</td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:24px;">
-                <h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#111111;">${safeSubject}</h1>
-                ${content}
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:16px 24px 24px;border-top:1px solid #f1f1f1;color:#7a7a7a;font-size:12px;">
-                Notification transactionnelle FOREVER.
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
+  return renderLayout({
+    previewText: safeSubject,
+    title: safeSubject,
+    bodyHtml,
+    headerTag: `Précommande ${preorderNumber}`,
+    supportPhone,
+  });
 }
 
 function normalizePurposeKey(purpose = "") {
@@ -903,10 +793,15 @@ function resolveConfiguredTemplates({
     context,
     emailBody: interpolatedEmailBody,
   });
+  const paymentFlow = String(context?.paymentFlow || "").toUpperCase();
+  const isBankFlow = ["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"].includes(paymentFlow);
   const resolvedEmailHtml = buildDefaultEmailHtml({
     subject: resolvedSubject || fallbackEmailSubject,
     body: resolvedEmailBody || fallbackEmailBody,
     preorder: context?.preorder || null,
+    ctaHref: context?.paymentLink || "",
+    ctaLabel: isBankFlow ? "Déposer ma preuve de paiement" : "Payer maintenant",
+    supportPhone: context?.supportPhone || "",
   });
 
   return {
