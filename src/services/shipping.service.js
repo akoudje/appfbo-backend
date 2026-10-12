@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { PreorderLogAction } = require('@prisma/client');
 
 const SHIPPING_MODES = new Set(['EXPEDITION_POSTE', 'EXPEDITION_CODITRANS']);
 const isShipping = mode => SHIPPING_MODES.has(mode);
@@ -100,7 +101,9 @@ async function setShippingQuote(tx, order, body, actorId) {
     shippingPaymentLinkId = link.id;
   }
   const saved = await tx.preorder.update({ where: { id: order.id }, data: { ...data, shippingPaymentLinkId, shippingQuotedAt: new Date(), shippingQuotedById: actorId }, include: { shippingPaymentLink: true, country: { select: { code: true } } } });
-  await tx.preorderLog.create({ data: { preorderId: order.id, action: 'SHIPPING_QUOTE', note: 'Frais déterminés par le préparateur', actorAdminId: actorId, meta: data } });
+  // REPRICE is already supported by both Prisma and the deployed database.
+  // The event identifies shipping tariff changes without modifying product totals.
+  await tx.preorderLog.create({ data: { preorderId: order.id, action: PreorderLogAction.REPRICE, note: 'Frais d’expédition déterminés par le préparateur', actorAdminId: actorId, meta: { event: 'SHIPPING_QUOTE', ...data } } });
   return saved;
 }
 

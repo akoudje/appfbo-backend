@@ -752,7 +752,11 @@ async function syncShippingPayment(req, res) {
     if (!order) return res.status(404).json({ message: 'Commande introuvable' });
     if (order.shippingPaymentLink) await require('../../services/external-wave-payment.service').syncExternalWavePaymentLink(order.shippingPaymentLink);
     return res.json({ ok: true });
-  } catch (error) { return res.status(error.statusCode || 500).json({ message: error.message }); }
+  } catch (error) {
+    const status = Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
+    if (status === 500) console.error("syncShippingPayment error:", error);
+    return res.status(status).json({ message: status === 500 ? "Impossible de vérifier le paiement des frais d’expédition. Réessayez dans un instant." : error.message, code: "SHIPPING_PAYMENT_SYNC_FAILED" });
+  }
 }
 
 async function updateShippingQuote(req, res) {
@@ -761,7 +765,11 @@ async function updateShippingQuote(req, res) {
     if (!order) return res.status(404).json({ message: "Commande introuvable" });
     const saved = await prisma.$transaction(tx => setShippingQuote(tx, order, req.body || {}, req.user.id));
     return res.json(saved);
-  } catch (error) { return res.status(error.statusCode || 500).json({ message: error.message }); }
+  } catch (error) {
+    const status = Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
+    if (status === 500) console.error("updateShippingQuote error:", error);
+    return res.status(status).json({ message: status === 500 ? "Impossible d’enregistrer les frais d’expédition. Réessayez dans un instant." : error.message, code: "SHIPPING_QUOTE_FAILED" });
+  }
 }
 
 async function getOrderById(req, res) {
