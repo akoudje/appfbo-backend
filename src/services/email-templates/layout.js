@@ -62,8 +62,8 @@ function renderButton({ href, label }) {
 
   return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:22px 0 6px;">
     <tr>
-      <td style="border-radius:12px;background:${BRAND.accent};">
-        <a href="${escapeHtml(safeHref)}" style="display:inline-block;padding:14px 26px;font-weight:800;font-size:15px;color:${BRAND.ink};text-decoration:none;border-radius:12px;">
+      <td class="email-button-cell" style="border-radius:12px;background:${BRAND.accent};">
+        <a href="${escapeHtml(safeHref)}" class="email-button-link" style="display:inline-block;padding:14px 26px;font-weight:800;font-size:15px;color:${BRAND.ink};text-decoration:none;border-radius:12px;">
           ${escapeHtml(safeLabel)}
         </a>
       </td>
@@ -140,9 +140,12 @@ function renderFooter({ supportPhone = "", supportEmail = "" } = {}) {
     .join(" &middot; ");
 
   return `<tr>
-    <td style="padding:18px 32px 26px;border-top:1px solid #f1f1f1;background:#fafafa;">
-      <p style="margin:0 0 4px;font-size:12px;color:${BRAND.mutedText};">FOREVER Côte d'Ivoire &mdash; notification transactionnelle automatique.</p>
-      ${contactBits ? `<p style="margin:0;font-size:12px;color:${BRAND.mutedText};">${contactBits}</p>` : ""}
+    <td class="email-pad-x" style="padding:20px 32px 26px;border-top:1px solid #f1f1f1;background:#fafafa;">
+      <p style="margin:0 0 6px;font-size:12px;color:${BRAND.mutedText};">
+        <a href="https://forevercivstore.com" style="color:${BRAND.mutedText};text-decoration:underline;">forevercivstore.com</a> &mdash; FOREVER Côte d'Ivoire
+      </p>
+      <p style="margin:0 0 4px;font-size:12px;color:${BRAND.mutedText};">Notification transactionnelle liée à votre commande.</p>
+      ${contactBits ? `<p style="margin:0;font-size:12px;color:${BRAND.mutedText};">Besoin d'aide ? ${contactBits}</p>` : ""}
     </td>
   </tr>`;
 }
@@ -173,19 +176,32 @@ function renderLayout({
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="supported-color-schemes" content="light" />
     <title>${safeTitle || "FOREVER"}</title>
+    <style>
+      /* Empêche certains clients (Gmail iOS/Android notamment) de forcer un
+         mode sombre qui inverserait nos couleurs de marque. */
+      :root { color-scheme: light; supported-color-schemes: light; }
+      @media only screen and (max-width: 600px) {
+        .email-card { width: 100% !important; border-radius: 0 !important; }
+        .email-pad-x { padding-left: 20px !important; padding-right: 20px !important; }
+        .email-button-cell { display: block !important; width: 100% !important; }
+        .email-button-link { display: block !important; width: 100% !important; box-sizing: border-box !important; text-align: center !important; }
+      }
+    </style>
   </head>
   <body style="margin:0;padding:0;background:${BRAND.envelopeBg};font-family:${BRAND.fontFamily};">
     ${previewText ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${escapeHtml(previewText)}</div>` : ""}
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:${BRAND.envelopeBg};padding:28px 0;">
       <tr>
         <td align="center">
-          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid ${BRAND.cardBorder};">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" class="email-card" style="max-width:600px;width:100%;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid ${BRAND.cardBorder};">
             <tr>
               <td style="height:6px;background:${BRAND.accent};line-height:0;font-size:0;">&nbsp;</td>
             </tr>
             <tr>
-              <td style="padding:22px 32px;border-bottom:1px solid #f1f1f1;background:${BRAND.headerBg};">
+              <td class="email-pad-x" style="padding:22px 32px;border-bottom:1px solid #f1f1f1;background:${BRAND.headerBg};">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                   <tr>
                     <td align="left">
@@ -197,7 +213,7 @@ function renderLayout({
               </td>
             </tr>
             <tr>
-              <td style="padding:30px 32px 8px;">
+              <td class="email-pad-x" style="padding:30px 32px 8px;">
                 ${eyebrow ? `<div style="margin:0 0 8px;font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:${BRAND.accentDark};">${escapeHtml(eyebrow)}</div>` : ""}
                 ${title ? `<h1 style="margin:0 0 18px;font-size:21px;line-height:1.3;color:${BRAND.ink};">${safeTitle}</h1>` : ""}
                 ${bodyHtml}
