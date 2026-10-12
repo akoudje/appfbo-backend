@@ -1,15 +1,7 @@
 const { normalizeEmail, sendEmail } = require("./email.service");
 const { isSafePublicFrontendOrigin, publicFrontendBaseUrl } = require("./public-url.service");
 const { signTicketOrderAccessToken } = require("./ticket-order-ticketing.service");
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+const { renderLayout, renderButton, escapeHtml } = require("./email-templates/layout");
 
 function formatDateTime(value) {
   if (!value) return "Date à confirmer";
@@ -80,58 +72,36 @@ function buildTicketEmailHtml({ order, tickets, ticketUrl }) {
     `)
     .join("");
 
-  return `
-    <div style="margin:0;padding:0;background:#f5f0e6;font-family:Arial,sans-serif;color:#111;">
-      <div style="max-width:680px;margin:0 auto;padding:28px 16px;">
-        <div style="background:#050505;border-radius:24px;overflow:hidden;">
-          <div style="height:10px;background:#FFC600;"></div>
-          <div style="padding:32px;">
-            <div style="color:#FFC600;font-size:13px;font-weight:900;letter-spacing:3px;text-transform:uppercase;">
-              FOREVER EVENTS
-            </div>
-            <h1 style="margin:14px 0 8px;color:#fff;font-size:30px;line-height:1.2;">
-              ${escapeHtml(event.title || "Événement Forever")}
-            </h1>
-            <p style="margin:0;color:#d8d8d8;font-size:15px;line-height:1.6;">
-              Votre paiement est confirmé. Vos tickets sont maintenant actifs.
-            </p>
-          </div>
-        </div>
-
-        <div style="background:#fff;border-radius:20px;margin-top:18px;padding:26px;border:1px solid #e8e2d8;">
-          <p style="margin:0 0 18px;font-size:16px;">Bonjour <strong>${escapeHtml(order.buyerFullName || "")}</strong>,</p>
-          <div style="display:block;margin-bottom:20px;">
-            <div style="margin-bottom:8px;"><strong>Date :</strong> ${escapeHtml(formatDateTime(event.startsAt))}</div>
-            <div style="margin-bottom:8px;"><strong>Lieu :</strong> ${escapeHtml(venue)}</div>
-            <div><strong>Commande :</strong> ${escapeHtml(order.orderNumber)}</div>
-          </div>
-
-          <table role="presentation" style="width:100%;border-collapse:collapse;margin-top:14px;">
-            <thead>
-              <tr>
-                <th align="left" style="padding-bottom:10px;color:#777;font-size:12px;text-transform:uppercase;">#</th>
-                <th align="left" style="padding-bottom:10px;color:#777;font-size:12px;text-transform:uppercase;">Billet</th>
-                <th align="left" style="padding-bottom:10px;color:#777;font-size:12px;text-transform:uppercase;">Code</th>
-              </tr>
-            </thead>
-            <tbody>${ticketRows}</tbody>
-          </table>
-
-          ${ticketUrl ? `
-            <div style="margin-top:26px;">
-              <a href="${escapeHtml(ticketUrl)}" style="display:inline-block;background:#FFC600;color:#111;text-decoration:none;font-weight:900;border-radius:12px;padding:14px 20px;">
-                Afficher et télécharger mes tickets
-              </a>
-            </div>
-          ` : ""}
-
-          <p style="margin:24px 0 0;color:#666;font-size:13px;line-height:1.6;">
-            Présentez le QR code de chaque ticket à l'entrée. Chaque QR code est unique et valable pour une seule entrée.
-          </p>
-        </div>
-      </div>
+  const bodyHtml = `
+    <p style="margin:0 0 18px;font-size:15px;color:#2c2c2c;">Bonjour <strong>${escapeHtml(order.buyerFullName || "")}</strong>, votre paiement est confirmé et vos tickets sont maintenant actifs.</p>
+    <div style="margin:0 0 18px;font-size:14px;color:#2c2c2c;line-height:1.7;">
+      <div><strong>Date :</strong> ${escapeHtml(formatDateTime(event.startsAt))}</div>
+      <div><strong>Lieu :</strong> ${escapeHtml(venue)}</div>
+      <div><strong>Commande :</strong> ${escapeHtml(order.orderNumber)}</div>
     </div>
+    <table role="presentation" style="width:100%;border-collapse:collapse;margin-top:6px;">
+      <thead>
+        <tr>
+          <th align="left" style="padding-bottom:10px;color:#777;font-size:12px;text-transform:uppercase;">#</th>
+          <th align="left" style="padding-bottom:10px;color:#777;font-size:12px;text-transform:uppercase;">Billet</th>
+          <th align="left" style="padding-bottom:10px;color:#777;font-size:12px;text-transform:uppercase;">Code</th>
+        </tr>
+      </thead>
+      <tbody>${ticketRows}</tbody>
+    </table>
+    ${renderButton({ href: ticketUrl, label: "Afficher et télécharger mes tickets" })}
+    <p style="margin:18px 0 0;color:#6b6b6b;font-size:13px;line-height:1.6;">
+      Présentez le QR code de chaque ticket à l'entrée. Chaque QR code est unique et valable pour une seule entrée.
+    </p>
   `;
+
+  return renderLayout({
+    previewText: `Vos tickets pour ${event.title || "votre événement"} sont confirmés.`,
+    eyebrow: "FOREVER EVENTS",
+    title: event.title || "Événement Forever",
+    bodyHtml,
+    headerTag: order.orderNumber,
+  });
 }
 
 async function sendTicketOrderEmail({ order, publicUrl, recipientEmail } = {}) {
@@ -168,14 +138,49 @@ async function sendTicketOrderEmail({ order, publicUrl, recipientEmail } = {}) {
   };
 }
 
+async function sendTicketOrderAccessEmail({ order, publicUrl }) {
+  if (order.status === "PAID" && !order.ticketIssueCode && (order.tickets || []).length) {
+    return sendTicketOrderEmail({ order, publicUrl });
+  }
+
+  const to = normalizeEmail(order.buyerEmail || order.holderEmail || "");
+  if (!to) return { sent: false, skipped: true };
+
+  const url = ticketOrderPublicUrl({ order, publicUrl });
+  const eventTitle = order.event?.title || order.orderNumber;
+  const body = [
+    `Bonjour ${order.buyerFullName},`,
+    "",
+    `Retrouvez votre achat ${order.orderNumber} et son état actuel depuis ce lien sécurisé :`,
+    url,
+    "",
+    "Conservez ce lien personnel.",
+  ].join("\n");
+
+  const bodyHtml = `
+    <p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;font-size:15px;">Bonjour <strong>${escapeHtml(order.buyerFullName || "")}</strong>,</p>
+    <p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;font-size:15px;">Retrouvez votre achat <strong>${escapeHtml(order.orderNumber)}</strong> et son état actuel.</p>
+    ${renderButton({ href: url, label: "Afficher mon achat" })}
+    <p style="margin:18px 0 0;color:#6b6b6b;font-size:13px;line-height:1.6;">Ce lien est personnel, conservez-le pour vous uniquement.</p>
+  `;
+  const html = renderLayout({
+    previewText: `Retrouvez votre achat ${order.orderNumber}`,
+    eyebrow: "FOREVER EVENTS",
+    title: eventTitle,
+    bodyHtml,
+    headerTag: order.orderNumber,
+  });
+
+  const result = await sendEmail({
+    to,
+    subject: `Votre achat - ${eventTitle}`,
+    body,
+    html,
+  });
+  return { sent: Boolean(result?.accepted) };
+}
+
 module.exports = {
   sendTicketOrderEmail,
+  sendTicketOrderAccessEmail,
 };
-
-async function sendTicketOrderAccessEmail({order,publicUrl}){
- if(order.status==='PAID'&&!order.ticketIssueCode&&(order.tickets||[]).length)return sendTicketOrderEmail({order,publicUrl});
- const to=normalizeEmail(order.buyerEmail||order.holderEmail||'');if(!to)return {sent:false,skipped:true};
- const url=ticketOrderPublicUrl({order,publicUrl});
- const result=await sendEmail({to,subject:`Votre achat - ${order.event?.title||order.orderNumber}`,body:`Bonjour ${order.buyerFullName},\nRetrouvez votre achat ${order.orderNumber} et son état actuel depuis ce lien sécurisé :\n${url}\nConservez ce lien personnel.`,html:`<p>Bonjour ${escapeHtml(order.buyerFullName)},</p><p>Retrouvez votre achat ${escapeHtml(order.orderNumber)} et son état actuel.</p><p><a href="${escapeHtml(url)}">Afficher mon achat</a></p><p>Conservez ce lien personnel.</p>`});return {sent:!!result?.accepted};
-}
-module.exports.sendTicketOrderAccessEmail=sendTicketOrderAccessEmail;

@@ -6,6 +6,7 @@ const prisma = require("../../../prisma");
 const inventory = require("../../../services/ticket-inventory.service");
 const { publicFrontendBaseUrl } = require("../../../services/public-url.service");
 const { normalizeEmail, sendEmail } = require("../../../services/email.service");
+const { renderLayout, textToHtml } = require("../../../services/email-templates/layout");
 const {
   classifyPaymentMethodCategory,
   toCsv,
@@ -217,6 +218,12 @@ async function sendRestitutionEmail(req, res) {
         contentType: file.mimetype || undefined,
       },
     ];
+    const html = renderLayout({
+      previewText: `Restitution — ${event.title}`,
+      eyebrow: "FOREVER EVENTS",
+      title: event.title,
+      bodyHtml: textToHtml(message),
+    });
 
     const results = { sent: [], skippedNoEmail: [], failed: [] };
     // Envoi séquentiel (pas Promise.all) pour ne pas déclencher des dizaines
@@ -231,6 +238,7 @@ async function sendRestitutionEmail(req, res) {
         to: email,
         subject,
         body: message,
+        html,
         attachments,
         metadata: { ticketOrderId: order.id, ticketOrderNumber: order.orderNumber },
       });

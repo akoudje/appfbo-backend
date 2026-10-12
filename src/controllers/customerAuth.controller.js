@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
 const { normalizeEmail, sendEmail } = require("../services/email.service");
+const { renderLayout, renderHighlightBox } = require("../services/email-templates/layout");
 const {
   buildNotificationSummaryForCustomer,
 } = require("./customerNotifications.controller");
@@ -233,9 +234,20 @@ async function requestOtp(req, res) {
     const otp = String(crypto.randomInt(100000, 1000000));
     const expiresMin = otpExpiresInMinutes();
     const expiresAt = new Date(now.getTime() + expiresMin * 60 * 1000);
+    const otpBodyHtml = `
+      <p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;font-size:15px;">Voici votre code de connexion à l'espace client FOREVER :</p>
+      ${renderHighlightBox({ label: "Code de connexion", value: otp })}
+      <p style="margin:18px 0 0;color:#6b6b6b;font-size:13px;line-height:1.6;">Ce code expire dans ${expiresMin} minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>
+    `;
     const emailResult = await sendEmail({
-      to: resolved.email, subject: "FOREVER | Code de connexion",
+      to: resolved.email,
+      subject: "FOREVER | Code de connexion",
       body: `Votre code de connexion est ${otp}. Il expire dans ${expiresMin} minutes.`,
+      html: renderLayout({
+        previewText: `Votre code de connexion : ${otp}`,
+        title: "Code de connexion",
+        bodyHtml: otpBodyHtml,
+      }),
       metadata: { purpose: "CUSTOMER_PORTAL_LOGIN", fboId: resolved.fbo.id },
     });
     const successes = emailResult?.accepted ? [{ channel: "EMAIL", result: emailResult }] : [];
