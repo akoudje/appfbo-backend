@@ -3,15 +3,15 @@ const fs = require('node:fs'), vm = require('node:vm');
 const { OrderMessagePurpose, OrderMessageStatus } = require('@prisma/client');
 const shipping = require('./src/services/shipping.service');
 
-function moduleFrom(path, dependencies) {
+function moduleFrom(path, dependencies, env = { PUBLIC_APP_URL: 'https://customer.example.test' }) {
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(path, 'utf8'), { module, URL, Date, Map, Buffer, process: { env: { PUBLIC_APP_URL: 'https://customer.example.test' } }, console: { error() {}, warn() {} }, require: name => dependencies[name] || {} });
+  vm.runInNewContext(fs.readFileSync(path, 'utf8'), { module, URL, Date, Map, Buffer, process: { env }, console: { error() {}, warn() {} }, require: name => dependencies[name] || {} });
   return module.exports;
 }
 
-function fixture(patch = {}) {
+function fixture(patch = {}, env) {
   const records = [], emails = [], calls = [], results = [];
-  let emailAccepted = true, sequence = 0;
+  let emailAccepted = true, emailErrorCode = null, sequence = 0;
   const link = { id: 'link', token: 't'.repeat(32), source: 'SHIPPING', countryId: 'ci', status: 'ACTIVE', baseAmountFcfa: 10000, serviceFeeFcfa: 100, amountFcfa: 10100, ...patch.link };
   const order = { id: 'order', countryId: 'ci', country: { code: 'CIV' }, status: 'PAID', paymentStatus: 'PAID', preorderNumber: 'PO-CIV-20261012-0001', fboNomComplet: 'CLIENT TEST', fboEmail: 'buyer@example.test', factureWhatsappTo: '+2250700000000', shippingRecipientPhone: '+2250100000000', deliveryMode: 'EXPEDITION_CODITRANS', preorderPaymentMode: 'BANK_TRANSFER', totalFcfa: 90160, shippingFeeFcfa: 10000, shippingPaymentLinkId: 'link', shippingPaymentLink: link, ...patch.order };
   const db = {
@@ -32,7 +32,7 @@ function fixture(patch = {}) {
   const generic = moduleFrom('./src/services/preorder-notifications.service.js', {
     '../prisma': db,
     './sms.orange.service': { MAX_SMS_LENGTH: 160 },
-    './email.service': { normalizeEmail: value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '')) ? value : '', sendEmail: async args => { emails.push(args); return { accepted: emailAccepted, provider: 'MOCK', providerMessageId: 'mail-' + emails.length }; } },
+    './email.service': { normalizeEmail: value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '')) ? value : '', sendEmail: async args => { emails.push(args); return { accepted: emailAccepted, provider: 'MOCK', providerMessageId: 'mail-' + emails.length, errorCode: emailErrorCode, errorMessage: 'Private provider response: secret' }; } },
     './notification-template-defaults': { getPaymentExpiryHours: () => 2 },
     './email-templates/layout': require('./src/services/email-templates/layout'),
     './shipping.service': shipping,
@@ -40,11 +40,81 @@ function fixture(patch = {}) {
   });
   const api = moduleFrom('./src/services/shipping-notifications.service.js', {
     '../prisma': db, './shipping.service': shipping,
-    './preorder-notifications.service': { sendPreorderNotification: async args => { calls.push(args); const result = await generic.sendPreorderNotification(args); results.push(result); return result; } },
-  });
-  return { api, order, records, emails, calls, results, setEmailAccepted(value) { emailAccepted = value; } };
+    './preorder-notifications.service': { ...generic, sendPreorderNotification: async args => { calls.push(args); const result = await generic.sendPreorderNotification(args); results.push(result); return result; } },
+  }, env);
+  return { api, order, records, emails, calls, results, setEmailAccepted(value, code = null) { emailAccepted = value; emailErrorCode = code; } };
 }
 const request = { orderId: 'order', countryId: 'ci', actorName: 'Préparateur test' };
+
+test('ERR_INVALID_URL configuration no longer prevents the email and queued SMS for a saved quote', async () => {
+  assert.throws(() => new URL('forevercivstore.com'), error => error.code === 'ERR_INVALID_URL');
+  for (const env of [{ PUBLIC_APP_URL: 'forevercivstore.com' }, { PUBLIC_APP_URL: 'invalid URL', APP_PUBLIC_BASE_URL: 'https://forevercivstore.com' }]) {
+    const f = fixture({ order: { shippingFeeFcfa: 100 }, link: { baseAmountFcfa: 100, serviceFeeFcfa: 1, amountFcfa: 101 } }, env);
+    const summary = await f.api.notifyShippingPayment(request);
+    assert.equal(summary.status, 'QUEUED');
+    assert.equal(f.emails.length, 1);
+    assert.equal(f.records.filter(row => row.channel === 'SMS' && row.status === 'QUEUED').length, 1);
+    assert.match(f.emails[0].body, /Total à régler séparément : 101 FCFA/);
+    assert.ok(f.records.every(row => row.paymentLinkTarget.startsWith('https://forevercivstore.com/external-payment/')));
+  }
+});
+
+test('shipping links accept the existing host-only configuration and skip unusable or admin addresses', () => {
+  const order = fixture().order;
+  for (const [env, expected] of [
+    [{ APP_PUBLIC_BASE_URL: ' customer.example.test/ ' }, 'https://customer.example.test/'],
+    [{ PUBLIC_APP_URL: 'not a URL', APP_PUBLIC_BASE_URL: 'https://customer.example.test' }, 'https://customer.example.test/'],
+    [{ FRONTEND_PUBLIC_URL: 'https://admin.forevercivstore.com' }, 'https://forevercivstore.com/'],
+    [{ PUBLIC_APP_URL: 'https://user:secret@example.test' }, 'https://forevercivstore.com/'],
+    [{ FRONTEND_URL: 'https://one.example.test,https://two.example.test' }, 'https://forevercivstore.com/'],
+  ]) {
+    const api = moduleFrom('./src/services/shipping-notifications.service.js', { './shipping.service': shipping }, env);
+    assert.ok(api.paymentUrl(order).startsWith(expected));
+    assert.equal(api.paymentUrl(order).includes('secret'), false);
+  }
+});
+
+test('missing buyer contacts report a failure before and after notifying without billing the parcel recipient', async () => {
+  const f = fixture({ order: { fboEmail: 'invalid', factureWhatsappTo: null, fbo: { email: null } } });
+  for (const summary of [f.api.notificationSummary(f.order), await f.api.notifyShippingPayment(request)]) {
+    assert.equal(summary.status, 'FAILED');
+    assert.equal(summary.code, 'NO_DESTINATION');
+    assert.match(summary.message, /coordonnées de la commande/);
+  }
+  assert.equal(f.records.length, 0); assert.equal(f.emails.length, 0);
+});
+
+test('email-only notification works and explains the missing SMS contact', async () => {
+  const f = fixture({ order: { factureWhatsappTo: null } });
+  const summary = await f.api.notifyShippingPayment(request);
+  assert.equal(summary.status, 'SENT');
+  assert.match(summary.message, /SMS : coordonnée manquante/);
+  assert.equal(f.emails.length, 1);
+});
+
+test('a skipped transport cannot silently return no notification as a successful request', async () => {
+  const f = fixture();
+  const api = moduleFrom('./src/services/shipping-notifications.service.js', {
+    '../prisma': { preorder: { findFirst: async () => f.order }, orderMessage: { findMany: async () => [] } },
+    './shipping.service': shipping,
+    './preorder-notifications.service': { resolveNotificationEmail: () => 'buyer@example.test', resolveNotificationPhone: () => null, sendPreorderNotification: async () => ({ sent: false, skipped: true }) },
+  });
+  const summary = await api.notifyShippingPayment(request);
+  assert.equal(summary.status, 'FAILED');
+  assert.match(summary.message, /aucun envoi email ou SMS n’a été accepté/);
+});
+
+test('provider configuration failure remains visible on reload without revealing provider secrets', async () => {
+  const f = fixture({ order: { factureWhatsappTo: null } });
+  f.setEmailAccepted(false, 'EMAIL_PROVIDER_NOT_CONFIGURED');
+  const sent = await f.api.notifyShippingPayment(request);
+  const loaded = f.api.notificationSummary({ ...f.order, messages: f.records });
+  for (const summary of [sent, loaded]) {
+    assert.equal(summary.status, 'FAILED');
+    assert.match(summary.message, /service email n’est pas configuré/);
+    assert.equal(JSON.stringify(summary).includes('secret'), false);
+  }
+});
 
 test('shipping payment sends the separate amount to the buyer email and queues the buyer SMS', async () => {
   const f = fixture(); const summary = await f.api.notifyShippingPayment(request);
