@@ -119,12 +119,13 @@ test('free shipping is also saved with an enum-valid audit entry and no payment 
   assert.equal(writes.find(([kind]) => kind === 'log')[1].data.meta.event, 'SHIPPING_QUOTE');
 });
 
-function shippingController(db) {
+function shippingController(db, notifier = async () => ({ status: 'QUEUED', message: 'SMS en file', channels: [] })) {
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync('./src/controllers/admin/orders.controller.js', 'utf8'), {
     module, Buffer, Date, process: { env: {} }, console: { error() {} }, require(name) {
       if (name === '../../prisma') return db;
       if (name === '../../services/shipping.service') return shipping;
+      if (name === '../../services/shipping-notifications.service') return { withShippingNotification: order => order, notifyShippingPayment: notifier };
       if (name === '../../helpers/countryScope') return require('./src/helpers/countryScope');
       if (name === '../../auth/permissions') return require('./src/auth/permissions');
       return {};
@@ -145,6 +146,30 @@ test('the quote HTTP handler records a valid Prisma audit action before returnin
   assert.equal(res.body.shippingFeeFcfa, 2500);
   assert.equal(res.body.shippingPaymentLinkId, 'link');
   assert.equal(writes.find(([kind]) => kind === 'log')[1].data.meta.event, 'SHIPPING_QUOTE');
+});
+test('the client notification starts only after the fee transaction commits', async () => {
+  const { db } = fixture(); let committed = false, sent = 0;
+  db.preorder.findFirst = async () => order;
+  db.$transaction = async fn => { const saved = await fn(db); committed = true; return saved; };
+  const api = shippingController(db, async args => { assert.equal(committed, true); assert.equal(args.countryId, 'ci'); sent++; return { status: 'QUEUED' }; });
+  const res = response(); await api.updateShippingQuote(quoteRequest(), res);
+  assert.equal(res.code, 200); assert.equal(sent, 1); assert.equal(res.body.shippingFeeFcfa, 2500);
+});
+test('an email failure cannot undo the saved fee or expose provider errors', async () => {
+  const { db } = fixture(); let committed = false;
+  db.preorder.findFirst = async () => order;
+  db.$transaction = async fn => { const saved = await fn(db); committed = true; return saved; };
+  const api = shippingController(db, async () => { throw new Error('private-provider-token'); });
+  const res = response(); await api.updateShippingQuote(quoteRequest(), res);
+  assert.equal(committed, true); assert.equal(res.code, 200); assert.equal(res.body.shippingFeeFcfa, 2500);
+  assert.equal(res.body.shippingNotification.status, 'FAILED'); assert.equal(JSON.stringify(res.body).includes('private-provider-token'), false);
+});
+test('saving the same quote preserves an active payment link, including after checkout starts', async () => {
+  const quoted = { ...order, shippingFeeFcfa: 2500, shippingWeightKg: 2.4, shippingParcelCount: null, shippingPaymentLinkId: 'link' };
+  const link = { id: 'link', token: 'existing', source: 'SHIPPING', countryId: 'ci', baseAmountFcfa: 2500, status: 'ACTIVE', providerSessionId: 'session' };
+  const { db, writes } = fixture({ current: { ...quoted, shippingPaymentLink: link }, link });
+  const saved = await shipping.setShippingQuote(db, quoted, { shippingFeeFcfa: 2500, shippingWeightKg: 2.4 }, 'preparer');
+  assert.equal(saved.shippingPaymentLinkId, 'link'); assert.equal(saved.shippingQuoteUnchanged, true); assert.equal(writes.length, 0);
 });
 
 test('the quote HTTP handler hides Prisma details and internal identifiers on a server failure', async () => {

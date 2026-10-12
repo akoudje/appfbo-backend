@@ -14,8 +14,9 @@ function canonicalFboNumber(raw = "") {
   return String(raw || "").trim();
 }
 
-function notificationKeyForPurpose(preorderId, purpose = "") {
+function notificationKeyForPurpose(preorderId, purpose = "", shippingPaymentLinkId = null) {
   const normalizedPurpose = String(purpose || "").trim().toUpperCase();
+  if (normalizedPurpose === "SHIPPING_PAYMENT_LINK") return `${preorderId}:shipping-payment:${shippingPaymentLinkId || 'quote'}`;
   const suffixByPurpose = {
     INVOICE: "payment-due",
     PAYMENT_LINK: "payment-due",
@@ -31,6 +32,7 @@ function notificationKeyForPurpose(preorderId, purpose = "") {
 function titleForPurpose(purpose = "") {
   const normalizedPurpose = String(purpose || "").trim().toUpperCase();
   const titles = {
+    SHIPPING_PAYMENT_LINK: "Frais d’expédition à payer",
     INVOICE: "Préfacture disponible",
     PAYMENT_LINK: "Paiement disponible",
     REMINDER: "Rappel de paiement",
@@ -118,7 +120,7 @@ async function sendPreorderMobilePush({
       return { sent: false, skipped: true, reason: "NO_PUSH_TOKEN" };
     }
 
-    const notificationKey = notificationKeyForPurpose(preorder.id, purpose);
+    const notificationKey = notificationKeyForPurpose(preorder.id, purpose, preorder.shippingPaymentLinkId);
     const data = {
       type: "ORDER_STATUS",
       screen: "OrderDetail",
@@ -136,7 +138,7 @@ async function sendPreorderMobilePush({
       data,
       sound: "default",
       channelId:
-        ["INVOICE", "PAYMENT_LINK", "REMINDER"].includes(String(purpose || "").toUpperCase())
+        ["INVOICE", "PAYMENT_LINK", "REMINDER", "SHIPPING_PAYMENT_LINK"].includes(String(purpose || "").toUpperCase())
           ? "payment-reminders"
           : "preorder-updates",
     }));

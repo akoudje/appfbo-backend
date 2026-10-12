@@ -50,7 +50,7 @@ function shippingPaymentSummary(order) {
     feeFcfa: order.shippingFeeFcfa,
     serviceFeeFcfa: link?.serviceFeeFcfa || 0,
     amountToPayFcfa: link?.amountFcfa ?? order.shippingFeeFcfa,
-    path: !paid && link?.status === 'ACTIVE' ? `/external-payment/${encodeURIComponent(link.token)}?country=${encodeURIComponent(order.country?.code || 'CIV')}` : null,
+    path: !paid && link?.status === 'ACTIVE' && link.token ? `/external-payment/${encodeURIComponent(link.token)}?country=${encodeURIComponent(order.country?.code || 'CIV')}` : null,
   };
 }
 
@@ -76,6 +76,14 @@ async function setShippingQuote(tx, order, body, actorId) {
   if (!lines.length || !lines.every(line => line.checked) || await tx.preparationAnomaly.count({ where: { preorderId: order.id, blocking: true, resolvedAt: null } })) fail('Terminez la vérification du colis et résolvez les anomalies avant de fixer les frais.', 409);
   const existing = order.shippingPaymentLinkId ? await tx.externalPaymentLink.findUnique({ where: { id: order.shippingPaymentLinkId } }) : null;
   const expired = existing?.status === 'EXPIRED' && existing?.providerStatus === 'EXPIRED';
+  const unchanged = order.shippingFeeFcfa != null && order.shippingFeeFcfa === data.shippingFeeFcfa &&
+    (data.shippingWeightKg == null ? order.shippingWeightKg == null : Number(order.shippingWeightKg) === data.shippingWeightKg) &&
+    (data.shippingParcelCount == null ? order.shippingParcelCount == null : order.shippingParcelCount === data.shippingParcelCount);
+  const reusable = data.shippingFeeFcfa === 0 ? !existing : existing?.source === 'SHIPPING' && existing.countryId === order.countryId && existing.baseAmountFcfa === data.shippingFeeFcfa && ['ACTIVE', 'PAID'].includes(existing.status) && (!existing.expiresAt || new Date(existing.expiresAt) > new Date());
+  if (unchanged && reusable) {
+    const saved = await tx.preorder.findUnique({ where: { id: order.id }, include: { shippingPaymentLink: true, country: { select: { code: true } }, messages: { where: { purpose: 'PAYMENT_LINK' }, orderBy: { createdAt: 'desc' }, take: 20 } } });
+    return { ...saved, shippingQuoteUnchanged: true };
+  }
   if ((!expired && existing?.providerSessionId) || existing?.providerStatus === 'PROCESSING' || existing?.status === 'PAID') fail('Un paiement a déjà été lancé pour ces frais. Le montant ne peut plus être modifié.', 409);
   if (data.shippingFeeFcfa > 0 && order.country?.settings?.enableWave === false) fail('Le paiement Wave des frais d’expédition n’est pas activé pour ce pays.', 409);
   const changed = await tx.preorder.updateMany({ where: { id: order.id, countryId: order.countryId, status: order.status, updatedAt: order.updatedAt }, data: { updatedAt: new Date() } });
@@ -84,6 +92,10 @@ async function setShippingQuote(tx, order, body, actorId) {
   if (existing) {
     const cancelled = await tx.externalPaymentLink.updateMany({ where: { id: existing.id, providerSessionId: expired ? existing.providerSessionId : null, providerStatus: { in: ['INITIATED', 'FAILED', 'EXPIRED'] }, status: { in: ['ACTIVE', 'CANCELLED', 'EXPIRED'] } }, data: { status: 'CANCELLED', cancelledAt: new Date() } });
     if (!cancelled.count) fail('Le paiement vient de démarrer. Actualisez le dossier.', 409);
+    if (existing.token) await tx.orderMessage.updateMany({
+      where: { preorderId: order.id, purpose: 'PAYMENT_LINK', channel: 'SMS', status: 'QUEUED', processingStartedAt: null, paymentLinkTarget: { contains: `/external-payment/${encodeURIComponent(existing.token)}` } },
+      data: { status: 'FAILED', nextAttemptAt: null, errorCode: 'SHIPPING_QUOTE_REPLACED', errorMessage: 'Demande de paiement remplacée par un nouveau devis.', failedAt: new Date(), lastStatusAt: new Date() },
+    });
   }
   let shippingPaymentLinkId = null;
   if (data.shippingFeeFcfa > 0) {
