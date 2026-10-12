@@ -200,6 +200,23 @@ function buildEmailSubjectByPurpose({ purpose, preorder }) {
   return `FOREVER CI - Notification commande (${preorderNumber})`;
 }
 
+// Partagées entre INVOICE/PAYMENT_LINK et REMINDER, qui décrivent le même
+// mode de règlement avec un ton différent (première demande vs relance).
+function buildPaymentLinkLine({ paymentLink, isBankTransferFlow }) {
+  if (!paymentLink) return "Mode de paiement: règlement à la caisse FLP";
+  return isBankTransferFlow
+    ? `Lien sécurisé de dépôt de preuve: ${paymentLink}`
+    : `Lien de paiement sécurisé: ${paymentLink}`;
+}
+
+function buildPaymentActionLine({ paymentLink, isBankTransferFlow, isEcobankPayFlow }) {
+  if (!paymentLink) return "Présentez le code encaissement ci-dessus au comptoir pour régler.";
+  if (!isBankTransferFlow) return "Finalisez votre paiement en ligne via le lien ci-dessus.";
+  return isEcobankPayFlow
+    ? "Ouvrez le lien ci-dessus, joignez votre preuve Ecobank Pay et validez l'envoi."
+    : "Ouvrez le lien ci-dessus, joignez votre preuve de virement et validez l'envoi.";
+}
+
 function buildDefaultEmailBodyByPurpose({
   purpose,
   preorder,
@@ -255,27 +272,34 @@ function buildDefaultEmailBodyByPurpose({
       `Code encaissement: ${paymentCollectionCode}`,
       `Montant à payer: ${total}`,
       `Total CC: ${totalCc}`,
-      paymentLink
-        ? isBankTransferFlow
-          ? `Lien sécurisé de dépôt de preuve: ${paymentLink}`
-          : `Lien de paiement sécurisé: ${paymentLink}`
-        : "Mode de paiement: règlement à la caisse FLP",
+      buildPaymentLinkLine({ paymentLink, isBankTransferFlow }),
       "",
       `Cette préfacture reste payable pendant ${expiryHours}h maximum après émission.`,
-      "Étapes recommandées:",
-      "1. Vérifiez le montant et votre numéro de précommande.",
-      paymentLink
-        ? isBankTransferFlow
-          ? isEcobankPayFlow
-            ? "2. Ouvrez le lien, joignez votre preuve Ecobank Pay et validez l'envoi."
-            : "2. Ouvrez le lien, joignez votre preuve de virement et validez l'envoi."
-          : "2. Ouvrez le lien et finalisez le paiement en ligne."
-        : "2. Présentez le code encaissement au comptoir pour régler.",
-      `3. Finalisez le paiement dans un délai maximal de ${expiryHours}h.`,
-      "4. Conservez cette notification jusqu'à confirmation du paiement.",
+      buildPaymentActionLine({ paymentLink, isBankTransferFlow, isEcobankPayFlow }),
       supportLine,
       "",
-      "Merci de votre confiance.",
+      "Merci pour votre confiance.",
+      "Equipe FOREVER",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (normalizedPurpose === "REMINDER") {
+    const expiryHours = getPaymentExpiryHours();
+    return [
+      `Bonjour ${customer},`,
+      "",
+      `Rappel : votre précommande ${preorderNumber} est toujours en attente de paiement.`,
+      `Code encaissement: ${paymentCollectionCode}`,
+      `Montant à payer: ${total}`,
+      buildPaymentLinkLine({ paymentLink, isBankTransferFlow }),
+      "",
+      `Cette préfacture expire ${expiryHours}h après son émission.`,
+      buildPaymentActionLine({ paymentLink, isBankTransferFlow, isEcobankPayFlow }),
+      supportLine,
+      "",
+      "Merci pour votre confiance.",
       "Equipe FOREVER",
     ]
       .filter(Boolean)
@@ -368,7 +392,17 @@ function buildDefaultEmailHtml({
 }) {
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
   const safeSubject = subject || `Notification commande ${preorderNumber}`;
-  const bodyHtml = textToHtml(body) + renderButton({ href: ctaHref, label: ctaLabel });
+  // Le bouton ci-dessous reprend déjà ce lien : on évite de l'afficher une
+  // seconde fois en texte brut dans le rendu HTML. Le corps texte brut
+  // (utilisé pour le SMS et le fallback texte de l'email, qui n'ont pas de
+  // bouton) garde la ligne telle quelle.
+  const htmlSourceText = ctaHref
+    ? String(body || "")
+        .split("\n")
+        .filter((line) => !line.includes(ctaHref))
+        .join("\n")
+    : body;
+  const bodyHtml = textToHtml(htmlSourceText) + renderButton({ href: ctaHref, label: ctaLabel });
 
   return renderLayout({
     previewText: safeSubject,
