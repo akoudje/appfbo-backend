@@ -9,6 +9,7 @@ function controller(db, file='orders.controller.js') {
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'src/controllers/admin',file),'utf8'), {module,console:{error(){}},process,Buffer,require(id){
     if(id==='../../prisma')return db;
+    if(id.endsWith('/shipping.service'))return require('./src/services/shipping.service');
     if(id.endsWith('/order-write-guard'))return {claimOrderSnapshot};
     if(id.endsWith('/order-query'))return query;
     if(id.endsWith('/countryScope'))return country;
@@ -40,6 +41,14 @@ test('concurrent cancellations return stock only once',async()=>{
   const f=fixture(),responses=[response(),response()];await Promise.all(responses.map(res=>f.api.cancelOrder(request({reason:'Erreur de commande'}),res)));
   assert.deepEqual(responses.map(res=>res.code).sort(),[200,409]);assert.equal(f.state.balance,105);assert.equal(f.state.movements.length,1);assert.equal(f.state.order.status,'CANCELLED');
   const again=response();await f.api.cancelOrder(request({reason:'Même demande'}),again);assert.equal(again.body.alreadyDone,true);assert.equal(f.state.balance,105);
+});
+test('preparation detail retains shipping payment after checklist hydration',async()=>{
+  const f=fixture({deliveryMode:'EXPEDITION_POSTE',shippingPaymentLink:{status:'PAID',providerStatus:'SUCCEEDED'}});
+  const original=f.db.preorder.findFirst;
+  f.db.preorder.findFirst=async args=>{ const row=await original(args); if (!args.include?.shippingPaymentLink) delete row.shippingPaymentLink; return row; };
+  const res=response(); await f.api.getOrderById(request(),res);
+  assert.equal(res.code,200);
+  assert.equal(res.body.shippingPaymentLink.status,'PAID');
 });
 test('cancel cannot cross countries or accept a missing reason',async()=>{
   for(const body of [{},{reason:'   '},{reason:{message:'objet'}},{reason:'x'.repeat(1001)}]){const f=fixture(),res=response();await f.api.cancelOrder(request(body),res);assert.equal(res.code,400);assert.equal(f.state.balance,100);}

@@ -209,6 +209,7 @@ async function getPublicLink(req, res) {
     return res.json({
       id: link.id,
       reference: link.reference,
+      source: link.source,
       externalReference: link.externalReference,
       customerName: link.customerName,
       customerPhone: link.customerPhone,

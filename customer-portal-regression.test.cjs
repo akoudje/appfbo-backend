@@ -13,6 +13,7 @@ function controller(file, db, extras = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'src/controllers', file), 'utf8'), {
     module, Buffer, Date, console: { error() {} }, process: { env: { CUSTOMER_OTP_MIN_RESPONSE_MS: '0', CUSTOMER_OTP_PEPPER: 'test-pepper', CUSTOMER_JWT_SECRET: 'test-secret' } },
     require: (name) => {
+      if (name === '../services/shipping.service') return require('./src/services/shipping.service');
       if (name === '../prisma') return db;
       if (name === 'crypto') return crypto;
       if (['path', 'fs', 'os'].includes(name)) return require(name);
@@ -55,8 +56,10 @@ test('grouped client views preserve ownership, exclude paid orders from payment 
     assert.equal(res.body.viewerNumeroFbo, '225-000-111-222');
     const filter = where.AND[0];
     if (status === 'TO_PAY') {
-      assert.deepEqual(Array.from(filter.status.in), ['INVOICED', 'PAYMENT_PENDING']);
-      assert.equal(filter.paymentStatus.not, 'PAID');
+      assert.deepEqual(Array.from(filter.OR[0].status.in), ['INVOICED', 'PAYMENT_PENDING']);
+      assert.equal(filter.OR[0].paymentStatus.not, 'PAID');
+      assert.equal(filter.OR[1].shippingFeeFcfa.gt, 0);
+      assert.deepEqual(Array.from(filter.OR[1].status.in), ['PAID', 'READY']);
     } else if (status === 'HISTORY') {
       assert.deepEqual(Array.from(filter.status.in), ['CANCELLED', 'FULFILLED']);
     } else {

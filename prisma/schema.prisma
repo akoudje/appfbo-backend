@@ -58,6 +58,8 @@ enum Grade {
 enum DeliveryMode {
   RETRAIT_SITE_FLP
   LIVRAISON
+  EXPEDITION_POSTE
+  EXPEDITION_CODITRANS
 }
 
 enum PaymentProvider {
@@ -1002,6 +1004,16 @@ model Preorder {
 
   // Livraison
   deliveryMode DeliveryMode?
+  shippingRecipientName String?
+  shippingRecipientPhone String?
+  shippingDestinationCity String?
+  shippingFeeFcfa Int?
+  shippingWeightKg Decimal? @db.Decimal(12,3)
+  shippingParcelCount Int?
+  shippingQuotedAt DateTime?
+  shippingQuotedById String?
+  shippingPaymentLinkId String? @unique
+  shippingPaymentLink ExternalPaymentLink? @relation("ShippingPayment", fields: [shippingPaymentLinkId], references: [id], onDelete: Restrict)
 
   // Protection des données personnelles
   personalDataConsentAccepted  Boolean   @default(false)
@@ -1658,6 +1670,7 @@ model PaymentLinkResendRequest {
 }
 
 model ExternalPaymentLink {
+  shippingOrder Preorder? @relation("ShippingPayment")
   id String @id @default(cuid())
 
   countryId String

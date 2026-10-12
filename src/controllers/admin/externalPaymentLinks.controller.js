@@ -222,7 +222,7 @@ async function listLinks(req, res) {
       if (where.status === "ACTIVE") where.OR = [{ expiresAt: null }, { expiresAt: { gt: new Date() } }];
     }
 
-    if (source && ALLOWED_SOURCES.has(String(source).toUpperCase())) {
+    if (source && (ALLOWED_SOURCES.has(String(source).toUpperCase()) || String(source).toUpperCase() === "SHIPPING")) {
       where.source = String(source).toUpperCase();
     }
 
@@ -436,6 +436,7 @@ async function updateStatus(req, res) {
     });
     if (!existing) return res.status(404).json({ message: "Lien externe introuvable." });
 
+    if (existing.source === "SHIPPING") return res.status(409).json({ message: "Les frais d’expédition se gèrent dans la préparation de la commande." });
     if (status !== "CANCELLED" || !["DRAFT", "ACTIVE"].includes(existing.status)) {
       return res.status(409).json({ message: "Seul un lien non payé peut être annulé. La confirmation du paiement est réservée à Wave." });
     }
@@ -496,6 +497,7 @@ async function attachToOrder(req, res) {
     });
     if (!link) return res.status(404).json({ message: "Lien externe introuvable." });
 
+    if (link.source === "SHIPPING") return res.status(409).json({ message: "Ce paiement est réservé aux frais d’expédition et ne peut pas régler des produits." });
     if (link.status !== "PAID") {
       return res.status(400).json({
         message: "Seul un lien externe payé peut être rattaché à une commande.",

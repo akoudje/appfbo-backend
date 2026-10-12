@@ -43,12 +43,15 @@ function isDeliveryModeEnabled(settings = {}, mode) {
   if (!normalized) return true;
 
   if (normalized === "RETRAIT_SITE_FLP") return settings?.enablePickup !== false;
+  if (["EXPEDITION_POSTE", "EXPEDITION_CODITRANS"].includes(normalized)) return settings?.enableDelivery !== false;
   if (normalized === "LIVRAISON") return settings?.enableDelivery !== false;
 
   return false;
 }
 
 function resolveDeliveryModeForPayment(paymentMode, requestedDeliveryMode) {
+  const mode = normalizeOption(requestedDeliveryMode);
+  if (["EXPEDITION_POSTE", "EXPEDITION_CODITRANS"].includes(mode)) return mode;
   return isPickupOnlyPaymentMode(paymentMode)
     ? "RETRAIT_SITE_FLP"
     : normalizeOption(requestedDeliveryMode) || null;
