@@ -281,6 +281,7 @@ async function getStorefrontConfig(req, res) {
       delivery: {
         delivery: settings?.enableDelivery ?? true,
         pickup: settings?.enablePickup ?? true,
+        shipping: true,
       },
       currencyLabel: settings?.currencyLabel ?? "FCFA",
       pricingDisclaimer:
