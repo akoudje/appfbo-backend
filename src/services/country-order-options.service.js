@@ -43,7 +43,9 @@ function isDeliveryModeEnabled(settings = {}, mode) {
   if (!normalized) return true;
 
   if (normalized === "RETRAIT_SITE_FLP") return settings?.enablePickup !== false;
-  if (["EXPEDITION_POSTE", "EXPEDITION_CODITRANS"].includes(normalized)) return settings?.enableDelivery !== false;
+  // Carrier shipping is part of the new preorder flow. enableDelivery controls
+  // the legacy home-delivery service and must not hide or reject these modes.
+  if (["EXPEDITION_POSTE", "EXPEDITION_CODITRANS"].includes(normalized)) return true;
   if (normalized === "LIVRAISON") return settings?.enableDelivery !== false;
 
   return false;

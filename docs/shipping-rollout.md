@@ -2,7 +2,7 @@
 
 ## Parcours livré
 
-- Le récapitulatif présélectionne le retrait au siège FLP. Les deux expéditions suivent l’activation de la livraison dans les paramètres du pays.
+- Le récapitulatif présélectionne le retrait au siège FLP. La Poste et Coditrans sont disponibles pour les précommandes. La configuration publique les annonce avec `delivery.shipping: true` ; le réglage historique `enableDelivery` concerne la livraison à domicile et ne masque pas ces deux expéditions. Le réglage du retrait continue de s’appliquer au retrait FLP.
 - Une expédition exige le nom complet, le téléphone et la ville du destinataire. Ces coordonnées sont distinctes de l’identité FBO et des contacts de notification de l’acheteur.
 - La facture et le paiement des produits suivent le parcours actuel. Aucun tarif de transport ni nombre de cartons ne sont déduits automatiquement du panier.
 - Après vérification complète des articles et résolution des anomalies, le préparateur renseigne le poids final emballé pour La Poste, ou le nombre réel de cartons pour Coditrans, puis saisit le montant des frais.

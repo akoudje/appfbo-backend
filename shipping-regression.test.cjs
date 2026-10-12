@@ -26,7 +26,15 @@ test('payment modes preserve carrier selection without breaking the legacy picku
     assert.equal(options.resolveDeliveryModeForPayment(payment, 'EXPEDITION_CODITRANS'), 'EXPEDITION_CODITRANS');
     assert.equal(options.resolveDeliveryModeForPayment(payment, null), 'RETRAIT_SITE_FLP');
   }
-  assert.equal(options.validateCountryOrderOptions({settings:{enableDelivery:false},paymentMode:'WAVE',deliveryMode:'EXPEDITION_POSTE'}).ok, false);
+});
+test('disabling legacy home delivery keeps both carriers available and preserves pickup settings', () => {
+  const settings = { enableDelivery: false, enablePickup: true };
+  for (const deliveryMode of ['RETRAIT_SITE_FLP', 'EXPEDITION_POSTE', 'EXPEDITION_CODITRANS']) {
+    assert.equal(options.validateCountryOrderOptions({ settings, paymentMode: 'WAVE', deliveryMode }).ok, true);
+  }
+  assert.equal(options.validateCountryOrderOptions({ settings, deliveryMode: 'LIVRAISON' }).ok, false);
+  assert.equal(options.validateCountryOrderOptions({ settings: { ...settings, enablePickup: false }, deliveryMode: 'RETRAIT_SITE_FLP' }).ok, false);
+  assert.equal(options.validateCountryOrderOptions({ settings, deliveryMode: 'UNKNOWN' }).ok, false);
 });
 test('shipping requires separate recipient coordinates and pickup discards them', () => {
   assert.equal(shipping.recipientInput(recipient, 'EXPEDITION_POSTE').shippingRecipientPhone, '+2250700000000');
