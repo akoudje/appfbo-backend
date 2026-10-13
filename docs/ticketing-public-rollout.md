@@ -4,6 +4,16 @@
 
 Livrer le backend, le frontend public et le petit ajustement de signalement dans l’administration ensemble. Appliquer d’abord `20261008150000_public_ticket_purchase` avec `npx prisma migrate deploy`, puis `npx prisma generate`. La migration ajoute quatre colonnes nullable à `TicketOrder` (prix des frais, total payable, identifiant de tentative et code de vérification des tickets) ainsi qu’un index unique pays/tentative. Aucun prix, paiement ou ticket historique n’est modifié par la migration.
 
+## Visibilité des événements et archives admin
+
+La liste publique `/events` présente uniquement les événements actifs : ventes ouvertes, ouverture prochaine ou événement complet. Elle ne propose aucune vue « Archives », « Terminés » ou « Tous » ; les anciens paramètres `view=archives`, `view=past` et `view=all` ne permettent pas de réafficher un événement clôturé. Le backend filtre également `/api/ticketing/events`, y compris pour un événement publié dont les ventes sont déjà fermées ou dont la date de fin est passée.
+
+La gestion admin propose « Actifs », « Brouillons » et « Archives », avec compteurs. Un événement clôturé ou annulé, terminé à sa date de fin, ou dont la période de vente est fermée appartient aux archives. Les brouillons restent dans leur propre vue. Le classement ne modifie aucun statut en base. Sans sélection explicite, un événement actif est choisi ; un lien direct vers un événement archivé ouvre sa collection. Une collection vide ne sélectionne pas un événement d’une autre vue. Une session de contrôle d’accès ouverte verrouille le changement de collection et d’événement.
+
+Les pages publiques individuelles et les achats existants restent accessibles via leurs liens et « Retrouver mes tickets ». Les commandes, rapports et historiques restent consultables côté admin. Aucun ticket ni paiement n’est supprimé ou modifié par ce classement. Aucun changement de schéma ni migration supplémentaire : déployer le backend puis les deux interfaces web.
+
+Validation : tests du catalogue public et d’un achat payé après clôture (`public-ticketing-regression.test.cjs`), du filtrage public (`ticketing-model.test.mjs`) et des collections/sélections admin (`ticket-event-collections.test.mjs`).
+
 ## Réservation et concurrence
 
 La création prend un verrou sur l’événement avant de vérifier puis enregistrer l’achat. Les tickets actifs/utilisés, les achats payés sans tickets en attente d’émission et les achats en attente encore réservés sont comptés dans les capacités de l’événement et de chaque catégorie. Les billets RESERVED historiques sont comptés séparément de leur commande pour éviter un double comptage.

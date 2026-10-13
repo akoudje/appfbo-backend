@@ -147,6 +147,10 @@ function fixture(capacity = 3) {
     ticketEvent: {
       findMany: async ({ where }) =>
         state.events.filter((e) => match(where, e, "event")).map(event),
+      findFirst: async ({ where }) => {
+        const row = state.events.find((e) => match(where, e, "event"));
+        return row ? event(row) : null;
+      },
     },
     ticketType: {
       findFirst: async ({ where }) =>
@@ -406,6 +410,49 @@ test("availability includes held seats and remaining global capacity", async () 
   assert.equal(r.code, 200);
   assert.equal(r.body.data[0].remaining, 0);
   assert.equal(r.body.data[0].salesStatus, "SOLD_OUT");
+});
+test("the public list hides all archives, including closed events without an end date", async () => {
+  for (const patch of [
+    { status: "CLOSED", endsAt: null },
+    { status: "CANCELLED" },
+    { status: "DRAFT" },
+    { endsAt: new Date("2020-01-01") },
+    { salesCloseAt: new Date("2020-01-01"), endsAt: null },
+  ]) {
+    const f = fixture();
+    Object.assign(f.state.events[0], patch);
+    const r = response();
+    await f.api.listPublicEvents({ ...f.request(), query: { view: "archives" } }, r);
+    assert.equal(r.code, 200);
+    assert.equal(r.body.data.length, 0);
+  }
+});
+test("future sale openings remain visible and country filtering remains enforced", async () => {
+  const f = fixture();
+  f.state.events[0].salesOpenAt = new Date("2099-01-01");
+  const r = response();
+  await f.api.listPublicEvents(f.request(), r);
+  assert.equal(r.body.data[0].salesStatus, "UPCOMING");
+  const foreign = response();
+  await f.api.listPublicEvents({ ...f.request(), countryId: "BFA" }, foreign);
+  assert.equal(foreign.body.data.length, 0);
+});
+test("archiving hides an event from the list while preserving its page and paid tickets", async () => {
+  const f = fixture();
+  f.state.types[0].priceFcfa = 0;
+  const purchase = await f.buy();
+  assert.equal(purchase.code, 201);
+  f.state.events[0].status = "CLOSED";
+  const eventResponse = response();
+  await f.api.getPublicEvent(f.request(), eventResponse);
+  assert.equal(eventResponse.code, 200);
+  assert.equal(eventResponse.body.salesStatus, "CLOSED");
+  const orderResponse = response();
+  await f.api.getTicketOrder({ ...f.request(), params: { orderNumber: purchase.body.orderNumber }, query: { token: purchase.body.accessToken } }, orderResponse);
+  assert.equal(orderResponse.code, 200);
+  assert.equal(orderResponse.body.status, "PAID");
+  assert.equal(orderResponse.body.tickets.length, 1);
+  assert.equal(orderResponse.body.tickets[0].status, "ACTIVE");
 });
 test("expired holds beyond the grace period release seats", async () => {
   const f = fixture(1);
