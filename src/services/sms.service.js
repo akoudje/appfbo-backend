@@ -182,9 +182,10 @@ function isTransientOrangeError(err) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
-async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }) {
+async function sendSms({ to, message, callbackData = null, countryCode = "CIV", sensitive = false }) {
   const normalizedCountry = String(countryCode || "CIV").trim().toUpperCase();
   const toAddress = normalizePhoneForCountry(to, normalizedCountry);
+  const logDestination = sensitive ? `***${String(toAddress || '').slice(-4)}` : toAddress;
   const normalizedMessage = clampSmsContent(message);
   const clientCorrelator = buildSafeClientCorrelator(callbackData);
   const receiptNotifyUrl = callbackData ? buildOrangeReceiptNotifyUrl() : null;
@@ -217,7 +218,7 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
   try {
     const orangeConfig = getCountryOrangeConfig(normalizedCountry);
     console.log("[sms][orange] send requested", {
-      to: `tel:${toAddress}`,
+      to: `tel:${logDestination}`,
       countryCode: normalizedCountry,
       senderAddress: orangeConfig.senderAddress,
       messageLength: normalizedMessage.length,
@@ -246,13 +247,13 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
 
         const delayMs = getSmsRetryDelayMs(attempt + 1);
         console.warn("[sms][orange] transient failure, retrying", {
-          to: toAddress,
+          to: logDestination,
           attempt: attempt + 1,
           nextAttempt: attempt + 2,
           maxAttempts: maxRetries + 1,
           delayMs,
           errorCode: getOrangeErrorCode(err),
-          errorMessage: getOrangeErrorMessage(err),
+          errorMessage: sensitive ? undefined : getOrangeErrorMessage(err),
           httpStatus: err?.status || err?.response?.status || null,
         });
         await wait(delayMs);
@@ -260,7 +261,7 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
     }
 
     console.log("[sms][orange] send accepted", {
-      to: `tel:${toAddress}`,
+      to: `tel:${logDestination}`,
       providerMessageId: smsResult.trackingUrl,
     });
 
@@ -274,9 +275,9 @@ async function sendSms({ to, message, callbackData = null, countryCode = "CIV" }
     };
   } catch (err) {
     console.error("[sms][orange] send failed", {
-      to: toAddress,
+      to: logDestination,
       errorCode: getOrangeErrorCode(err),
-      errorMessage: getOrangeErrorMessage(err),
+      errorMessage: sensitive ? undefined : getOrangeErrorMessage(err),
       httpStatus: err?.status || err?.response?.status || null,
     });
 
@@ -392,6 +393,7 @@ async function fetchSmsStatus({ resourceUrl, countryCode = "CIV" }) {
 }
 
 module.exports = {
+  orangeConfigured,
   buildPreorderSmsMessage,
   normalizePhone,
   normalizePhoneForCountry,

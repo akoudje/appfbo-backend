@@ -132,6 +132,7 @@ function serializeOrder(order) {
     buyerFullName: order.buyerFullName,
     buyerPhone: order.buyerPhone,
     buyerEmail: order.buyerEmail,
+    buyerPhoneVerified: require('../services/ticket-phone-recovery.service').isVerified(order, countryCode),
     paidAt: order.paidAt,
     expiresAt: order.expiresAt,
     ticketIssueCode: order.ticketIssueCode,

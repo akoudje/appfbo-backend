@@ -13,9 +13,16 @@ function codeHash({
   id,
   email,
   countryId,
-  code
+  code,
+  channel = 'EMAIL',
+  phone,
+  purpose = 'LOGIN',
+  orderId = null
 }) {
-  return crypto.createHmac('sha256', secret()).update(JSON.stringify(['ticket-portal-otp', id, email, countryId, code])).digest('hex');
+  const input = channel === 'EMAIL' && purpose === 'LOGIN'
+    ? ['ticket-portal-otp', id, email, countryId, code]
+    : ['ticket-portal-otp-v2', id, channel, phone, countryId, purpose, orderId, code];
+  return crypto.createHmac('sha256', secret()).update(JSON.stringify(input)).digest('hex');
 }
 function sameHash(left, right) {
   const a = Buffer.from(left || '', 'hex'),
@@ -41,6 +48,11 @@ function signSession(email, countryId) {
     audience: 'ticket-portal'
   });
 }
+function signPhoneSession(phone, countryId, scope, orderId) {
+  return jwt.sign({ type: 'ticket_portal', channel: 'SMS', phone, countryId, scope, ...(orderId ? { orderId } : {}) }, secret(), {
+    expiresIn: scope === 'PENDING_REFERENCE' ? '15m' : '12h', audience: 'ticket-portal',
+  });
+}
 function readSession(req) {
   try {
     const match = String(req.headers?.cookie || '').match(/(?:^|;\s*)tpt=([^;]*)/);
@@ -49,6 +61,14 @@ function readSession(req) {
       audience: 'ticket-portal',
       algorithms: ['HS256']
     });
+    if (payload.type !== 'ticket_portal' || payload.countryId !== req.countryId) return null;
+    if (payload.channel === 'SMS') {
+      const recovery = require('./ticket-phone-recovery.service');
+      if (!['PHONE', 'ORDER', 'PENDING_REFERENCE'].includes(payload.scope) || recovery.phone(payload.phone, req.country?.code) !== payload.phone || !payload.phone) return null;
+      if (payload.scope === 'ORDER' && (typeof payload.orderId !== 'string' || !payload.orderId)) return null;
+      return { channel: 'SMS', phone: payload.phone, countryId: payload.countryId, scope: payload.scope, orderId: payload.orderId };
+    }
+    if (payload.channel && payload.channel !== 'EMAIL') return null;
     const email = normalizeEmail(payload.email);
     return payload.type === 'ticket_portal' && email && payload.countryId === req.countryId ? {
       email,
@@ -61,7 +81,7 @@ function readSession(req) {
 function requireSession(req, res, next) {
   const session = readSession(req);
   if (!session) return res.status(401).json({
-    message: 'Connectez-vous par email pour retrouver vos tickets.'
+    message: 'Connectez-vous pour retrouver vos tickets.'
   });
   req.ticketPortal = session;
   res.setHeader('Cache-Control', 'private, no-store');
@@ -79,6 +99,7 @@ module.exports = {
   sameHash,
   cookieOptions,
   signSession,
+  signPhoneSession,
   readSession,
   requireSession,
   requireJson

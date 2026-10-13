@@ -9,6 +9,8 @@ const {
   renderHighlightBox
 } = require('../services/email-templates/layout');
 const session = require('../services/ticket-portal-session.service');
+const sms = require('./ticketSmsRecovery.controller');
+const recovery = require('../services/ticket-phone-recovery.service');
 const {
   signTicketOrderAccessToken
 } = require('../services/ticket-order-ticketing.service');
@@ -23,6 +25,10 @@ function failure(res, error) {
   });
 }
 async function requestOtp(req, res) {
+  if (req.body?.channel === 'SMS') return sms.requestLogin(req, res);
+  if (req.body?.channel && req.body.channel !== 'EMAIL') return res.status(400).json({
+    message: 'Choisissez email ou SMS.'
+  });
   const email = normalizeEmail(req.body?.email);
   if (!email || email.length > 254) return res.status(400).json({
     message: 'Saisissez une adresse email valide.'
@@ -103,6 +109,7 @@ async function requestOtp(req, res) {
   }
 }
 async function verifyOtp(req, res) {
+  if (req.body?.channel === 'SMS') return sms.verifyLogin(req, res);
   const id = String(req.body?.challengeId || ''),
     email = normalizeEmail(req.body?.email),
     code = String(req.body?.code || '');
@@ -117,7 +124,7 @@ async function verifyOtp(req, res) {
           id
         }
       });
-      if (!challenge || challenge.countryId !== req.countryId || challenge.email !== email || challenge.consumedAt || challenge.attempts >= 5 || challenge.expiresAt <= new Date()) return false;
+      if (!challenge || challenge.channel && challenge.channel !== 'EMAIL' || challenge.purpose && challenge.purpose !== 'LOGIN' || challenge.countryId !== req.countryId || challenge.email !== email || challenge.consumedAt || challenge.attempts >= 5 || challenge.expiresAt <= new Date()) return false;
       if (!session.sameHash(challenge.codeHash, session.codeHash({
         id,
         email,
@@ -159,10 +166,16 @@ async function verifyOtp(req, res) {
     return failure(res, error);
   }
 }
-function getSession(req, res) {
-  return res.json({
-    email: req.ticketPortal.email
-  });
+async function getSession(req, res) {
+  try {
+    const portal = await sms.currentScope(req.ticketPortal, req);
+    if (!portal) return res.status(401).json({
+      message: 'Reconnectez-vous pour retrouver vos tickets.'
+    });
+    return res.json(sms.summary(portal));
+  } catch (error) {
+    return failure(res, error);
+  }
 }
 function logout(_req, res) {
   const {
@@ -176,66 +189,94 @@ function logout(_req, res) {
 }
 async function listOrders(req, res) {
   try {
-    const page = Math.max(1, Math.min(10000, Number.parseInt(req.query.page || '1', 10) || 1)),
-      pageSize = 20;
-    const where = {
-      countryId: req.countryId,
-      buyerEmail: {
-        equals: req.ticketPortal.email,
-        mode: 'insensitive'
-      }
-    };
-    const [total, orders] = await Promise.all([prisma.ticketOrder.count({
-      where
-    }), prisma.ticketOrder.findMany({
-      where,
-      orderBy: [{
-        createdAt: 'desc'
-      }, {
-        id: 'desc'
-      }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-      select: {
-        orderNumber: true,
-        status: true,
-        quantity: true,
-        createdAt: true,
-        paidAt: true,
-        event: {
-          select: {
-            title: true,
-            startsAt: true,
-            venueName: true
-          }
-        },
-        _count: {
-          select: {
-            tickets: true
+    const result = await prisma.$transaction(async tx => {
+      const page = Math.max(1, Math.min(10000, Number.parseInt(req.query.page || '1', 10) || 1)),
+        pageSize = 20;
+      const portal = await sms.currentScope(req.ticketPortal, req, tx);
+      if (!portal) return {
+        status: 401,
+        body: {
+          message: 'Reconnectez-vous pour retrouver vos tickets.'
+        }
+      };
+      if (portal.scope === 'PENDING_REFERENCE') return {
+        status: 409,
+        body: {
+          code: 'ORDER_REFERENCE_REQUIRED',
+          ...sms.summary(portal),
+          message: 'Saisissez votre référence d’achat pour ouvrir vos tickets.'
+        }
+      };
+      const where = portal.channel === 'SMS' ? {
+        ...recovery.whereForPhone(portal.phone, req.countryId, req.country.code),
+        ...(portal.orderId ? {
+          id: portal.orderId
+        } : {})
+      } : {
+        countryId: req.countryId,
+        buyerEmail: {
+          equals: portal.email,
+          mode: 'insensitive'
+        }
+      };
+      const [total, orders] = await Promise.all([tx.ticketOrder.count({
+        where
+      }), tx.ticketOrder.findMany({
+        where,
+        orderBy: [{
+          createdAt: 'desc'
+        }, {
+          id: 'desc'
+        }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          orderNumber: true,
+          status: true,
+          quantity: true,
+          createdAt: true,
+          paidAt: true,
+          event: {
+            select: {
+              title: true,
+              startsAt: true,
+              venueName: true
+            }
+          },
+          _count: {
+            select: {
+              tickets: true
+            }
           }
         }
-      }
-    })]);
-    return res.json({
-      email: req.ticketPortal.email,
-      data: orders.map(order => ({
-        orderNumber: order.orderNumber,
-        status: order.status,
-        quantity: order.quantity,
-        createdAt: order.createdAt,
-        paidAt: order.paidAt,
-        event: {
-          title: order.event.title,
-          startsAt: order.event.startsAt,
-          venueName: order.event.venueName
-        },
-        ticketCount: order._count?.tickets || 0,
-        accessToken: signTicketOrderAccessToken(order.orderNumber)
-      })),
-      page,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-      total
+      })]);
+      return {
+        status: 200,
+        body: {
+          ...sms.summary(portal),
+          data: orders.map(order => ({
+            orderNumber: order.orderNumber,
+            status: order.status,
+            quantity: order.quantity,
+            createdAt: order.createdAt,
+            paidAt: order.paidAt,
+            event: {
+              title: order.event.title,
+              startsAt: order.event.startsAt,
+              venueName: order.event.venueName
+            },
+            ticketCount: order._count?.tickets || 0,
+            accessToken: signTicketOrderAccessToken(order.orderNumber)
+          })),
+          page,
+          totalPages: Math.max(1, Math.ceil(total / pageSize)),
+          total
+        }
+      };
+    }, {
+      isolationLevel: 'RepeatableRead'
     });
+    return res.status(result.status).json(result.body);
   } catch (error) {
     return failure(res, error);
   }

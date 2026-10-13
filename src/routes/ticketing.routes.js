@@ -5,6 +5,10 @@ const ticketingController = require("../controllers/ticketing.controller");
 const portal = require('../controllers/ticketPortal.controller');
 const distribution = require('../controllers/ticketDistribution.controller');
 const portalSession = require('../services/ticket-portal-session.service');
+const smsRecovery = require('../controllers/ticketSmsRecovery.controller');
+const contactKey = req => req.body?.channel === 'SMS' ? smsRecovery.rateKey(req) : `${req.countryId}:EMAIL:${String(req.body?.email || '').trim().toLowerCase()}`;
+const smsCooldown = createRateLimiter({ keyPrefix: 'ticket-sms-cooldown', windowMs: 60000, max: 1, keyFn: smsRecovery.rateKey });
+const smsHourly = createRateLimiter({ keyPrefix: 'ticket-sms-hourly', windowMs: 3600000, max: 3, keyFn: smsRecovery.rateKey });
 
 const router = express.Router();
 
@@ -52,14 +56,23 @@ const waveSyncLimiter = createRateLimiter({
 
 router.use(resolveCountry);
 
+router.get('/portal/capabilities', smsRecovery.capabilities);
 router.post('/portal/otp/request', portalSession.requireJson,
   createRateLimiter({ keyPrefix: 'ticket-portal-request-ip', windowMs: 600000, max: 5 }),
-  createRateLimiter({ keyPrefix: 'ticket-portal-request-email', windowMs: 60000, max: 1, keyFn: req => `${req.countryId}:${String(req.body?.email || '').trim().toLowerCase()}` }),
-  createRateLimiter({ keyPrefix: 'ticket-portal-request-hour', windowMs: 3600000, max: 3, keyFn: req => `${req.countryId}:${String(req.body?.email || '').trim().toLowerCase()}` }), portal.requestOtp);
+  (req, res, next) => req.body?.channel === 'SMS' ? smsCooldown(req, res, next) : next(),
+  (req, res, next) => req.body?.channel === 'SMS' ? smsHourly(req, res, next) : next(),
+  createRateLimiter({ keyPrefix: 'ticket-portal-request-contact', windowMs: 60000, max: 1, keyFn: contactKey }),
+  createRateLimiter({ keyPrefix: 'ticket-portal-request-hour', windowMs: 3600000, max: 3, keyFn: contactKey }), portal.requestOtp);
 router.post('/portal/otp/verify', portalSession.requireJson, createRateLimiter({keyPrefix:'ticket-portal-verify',windowMs:600000,max:20}), portal.verifyOtp);
 router.get('/portal/session', portalSession.requireSession, portal.getSession);
 router.post('/portal/logout', portalSession.requireJson, portal.logout);
 router.get('/portal/orders', portalSession.requireSession, portal.listOrders);
+router.post('/portal/order-reference', portalSession.requireJson, portalSession.requireSession,
+  createRateLimiter({ keyPrefix: 'ticket-sms-reference', windowMs: 600000, max: 10, keyFn: req => `${req.countryId}:${req.ticketPortal.phone || req.ip}` }), smsRecovery.selectReference);
+router.post('/orders/:orderNumber/phone/otp/request', portalSession.requireJson,
+  createRateLimiter({ keyPrefix: 'ticket-phone-bind-ip', windowMs: 600000, max: 5 }), smsRecovery.ownedPhone, smsCooldown, smsHourly, smsRecovery.requestBinding);
+router.post('/orders/:orderNumber/phone/otp/verify', portalSession.requireJson,
+  createRateLimiter({ keyPrefix: 'ticket-phone-bind-verify', windowMs: 600000, max: 20 }), smsRecovery.ownedPhone, smsRecovery.verifyBinding);
 router.get('/shared-tickets/:ticketId', orderLookupLimiter, distribution.getSharedTicket);
 router.get('/orders/:orderNumber/tickets/:ticketId/share-link', orderLookupLimiter, distribution.getShareLink);
 router.patch('/orders/:orderNumber/tickets/:ticketId/guest', portalSession.requireJson, orderLookupLimiter, distribution.assignGuest);
