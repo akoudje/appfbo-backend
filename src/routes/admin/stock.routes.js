@@ -17,6 +17,12 @@ router.get(
   stockController.listStockMovements,
 );
 
+router.get(
+  "/reserved",
+  requirePermission(Permission.PRODUCT_READ),
+  stockController.getReservedStock,
+);
+
 router.post(
   "/adjust",
   requirePermission(Permission.PRODUCT_WRITE),

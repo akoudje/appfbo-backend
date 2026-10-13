@@ -250,6 +250,41 @@ function findItemsExceedingProductLimits(items, productsById, globalMaxQtyPerPro
   return violations;
 }
 
+// Lignes dont la quantité dépasse le stock pays (ou produit désactivé pour le pays).
+function findItemsExceedingStock(items = []) {
+  const qtyByProduct = new Map();
+  for (const item of items) {
+    qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) || 0) + Number(item.qty || 0));
+  }
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    if (seen.has(item.productId)) continue;
+    seen.add(item.productId);
+    const countryProduct = item.product?.countryProducts?.[0] || null;
+    const available = countryProduct && countryProduct.actif !== false ? Math.max(0, Number(countryProduct.stockQty || 0)) : 0;
+    const requested = qtyByProduct.get(item.productId) || 0;
+    if (requested > available) {
+      result.push({
+        productId: item.productId,
+        nom: item.productNameSnapshot || item.product?.nom || "Produit",
+        requested,
+        available,
+      });
+    }
+  }
+  return result;
+}
+
+function buildOutOfStockMessage(outOfStock = []) {
+  const parts = outOfStock.map((it) =>
+    it.available > 0
+      ? `${it.nom} (${it.available} disponible${it.available > 1 ? "s" : ""})`
+      : `${it.nom} (en rupture)`,
+  );
+  return `Stock insuffisant : ${parts.join(", ")}. Merci d'ajuster votre panier.`;
+}
+
 async function createDraft(req, res) {
   let identitySnapshot = null;
   try {
@@ -973,7 +1008,7 @@ async function submit(req, res) {
               include: {
                 countryProducts: {
                   where: { countryId },
-                  select: { maxQtyPerOrder: true },
+                  select: { maxQtyPerOrder: true, stockQty: true, actif: true },
                 },
               },
             },
@@ -1045,6 +1080,17 @@ async function submit(req, res) {
         error: `${first.nom} est limité à ${first.limit} unité${first.limit > 1 ? "s" : ""} par commande.`,
         code: "PRODUCT_MAX_QTY_EXCEEDED",
         violations,
+      });
+    }
+
+    // Un panier peut avoir été constitué avant une rupture (il est conservé dans le
+    // navigateur) : on revérifie le stock pays au moment de la soumission.
+    const outOfStock = findItemsExceedingStock(preorder.items);
+    if (outOfStock.length > 0) {
+      return res.status(409).json({
+        error: buildOutOfStockMessage(outOfStock),
+        code: "PRODUCT_OUT_OF_STOCK",
+        outOfStock,
       });
     }
 
