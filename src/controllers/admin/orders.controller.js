@@ -659,20 +659,30 @@ async function listOrders(req, res) {
   }
 }
 
+// Commandes soumises à traiter / préfacturer : toujours servies en FIFO, de la plus
+// ancienne soumission à la plus récente (la date de création du brouillon peut
+// précéder de loin la soumission).
+const SUBMITTED_FIFO_ORDER = [
+  { submittedAt: { sort: "asc", nulls: "last" } },
+  { createdAt: "asc" },
+  { preorderNumber: "asc" },
+];
+
 async function exportOrders(req, res) {
   try {
     const where = buildOrdersListWhere(req);
     const count = await prisma.preorder.count({ where });
     if (count > 10000) return res.status(400).json({ message: "L’export est limité à 10 000 commandes. Affinez les filtres." });
-    const rows = await prisma.preorder.findMany({ where, take: 10000, orderBy: ordersSort(req.query), select: {
+    const isSubmittedQueue = String(req.query.status || "").toUpperCase() === "SUBMITTED";
+    const rows = await prisma.preorder.findMany({ where, take: 10000, orderBy: isSubmittedQueue ? SUBMITTED_FIFO_ORDER : ordersSort(req.query), select: {
       preorderNumber: true, parcelNumber: true, fboNomComplet: true, fboNumero: true,
       status: true, paymentStatus: true, billingWorkStatus: true, billingPriority: true,
-      as400InvoiceTotalFcfa: true, indicativeTotalFcfa: true, totalFcfa: true, createdAt: true,
+      as400InvoiceTotalFcfa: true, indicativeTotalFcfa: true, totalFcfa: true, createdAt: true, submittedAt: true,
       assignedInvoicer: { select: { fullName: true } },
     } });
-    const header = ["Précommande", "Colis", "Client", "Numéro FBO", "Statut", "Paiement", "Facturation", "Priorité", "Responsable", "Montant AS400 (FCFA)", "Montant indicatif (FCFA)", "Création"];
+    const header = ["Précommande", "Colis", "Client", "Numéro FBO", "Statut", "Paiement", "Facturation", "Priorité", "Responsable", "Montant AS400 (FCFA)", "Montant indicatif (FCFA)", "Création", "Soumission"];
     const labels = { DRAFT: "Brouillon", SUBMITTED: "Soumise", INVOICED: "Préfacturée", PAYMENT_PENDING: "Paiement en attente", PAID: "Payée", READY: "Prête", FULFILLED: "Remise", CANCELLED: "Annulée", UNPAID: "Non payé", PARTIALLY_PAID: "Partiellement payé", REFUNDED: "Remboursé", NONE: "Non démarrée", QUEUED: "En file", ASSIGNED: "Assignée", IN_PROGRESS: "En cours", WAITING_CUSTOMER_DATA: "Infos client attendues", WAITING_PAYMENT: "Paiement attendu", COMPLETED: "Terminée", RELEASED: "À réassigner", ESCALATED: "À revoir", LOW: "Faible", NORMAL: "Normale", HIGH: "Haute", URGENT: "Urgente" };
-    const lines = rows.map(row => [row.preorderNumber, row.parcelNumber, row.fboNomComplet, row.fboNumero, labels[row.status] || row.status, labels[row.paymentStatus] || row.paymentStatus, labels[row.billingWorkStatus] || row.billingWorkStatus, labels[row.billingPriority] || row.billingPriority, row.assignedInvoicer?.fullName, row.as400InvoiceTotalFcfa, row.indicativeTotalFcfa ?? row.totalFcfa, row.createdAt?.toISOString()]);
+    const lines = rows.map(row => [row.preorderNumber, row.parcelNumber, row.fboNomComplet, row.fboNumero, labels[row.status] || row.status, labels[row.paymentStatus] || row.paymentStatus, labels[row.billingWorkStatus] || row.billingWorkStatus, labels[row.billingPriority] || row.billingPriority, row.assignedInvoicer?.fullName, row.as400InvoiceTotalFcfa, row.indicativeTotalFcfa ?? row.totalFcfa, row.createdAt?.toISOString(), row.submittedAt?.toISOString()]);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="commandes-' + new Date().toISOString().slice(0, 10) + '.csv"');
     return res.send("\uFEFF" + [header, ...lines].map(row => row.map(csvCell).join(";")).join("\r\n"));
@@ -693,15 +703,10 @@ async function getSubmittedOrdersExport(req, res) {
       ? scopeWhere(req, { preorderNumber: { in: preorderNumbers } })
       : buildOrdersListWhere(req, { status: "SUBMITTED" });
 
-    // FIFO : la feuille de préparation suit l'ordre de soumission (et non la date de
-    // création du brouillon, qui peut précéder de loin la soumission).
-    const orders = await prisma.preorder.findMany({
+    // Feuille des soumises : FIFO. Sélection par numéros : ordre de la liste collée.
+    const fetched = await prisma.preorder.findMany({
       where,
-      orderBy: [
-        { submittedAt: { sort: "asc", nulls: "last" } },
-        { createdAt: "asc" },
-        { preorderNumber: "asc" },
-      ],
+      orderBy: SUBMITTED_FIFO_ORDER,
       select: {
         id: true,
         submittedAt: true,
@@ -734,8 +739,16 @@ async function getSubmittedOrdersExport(req, res) {
       },
     });
 
+    const listPosition = new Map(preorderNumbers.map((number, index) => [number, index]));
+    const orders = preorderNumbers.length
+      ? [...fetched].sort(
+          (a, b) => listPosition.get(a.preorderNumber) - listPosition.get(b.preorderNumber),
+        )
+      : fetched;
+
     return res.json({
       totalCount: orders.length,
+      ordering: preorderNumbers.length ? "LIST" : "SUBMITTED_FIFO",
       data: orders.map((order) => ({
         id: order.id,
         preorderNumber: order.preorderNumber || "",
