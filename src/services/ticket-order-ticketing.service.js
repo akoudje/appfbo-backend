@@ -92,7 +92,7 @@ function paidOrderTicketInclude() {
     country: { select: { code: true } },
     event: true,
     ticketType: true,
-    tickets: { include: { ticketType: true } },
+    tickets: { include: { ticketType: true, shareEvents: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 10 }, _count: { select: { shareEvents: true } } } },
   };
 }
 

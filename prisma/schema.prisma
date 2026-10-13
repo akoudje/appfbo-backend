@@ -488,6 +488,7 @@ model Country {
   as400Requests           As400InvoiceRequest[]
   cashClosures            CashClosure[]
   customerOtpChallenges   CustomerOtpChallenge[]
+  ticketPortalOtpChallenges TicketPortalOtpChallenge[]
   bankPaymentProofs       BankPaymentProof[]
   stockMovements          StockMovement[]
   paymentLinkResendRequests PaymentLinkResendRequest[]
@@ -2154,6 +2155,7 @@ model TicketOrder {
   @@index([ticketTypeId])
   @@index([paymentProvider, providerSessionId])
   @@index([buyerPhone])
+  @@index([countryId, buyerEmail, createdAt])
   @@index([buyerFboNumber])
 }
 
@@ -2178,6 +2180,9 @@ model Ticket {
   holderPhone String?
   holderEmail String?
   status TicketStatus @default(RESERVED)
+  assignedGuestName String?
+  guestAssignedAt DateTime?
+  shareEvents TicketShareEvent[]
   checkedInAt DateTime?
   checkedInById String?
   checkedInBy AdminUser? @relation("TicketCheckedInBy", fields: [checkedInById], references: [id], onDelete: SetNull)
@@ -2190,6 +2195,34 @@ model Ticket {
   @@index([eventId, status])
   @@index([orderId])
   @@index([ticketTypeId])
+}
+
+model TicketShareEvent {
+  id String @id @default(cuid())
+  ticketId String
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  requestId String
+  channel String
+  guestName String?
+  createdAt DateTime @default(now())
+
+  @@unique([ticketId, requestId])
+  @@index([ticketId, createdAt])
+}
+
+model TicketPortalOtpChallenge {
+  id String @id
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  email String
+  codeHash String
+  attempts Int @default(0)
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([countryId, email, createdAt])
+  @@index([expiresAt])
 }
 
 model TicketCheckInSession {

@@ -8,6 +8,7 @@ const {
   sendTicketOrderAccessEmail,
 } = require("../services/ticket-email-notifications.service");
 const { publicFrontendBaseUrl } = require("../services/public-url.service");
+const { distribution } = require("../services/ticket-distribution.service");
 const {
   ticketOrderNumber,
   signTicketOrderAccessToken,
@@ -151,6 +152,8 @@ function serializeOrder(order) {
         qrToken: t.qrToken,
         holderFullName: t.holderFullName,
         status: t.status,
+        checkedInAt: t.checkedInAt || null,
+        ...distribution(t),
         ticketType: { label: t.ticketType?.label || order.ticketType?.label },
       })),
     accessToken: token,
@@ -161,13 +164,16 @@ async function listPublicEvents(req, res) {
     const events = await prisma.ticketEvent.findMany({
       where: {
         countryId: req.countryId,
-        status: { in: ["PUBLISHED", "CLOSED", "CANCELLED"] },
+        status: "PUBLISHED",
       },
       orderBy: [{ startsAt: "asc" }, { id: "asc" }],
       include: eventInclude,
     });
     const counts = await inventory.availability(events);
-    return res.json({ data: events.map((e) => serializeEvent(e, counts)) });
+    return res.json({
+      data: events.map((e) => serializeEvent(e, counts))
+        .filter((e) => ["OPEN", "UPCOMING", "SOLD_OUT"].includes(e.salesStatus)),
+    });
   } catch (e) {
     return error(res, e);
   }
@@ -495,6 +501,7 @@ async function recoverTicketOrder(req, res) {
 
 module.exports = {
   listPublicEvents,
+  serializeOrder,
   getPublicEvent,
   quote,
   createTicketOrder,
