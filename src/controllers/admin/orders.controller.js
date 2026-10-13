@@ -693,11 +693,18 @@ async function getSubmittedOrdersExport(req, res) {
       ? scopeWhere(req, { preorderNumber: { in: preorderNumbers } })
       : buildOrdersListWhere(req, { status: "SUBMITTED" });
 
+    // FIFO : la feuille de préparation suit l'ordre de soumission (et non la date de
+    // création du brouillon, qui peut précéder de loin la soumission).
     const orders = await prisma.preorder.findMany({
       where,
-      orderBy: [{ createdAt: "asc" }, { preorderNumber: "asc" }],
+      orderBy: [
+        { submittedAt: { sort: "asc", nulls: "last" } },
+        { createdAt: "asc" },
+        { preorderNumber: "asc" },
+      ],
       select: {
         id: true,
+        submittedAt: true,
         preorderNumber: true,
         fboNomComplet: true,
         fboNumero: true,
@@ -735,6 +742,7 @@ async function getSubmittedOrdersExport(req, res) {
         fboNomComplet: order.fboNomComplet || "",
         fboNumero: order.fboNumero || "",
         createdAt: order.createdAt,
+        submittedAt: order.submittedAt,
         status: order.status,
         paymentStatus: order.paymentStatus,
         factureReference: order.factureReference || "",
