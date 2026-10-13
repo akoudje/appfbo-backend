@@ -1027,6 +1027,8 @@ async function sendByChannel({
   preorderId,
   countryCode = "CIV",
   maxSmsRetries = 2,
+  purpose = null,
+  context = null,
 }) {
   if (!to) {
     return {
@@ -1051,6 +1053,23 @@ async function sendByChannel({
   }
 
   if (channel === "WHATSAPP") {
+    // Premier purpose migré sur un vrai template WhatsApp (Meta exige un
+    // template pré-approuvé pour tout message à l'initiative de
+    // l'entreprise, hors session 24h — sendTextMessage ne s'applique plus
+    // ici dès que l'API réelle est configurée). Les autres purposes restent
+    // sur sendTextMessage (mode simulé) en attendant leur propre template.
+    const purposeKey = normalizePurposeKey(purpose);
+    const hasPaymentLink = Boolean(context?.paymentLink);
+    if ((purposeKey === "INVOICE" || purposeKey === "REMINDER") && hasPaymentLink) {
+      return whatsappService.sendPaymentLinkTemplate({
+        to,
+        customerName: context?.customerName,
+        preorderNumber: context?.preorderNumber,
+        amountLabel: context?.totalFcfaLabel,
+        paymentLink: context.paymentLink,
+      });
+    }
+
     return whatsappService.sendTextMessage({
       to,
       body: message,
@@ -1300,6 +1319,8 @@ async function sendPreorderNotification({
       preorderId: preorder.id,
       countryCode: preorderCountryCode,
       maxSmsRetries,
+      purpose,
+      context,
     });
 
     const savedMessage = await persistNotificationResult({
