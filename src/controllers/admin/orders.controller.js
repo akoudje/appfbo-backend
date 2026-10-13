@@ -807,6 +807,28 @@ async function updateShippingQuote(req, res) {
   }
 }
 
+// Ajoute le stock pays actuel à chaque ligne (alerte rupture côté facturation).
+async function attachCountryStock(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (!items.length || !order.countryId) return order;
+  const rows = await prisma.countryProduct.findMany({
+    where: { countryId: order.countryId, productId: { in: [...new Set(items.map((it) => it.productId))] } },
+    select: { productId: true, stockQty: true, actif: true },
+  });
+  const byProduct = new Map(rows.map((row) => [row.productId, row]));
+  return {
+    ...order,
+    items: items.map((it) => {
+      const row = byProduct.get(it.productId);
+      return {
+        ...it,
+        countryStockQty: row ? Number(row.stockQty || 0) : null,
+        countryProductActif: row ? row.actif !== false : false,
+      };
+    }),
+  };
+}
+
 async function getOrderById(req, res) {
   try {
     const { id } = req.params;
@@ -1037,10 +1059,10 @@ async function getOrderById(req, res) {
         },
       );
 
-      return res.json(withShippingNotification(hydratedOrder));
+      return res.json(withShippingNotification(await attachCountryStock(hydratedOrder)));
     }
 
-    return res.json(withShippingNotification(order));
+    return res.json(withShippingNotification(await attachCountryStock(order)));
   } catch (e) {
     console.error("getOrderById error:", e);
     return res.status(500).json({ message: "Erreur serveur (getOrderById)" });
