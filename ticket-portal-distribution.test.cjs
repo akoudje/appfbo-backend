@@ -73,9 +73,10 @@ function fixture() {
       createdAt: new Date()
     }],
     emails: [],
+    sms: [],
     serial: 0
   };
-  let emailFails = false,
+  let smsFails = false, smsConfigured = true, emailFails = false,
     queue = Promise.resolve();
   function match(row, where = {}) {
     return row && Object.entries(where).every(([key, value]) => {
@@ -137,7 +138,7 @@ function fixture() {
         state.challenges.push({
           ...data,
           attempts: 0,
-          consumedAt: null
+          consumedAt: data.consumedAt || null
         });
         return data;
       },
@@ -170,7 +171,7 @@ function fixture() {
       findMany: async ({
         where,
         skip = 0,
-        take = 20
+        take = Infinity
       }) => state.orders.filter(o => match(o, where)).slice(skip, skip + take).map(joinOrder),
       count: async ({
         where
@@ -250,6 +251,10 @@ function fixture() {
     const normalRequire = createRequire(filename);
     function requireFake(id) {
       if (id === '../prisma' || id.endsWith('/prisma')) return db;
+      if (id.endsWith('/sms.service') || id === './sms.service') return {
+        orangeConfigured: () => smsConfigured,
+        sendSms: async input => { state.sms.push(input); return { accepted: !smsFails, errorCode: smsFails ? 'TEST_SMS_FAILED' : null }; },
+      };
       if (id.endsWith('/email.service') || id === './email.service') return {
         normalizeEmail: value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) ? value.trim().toLowerCase() : '',
         sendEmail: async input => {
@@ -282,7 +287,8 @@ function fixture() {
       Date,
       Object,
       Set,
-      Map
+      Map,
+      setImmediate
     }, {
       filename
     })(requireFake, module, module.exports);
@@ -332,6 +338,8 @@ function fixture() {
     distribution,
     sessions,
     sign,
+    smsRecovery: load('controllers/ticketSmsRecovery.controller.js'),
+    phoneRecovery: load('services/ticket-phone-recovery.service.js'),
     request,
     call,
     otp,
@@ -340,9 +348,190 @@ function fixture() {
     },
     failEmail() {
       emailFails = true;
+    },
+    failSms() { smsFails = true; },
+    disableSms() { smsConfigured = false; },
+    async smsOtp(phone = '0700000000', orderNumber) {
+      const requested = await call(portal.requestOtp, { channel: 'SMS', phone, orderNumber });
+      assert.equal(requested.code, 200);
+      await new Promise(resolve => setImmediate(resolve));
+      const code = state.sms.at(-1)?.message.match(/\b\d{6}\b/)[0];
+      return { channel: 'SMS', phone, code, challengeId: requested.body.challengeId };
+    },
+    async callBinding(handler, body = {}, patch = {}) {
+      const req = request(body, patch), res = response();
+      let allowed = false;
+      await this.smsRecovery.ownedPhone(req, res, () => { allowed = true; });
+      if (allowed) await handler(req, res);
+      return res;
     }
   };
 }
+test('SMS normalization accepts local and international CIV/BFA numbers and rejects other countries and arbitrary text', () => {
+  const { phone, variants } = fixture().phoneRecovery;
+  for (const value of ['0700000000', '07 00 00 00 00', '+2250700000000', '2250700000000', '002250700000000']) assert.equal(phone(value, 'CIV'), '+2250700000000');
+  assert.equal(phone('+22670000000', 'BFA'), '+22670000000');
+  for (const value of ['+22670000000', 'hello0700000000', '+0700000000', '070000000', '07000000000', '']) assert.equal(phone(value, 'CIV'), '');
+  assert.equal(phone('0700000000', 'TGO'), '');
+  assert.equal(new Set(variants('+2250700000000', 'CIV')).size, 4);
+});
+test('SMS capability requires a supported country and configured provider', async () => {
+  const f = fixture();
+  assert.equal((await f.call(f.smsRecovery.capabilities)).body.sms, true);
+  assert.equal((await f.call(f.smsRecovery.capabilities, {}, { country: { code: 'TGO' } })).body.sms, false);
+  f.disableSms();
+  assert.equal((await f.call(f.smsRecovery.capabilities)).body.sms, false);
+  assert.equal((await f.call(f.portal.requestOtp, { channel: 'SMS', phone: '0700000000' })).code, 503);
+  assert.equal(f.state.challenges.length, 0);
+});
+test('SMS opens buyer-phone purchases without revealing email or including guest/payer phones', async () => {
+  const f = fixture();
+  f.state.orders.push({ ...f.state.orders[0], id: 'same-buyer', orderNumber: 'EVT-SAME', buyerPhone: '2250700000000' },
+    { ...f.state.orders[0], id: 'guest-only', orderNumber: 'EVT-GUEST', buyerPhone: '0100000000', holderPhone: '0700000000', providerPayerPhone: '0700000000' },
+    { ...f.state.orders[0], id: 'foreign', countryId: 'BFA', orderNumber: 'EVT-FOREIGN' });
+  const input = await f.smsOtp('+2250700000000');
+  assert.equal(f.state.sms[0].to, '+2250700000000');
+  assert.equal(f.state.sms[0].sensitive, true);
+  assert.ok(f.state.sms[0].message.length <= 160);
+  assert.notEqual(f.state.challenges[0].codeHash, input.code);
+  const verified = await f.call(f.portal.verifyOtp, input);
+  assert.equal(verified.code, 200);
+  assert.equal(verified.body.email, undefined);
+  assert.equal(verified.body.requiresOrderReference, false);
+  assert.equal(verified.cookieResult.options.httpOnly, true);
+  const ticketPortal = f.sessions.readSession(f.request({}, { headers: { cookie: 'tpt=' + verified.cookieResult.value } }));
+  const listed = await f.call(f.portal.listOrders, {}, { ticketPortal });
+  assert.equal(listed.body.total, 2);
+  assert.deepEqual(Array.from(listed.body.data, o => o.orderNumber), ['EVT-TEST-001', 'EVT-SAME']);
+  assert.equal(listed.body.email, undefined);
+  assert.ok(listed.body.data.every(o => !o.buyerEmail && !o.buyerPhone && o.accessToken));
+});
+test('unknown SMS contact or reference gets the same neutral response with no SMS and no usable challenge', async () => {
+  const f = fixture();
+  const known = await f.call(f.portal.requestOtp, { channel: 'SMS', phone: '0700000000' });
+  await new Promise(resolve => setImmediate(resolve));
+  const unknown = await f.call(f.portal.requestOtp, { channel: 'SMS', phone: '0100000000' });
+  const wrongRef = await f.call(f.portal.requestOtp, { channel: 'SMS', phone: '0700000000', orderNumber: 'EVT-UNKNOWN' });
+  await new Promise(resolve => setImmediate(resolve));
+  for (const res of [unknown, wrongRef]) {
+    assert.equal(res.code, known.code);
+    assert.equal(res.body.message, known.body.message);
+    assert.equal(res.body.expiresInSeconds, known.body.expiresInSeconds);
+    assert.deepEqual(Object.keys(res.body), Object.keys(known.body));
+  }
+  assert.equal(f.state.sms.length, 1);
+  assert.ok(f.state.challenges.slice(1).every(c => c.consumedAt));
+});
+test('ambiguous phone requires a reference after SMS proof; only the chosen order receives an access token', async () => {
+  const f = fixture();
+  f.state.orders.push({ ...f.state.orders[0], id: 'other-buyer', orderNumber: 'EVT-OTHER', buyerEmail: 'other@example.test', buyerFullName: 'Another buyer' });
+  const verified = await f.call(f.portal.verifyOtp, await f.smsOtp());
+  assert.equal(verified.body.requiresOrderReference, true);
+  assert.equal(verified.cookieResult.options.maxAge, 900000);
+  const ticketPortal = f.sessions.readSession(f.request({}, { headers: { cookie: 'tpt=' + verified.cookieResult.value } }));
+  const blocked = await f.call(f.portal.listOrders, {}, { ticketPortal });
+  assert.equal(blocked.code, 409); assert.equal(blocked.body.data, undefined);
+  assert.equal((await f.call(f.smsRecovery.selectReference, { orderNumber: 'EVT-WRONG' }, { ticketPortal })).code, 400);
+  const chosen = await f.call(f.smsRecovery.selectReference, { orderNumber: 'EVT-TEST-001' }, { ticketPortal });
+  const scoped = f.sessions.readSession(f.request({}, { headers: { cookie: 'tpt=' + chosen.cookieResult.value } }));
+  const listed = await f.call(f.portal.listOrders, {}, { ticketPortal: scoped });
+  assert.equal(listed.body.total, 1); assert.equal(listed.body.singleOrder, true);
+  assert.equal(listed.body.data[0].orderNumber, 'EVT-TEST-001');
+});
+test('reference supplied before OTP binds the session to one purchase, and another phone reference never grants access', async () => {
+  const f = fixture();
+  f.state.orders.push({ ...f.state.orders[0], id: 'other', orderNumber: 'EVT-OTHER' });
+  const verified = await f.call(f.portal.verifyOtp, await f.smsOtp('0700000000', 'EVT-OTHER'));
+  const ticketPortal = f.sessions.readSession(f.request({}, { headers: { cookie: 'tpt=' + verified.cookieResult.value } }));
+  const listed = await f.call(f.portal.listOrders, {}, { ticketPortal });
+  assert.equal(listed.body.total, 1); assert.equal(listed.body.data[0].orderNumber, 'EVT-OTHER');
+  f.state.orders.push({ ...f.state.orders[0], id: 'different-phone', orderNumber: 'EVT-DIFFERENT', buyerPhone: '0100000000' });
+  assert.equal((await f.call(f.smsRecovery.selectReference, { orderNumber: 'EVT-DIFFERENT' }, { ticketPortal })).code, 400);
+});
+test('a new buyer on the same phone cannot expand an existing phone session', async () => {
+  const f = fixture();
+  const verified = await f.call(f.portal.verifyOtp, await f.smsOtp());
+  const ticketPortal = f.sessions.readSession(f.request({}, { headers: { cookie: 'tpt=' + verified.cookieResult.value } }));
+  f.state.orders.push({ ...f.state.orders[0], id: 'other', orderNumber: 'EVT-OTHER', buyerEmail: 'other@example.test' });
+  assert.equal((await f.call(f.portal.getSession, {}, { ticketPortal })).body.requiresOrderReference, true);
+  assert.equal((await f.call(f.portal.listOrders, {}, { ticketPortal })).code, 409);
+});
+test('purchases without buyer email are not silently merged even if names match', async () => {
+  const f = fixture(); f.state.orders[0].buyerEmail = null;
+  f.state.orders.push({ ...f.state.orders[0], id: 'other', orderNumber: 'EVT-OTHER' });
+  assert.equal((await f.call(f.portal.verifyOtp, await f.smsOtp())).body.requiresOrderReference, true);
+});
+test('SMS attempts, expiry, replacement, country and replay protections match email protections', async () => {
+  const f = fixture(), first = await f.smsOtp();
+  const bad = first.code === '111111' ? '222222' : '111111';
+  for (let i = 0; i < 5; i++) assert.equal((await f.call(f.portal.verifyOtp, { ...first, code: bad })).code, 400);
+  assert.equal((await f.call(f.portal.verifyOtp, first)).code, 400);
+  const expired = await f.smsOtp(); f.state.challenges.at(-1).expiresAt = new Date(0);
+  assert.equal((await f.call(f.portal.verifyOtp, expired)).code, 400);
+  const old = await f.smsOtp(), fresh = await f.smsOtp();
+  assert.equal((await f.call(f.portal.verifyOtp, old)).code, 400);
+  assert.equal((await f.call(f.portal.verifyOtp, fresh, { countryId: 'OTHER' })).code, 400);
+  const results = await Promise.all([f.call(f.portal.verifyOtp, fresh), f.call(f.portal.verifyOtp, fresh)]);
+  assert.deepEqual(results.map(r => r.code).sort(), [200, 400]);
+});
+test('blank buyer email does not merge purchases and binding refuses a login challenge', async () => {
+  const f = fixture(); f.state.orders[0].buyerEmail = '  ';
+  f.state.orders.push({ ...f.state.orders[0], id: 'blank-email', orderNumber: 'EVT-BLANK' });
+  const input = await f.smsOtp();
+  const binding = await f.callBinding(f.smsRecovery.verifyBinding, { challengeId: input.challengeId, code: input.code });
+  assert.equal(binding.code, 400);
+  assert.equal((await f.call(f.portal.verifyOtp, input)).body.requiresOrderReference, true);
+});
+test('failed SMS delivery consumes the challenge without disclosing registration publicly', async () => {
+  const f = fixture(); f.failSms();
+  const res = await f.call(f.portal.requestOtp, { channel: 'SMS', phone: '0700000000' });
+  assert.equal(res.code, 200); await new Promise(resolve => setImmediate(resolve));
+  assert.ok(f.state.challenges[0].consumedAt);
+});
+test('paid buyer can verify only the originally recorded phone; guest links and unpaid orders cannot bind it', async () => {
+  const f = fixture();
+  const requested = await f.callBinding(f.smsRecovery.requestBinding, { phone: '0100000000' });
+  assert.equal(requested.code, 200); assert.equal(f.state.sms[0].to, '+2250700000000');
+  const input = { challengeId: requested.body.challengeId, code: f.state.sms[0].message.match(/\b\d{6}\b/)[0] };
+  assert.equal((await f.call(f.portal.verifyOtp, { ...input, channel: 'SMS', phone: '0700000000' })).code, 400);
+  const verified = await f.callBinding(f.smsRecovery.verifyBinding, input);
+  assert.equal(verified.body.buyerPhoneVerified, true);
+  assert.equal(f.state.orders[0].buyerPhoneVerified, '+2250700000000');
+  assert.equal(f.phoneRecovery.isVerified(f.state.orders[0], 'CIV'), true);
+  assert.equal((await f.callBinding(f.smsRecovery.verifyBinding, input)).code, 400);
+  assert.equal((await f.callBinding(f.smsRecovery.requestBinding, {}, { query: { token: 'guest-token' } })).code, 404);
+  f.state.orders[0].status = 'PENDING_PAYMENT';
+  assert.equal((await f.callBinding(f.smsRecovery.requestBinding)).code, 409);
+});
+test('a phone changed after OTP request cannot be verified and invalidates the verified flag', async () => {
+  const f = fixture(), requested = await f.callBinding(f.smsRecovery.requestBinding);
+  const input = { challengeId: requested.body.challengeId, code: f.state.sms[0].message.match(/\b\d{6}\b/)[0] };
+  f.state.orders[0].buyerPhone = '0100000000';
+  assert.equal((await f.callBinding(f.smsRecovery.verifyBinding, input)).code, 400);
+  f.state.orders[0].buyerPhoneVerified = '+2250700000000'; f.state.orders[0].buyerPhoneVerifiedAt = new Date();
+  assert.equal(f.phoneRecovery.isVerified(f.state.orders[0], 'CIV'), false);
+});
+test('SMS contact budgets use one canonical destination across login and binding', async () => {
+  const f = fixture();
+  const limiter = require('./src/middlewares/rateLimit').createRateLimiter({ keyPrefix: 'isolated-sms-' + Date.now(), windowMs: 60000, max: 1, keyFn: f.smsRecovery.rateKey });
+  const oldMode = process.env.RATE_LIMIT_STORE; process.env.RATE_LIMIT_STORE = 'memory';
+  try {
+    let passes = 0;
+    await limiter(f.request({ channel: 'SMS', phone: '07 00 00 00 00' }), response(), () => passes++);
+    const res = response();
+    await limiter(f.request({}, { ticketPhone: '+2250700000000' }), res, () => passes++);
+    assert.equal(passes, 1); assert.equal(res.code, 429); assert.ok(res.body.retryAfterSec > 0);
+  } finally { if (oldMode === undefined) delete process.env.RATE_LIMIT_STORE; else process.env.RATE_LIMIT_STORE = oldMode; }
+});
+test('phone sessions reject malformed scope, foreign country and phone; pending reference lasts only 15 minutes', () => {
+  const f = fixture(), jwt = require('jsonwebtoken');
+  const signed = f.sessions.signPhoneSession('+2250700000000', 'CIV', 'PENDING_REFERENCE');
+  const decoded = jwt.decode(signed); assert.equal(decoded.exp - decoded.iat, 900);
+  for (const patch of [{ countryId: 'BFA' }, { phone: '+22670000000' }, { scope: 'ORDER', orderId: null }, { scope: 'ALL' }]) {
+    const token = jwt.sign({ type: 'ticket_portal', channel: 'SMS', countryId: 'CIV', phone: '+2250700000000', scope: 'PHONE', ...patch }, process.env.CUSTOMER_JWT_SECRET, { audience: 'ticket-portal' });
+    assert.equal(f.sessions.readSession(f.request({}, { headers: { cookie: 'tpt=' + token } })), null);
+  }
+});
 test('email OTP works without an FBO, stores only a hash and creates an HttpOnly country-scoped session', async () => {
   const f = fixture(),
     input = await f.otp('OWNER@EXAMPLE.TEST');

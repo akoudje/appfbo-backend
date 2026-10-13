@@ -2115,6 +2115,8 @@ model TicketOrder {
   buyerFullName String
   buyerPhone String
   buyerEmail String?
+  buyerPhoneVerified String?
+  buyerPhoneVerifiedAt DateTime?
   buyerFboNumber String?
   buyerFboName String?
   quantity Int @default(1)
@@ -2155,6 +2157,7 @@ model TicketOrder {
   @@index([ticketTypeId])
   @@index([paymentProvider, providerSessionId])
   @@index([buyerPhone])
+  @@index([countryId, buyerPhone])
   @@index([countryId, buyerEmail, createdAt])
   @@index([buyerFboNumber])
 }
@@ -2214,7 +2217,11 @@ model TicketPortalOtpChallenge {
   id String @id
   countryId String
   country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
-  email String
+  email String?
+  channel String @default("EMAIL")
+  phone String?
+  purpose String @default("LOGIN")
+  orderId String?
   codeHash String
   attempts Int @default(0)
   expiresAt DateTime
@@ -2222,6 +2229,7 @@ model TicketPortalOtpChallenge {
   createdAt DateTime @default(now())
 
   @@index([countryId, email, createdAt])
+  @@index([countryId, phone, purpose, createdAt])
   @@index([expiresAt])
 }
 
