@@ -1,5 +1,56 @@
 const prisma = require("../../prisma");
 
+// Le stock ne sort qu'au lancement de la préparation : les unités déjà vendues
+// (commandes en cours, préparation non lancée) restent comptées dans stockQty.
+// Mettre le stock en dessous des quantités payées bloque leur lancement en caisse.
+const PENDING_STATUSES = ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"];
+
+async function getReservedQuantities(db, countryId, productId) {
+  const items = await db.preorderItem.findMany({
+    where: {
+      productId,
+      preorder: {
+        countryId,
+        status: { in: [...PENDING_STATUSES, "PAID"] },
+        preparationLaunchedAt: null,
+        stockDeductedAt: null,
+      },
+    },
+    select: {
+      qty: true,
+      preorder: { select: { preorderNumber: true, status: true, fboNomComplet: true } },
+    },
+  });
+  const byOrder = new Map();
+  for (const item of items) {
+    const key = item.preorder.preorderNumber;
+    const entry = byOrder.get(key) || {
+      preorderNumber: key,
+      status: item.preorder.status,
+      customerName: item.preorder.fboNomComplet,
+      qty: 0,
+    };
+    entry.qty += Number(item.qty || 0);
+    byOrder.set(key, entry);
+  }
+  const orders = Array.from(byOrder.values());
+  const sum = (list) => list.reduce((acc, o) => acc + o.qty, 0);
+  const paid = orders.filter((o) => o.status === "PAID");
+  const pending = orders.filter((o) => o.status !== "PAID");
+  return { paidQty: sum(paid), pendingQty: sum(pending), paid, pending };
+}
+
+async function getReservedStock(req, res) {
+  try {
+    const productId = String(req.query.productId || "").trim();
+    if (!productId) return res.status(400).json({ message: "Produit requis." });
+    return res.json(await getReservedQuantities(prisma, req.countryId, productId));
+  } catch (error) {
+    console.error("getReservedStock error:", error);
+    return res.status(500).json({ message: "Impossible de lire le stock réservé." });
+  }
+}
+
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -266,7 +317,7 @@ async function listStockMovements(req, res) {
 async function adjustStock(req, res) {
   try {
     const { integer, text, fail } = require("../../helpers/product-domain");
-    const { productId, targetStockQty, deltaQty, note, expectedStockQty } =
+    const { productId, targetStockQty, deltaQty, note, expectedStockQty, confirmBelowReserved } =
       req.body || {};
     if (typeof productId !== "string" || !productId.trim())
       fail("Produit requis.");
@@ -303,6 +354,18 @@ async function adjustStock(req, res) {
       if (next < 0 || next > 2147483647)
         fail("Le stock obtenu doit être un entier positif ou nul.");
       const effectiveDelta = next - current.stockQty;
+      if (effectiveDelta < 0 && confirmBelowReserved !== true) {
+        const reserved = await getReservedQuantities(tx, req.countryId, productId);
+        if (next < reserved.paidQty) {
+          const err = new Error(
+            `${reserved.paidQty} unité${reserved.paidQty > 1 ? "s" : ""} de ce produit ${reserved.paidQty > 1 ? "sont" : "est"} déjà payée${reserved.paidQty > 1 ? "s" : ""} et pas encore préparée${reserved.paidQty > 1 ? "s" : ""} (${reserved.paid.map((o) => o.preorderNumber).join(", ")}). Avec ${next} en stock, la caisse ne pourra pas lancer ${reserved.paid.length > 1 ? "ces commandes" : "cette commande"}.`,
+          );
+          err.statusCode = 409;
+          err.code = "STOCK_BELOW_RESERVED";
+          err.reserved = reserved;
+          throw err;
+        }
+      }
       if (!effectiveDelta)
         return {
           product: { ...current.product, stockQty: current.stockQty },
@@ -340,7 +403,11 @@ async function adjustStock(req, res) {
     return res.json(result);
   } catch (error) {
     if (error.statusCode)
-      return res.status(error.statusCode).json({ message: error.message });
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.reserved ? { reserved: error.reserved } : {}),
+      });
     console.error("adjustStock error:", error);
     return res
       .status(500)
@@ -351,5 +418,6 @@ async function adjustStock(req, res) {
 module.exports = {
   getStockDashboard,
   listStockMovements,
+  getReservedStock,
   adjustStock,
 };
