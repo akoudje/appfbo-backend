@@ -38,6 +38,14 @@ function sendError(res, error, fallback) {
 async function listMySponsorships(req, res) {
   try {
     const [fbo, settings] = await Promise.all([loadSponsor(req), sponsorship.getSponsorshipSettings(req.countryId)]);
+    // Préremplissage du champ « Votre téléphone » : dernier numéro connu du parrain.
+    const lastSponsorship = await prisma.sponsorship.findFirst({
+      where: { sponsorFboId: fbo.id, sponsorPhone: { not: null } },
+      orderBy: { createdAt: "desc" },
+      select: { sponsorPhone: true },
+    });
+    const sponsorPhoneSuggestion =
+      lastSponsorship?.sponsorPhone || (await sponsorship.findSponsorPhone({ sponsorFboId: fbo.id }));
     const rows = await prisma.sponsorship.findMany({
       where: { sponsorFboId: fbo.id, countryId: req.countryId },
       orderBy: { createdAt: "desc" },
@@ -57,7 +65,7 @@ async function listMySponsorships(req, res) {
         purchaseWindowHours: settings.purchaseWindowHours,
         consentVersion: sponsorship.CONSENT_VERSION,
       },
-      sponsor: { numeroFbo: fbo.numeroFbo, nomComplet: fbo.nomComplet, grade: fbo.grade },
+      sponsor: { numeroFbo: fbo.numeroFbo, nomComplet: fbo.nomComplet, grade: fbo.grade, phoneSuggestion: sponsorPhoneSuggestion },
       data: rows.map(serializeForSponsor),
     });
   } catch (error) {
