@@ -765,6 +765,32 @@ async function getDailySalesReport(req, res) {
   }
 }
 
+async function getPackagingSummaryReport(req, res) {
+  try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    const countryId = pickCountryId(req);
+    const where = scopeWhere(req, { paymentStatus: "PAID" });
+    const result = await prisma.preorder.aggregate({
+      where,
+      _count: { _all: true },
+      _sum: { emballageFcfa: true },
+    });
+    return res.json({
+      ok: true,
+      countryId,
+      asOf: new Date().toISOString(),
+      paidOrdersCount: result?._count?._all || 0,
+      totalEmballageFcfa: toNumber(result?._sum?.emballageFcfa),
+    });
+  } catch (error) {
+    console.error("getPackagingSummaryReport error:", error);
+    return res.status(500).json({
+      message: error.message || "Erreur serveur (bilan emballages)",
+    });
+  }
+}
+
 module.exports = {
   getDailySalesReport,
+  getPackagingSummaryReport,
 };

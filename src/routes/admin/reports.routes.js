@@ -11,4 +11,10 @@ router.get(
   reportsController.getDailySalesReport,
 );
 
+router.get(
+  "/packaging-summary",
+  requirePermission(Permission.EXPORT_READ),
+  reportsController.getPackagingSummaryReport,
+);
+
 module.exports = router;
