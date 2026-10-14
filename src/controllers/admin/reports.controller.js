@@ -1,5 +1,6 @@
 const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
+const { csvCell } = require("../../helpers/order-query");
 
 // Plafond du détail par commande (tableaux, export, répartitions) par
 // section. Les totaux (count/amountFcfa) ne dépendent jamais de ce plafond,
@@ -810,6 +811,10 @@ async function getPackagingSummaryReport(req, res) {
       byMonthMap.set(monthKey, monthEntry);
     }
 
+    // Période optionnelle (jour / mois / année) : totaux + détail de la période.
+    const period = resolvePackagingPeriod(req.query);
+    const periodReport = period ? await buildPackagingPeriodReport(req, period) : null;
+
     return res.json({
       ok: true,
       countryId,
@@ -819,11 +824,153 @@ async function getPackagingSummaryReport(req, res) {
       totalEmballageFcfa: toNumber(totalsResult?._sum?.emballageFcfa),
       zeroFeeOrdersCount: zeroFeeResult || 0,
       byMonth: [...byMonthMap.values()].sort((a, b) => a.month.localeCompare(b.month)),
+      period: periodReport,
     });
   } catch (error) {
-    console.error("getPackagingSummaryReport error:", error);
-    return res.status(500).json({
+    if (!error.statusCode) console.error("getPackagingSummaryReport error:", error);
+    return res.status(error.statusCode || 500).json({
       message: error.message || "Erreur serveur (bilan emballages)",
+    });
+  }
+}
+
+// ?period=day&date=AAAA-MM-JJ | period=month&date=AAAA-MM | period=year&date=AAAA.
+// Journées en UTC (= heure d'Abidjan). Sans `period`, pas de filtre (null).
+function resolvePackagingPeriod(query = {}) {
+  const type = String(query.period || "").trim().toLowerCase();
+  if (!type) return null;
+  const value = String(query.date || "").trim();
+  const invalid = (message) => {
+    const err = new Error(message);
+    err.statusCode = 400;
+    throw err;
+  };
+
+  if (type === "day") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) invalid("Date attendue au format AAAA-MM-JJ.");
+    const start = new Date(`${value}T00:00:00.000Z`);
+    if (Number.isNaN(start.getTime())) invalid("Date invalide.");
+    return { type, key: value, start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+  }
+  if (type === "month") {
+    if (!/^\d{4}-\d{2}$/.test(value)) invalid("Mois attendu au format AAAA-MM.");
+    const start = new Date(`${value}-01T00:00:00.000Z`);
+    if (Number.isNaN(start.getTime())) invalid("Mois invalide.");
+    const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+    return { type, key: value, start, end };
+  }
+  if (type === "year") {
+    if (!/^\d{4}$/.test(value)) invalid("Année attendue au format AAAA.");
+    const year = Number(value);
+    return { type, key: value, start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year + 1, 0, 1)) };
+  }
+  return invalid("Période attendue : day, month ou year.");
+}
+
+// Commandes payées dont la date de paiement effective (validation manuelle,
+// sinon paiement) tombe dans la période — même règle que effectivePaidAt().
+async function loadPackagingPeriodRows(req, period) {
+  const range = { gte: period.start, lt: period.end };
+  return prisma.preorder.findMany({
+    where: scopeWhere(req, {
+      paymentStatus: "PAID",
+      OR: [
+        { manualPaymentValidatedAt: range },
+        { manualPaymentValidatedAt: null, paidAt: range },
+      ],
+    }),
+    select: {
+      preorderNumber: true,
+      fboNomComplet: true,
+      fboNumero: true,
+      preorderPaymentMode: true,
+      emballageFcfa: true,
+      totalFcfa: true,
+      paidAt: true,
+      manualPaymentValidatedAt: true,
+    },
+  });
+}
+
+async function buildPackagingPeriodReport(req, period) {
+  const rows = await loadPackagingPeriodRows(req, period);
+  const withPaidAt = rows
+    .map((row) => ({ ...row, effectivePaidAt: effectivePaidAt(row) }))
+    .sort((a, b) => new Date(a.effectivePaidAt) - new Date(b.effectivePaidAt));
+
+  // Jour -> détail par commande ; mois -> par jour ; année -> par mois.
+  const bucketKey = (row) => {
+    const iso = new Date(row.effectivePaidAt).toISOString();
+    return period.type === "year" ? iso.slice(0, 7) : iso.slice(0, 10);
+  };
+
+  const buckets = new Map();
+  if (period.type !== "day") {
+    for (const row of withPaidAt) {
+      const key = bucketKey(row);
+      const entry = buckets.get(key) || { key, paidOrdersCount: 0, totalEmballageFcfa: 0, zeroFeeOrdersCount: 0 };
+      entry.paidOrdersCount += 1;
+      entry.totalEmballageFcfa += toNumber(row.emballageFcfa);
+      if (!toNumber(row.emballageFcfa)) entry.zeroFeeOrdersCount += 1;
+      buckets.set(key, entry);
+    }
+  }
+
+  return {
+    type: period.type,
+    key: period.key,
+    from: period.start.toISOString(),
+    to: period.end.toISOString(),
+    paidOrdersCount: withPaidAt.length,
+    totalEmballageFcfa: withPaidAt.reduce((sum, row) => sum + toNumber(row.emballageFcfa), 0),
+    zeroFeeOrdersCount: withPaidAt.filter((row) => !toNumber(row.emballageFcfa)).length,
+    breakdown: period.type === "day"
+      ? []
+      : [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key)),
+    orders: period.type === "day"
+      ? withPaidAt.map((row) => ({
+          preorderNumber: row.preorderNumber,
+          fboNomComplet: row.fboNomComplet,
+          fboNumero: row.fboNumero,
+          paymentMode: row.preorderPaymentMode,
+          paidAt: row.effectivePaidAt,
+          totalFcfa: toNumber(row.totalFcfa),
+          emballageFcfa: toNumber(row.emballageFcfa),
+        }))
+      : [],
+  };
+}
+
+// Export CSV (Excel) d'une période : une ligne par commande payée, avec la
+// date de paiement, pour pouvoir refaire n'importe quel regroupement.
+async function exportPackagingSummaryReport(req, res) {
+  try {
+    const period = resolvePackagingPeriod(req.query);
+    if (!period) return res.status(400).json({ message: "Précisez une période (jour, mois ou année)." });
+    const rows = (await loadPackagingPeriodRows(req, period))
+      .map((row) => ({ ...row, effectivePaidAt: effectivePaidAt(row) }))
+      .sort((a, b) => new Date(a.effectivePaidAt) - new Date(b.effectivePaidAt));
+
+    const header = ["Date de paiement", "Précommande", "Client", "Numéro FBO", "Mode de paiement", "Montant commande (FCFA)", "Emballage (FCFA)"];
+    const lines = rows.map((row) => [
+      new Date(row.effectivePaidAt).toISOString().replace("T", " ").slice(0, 16),
+      row.preorderNumber,
+      row.fboNomComplet,
+      row.fboNumero,
+      paymentModeLabel(row.preorderPaymentMode),
+      toNumber(row.totalFcfa),
+      toNumber(row.emballageFcfa),
+    ]);
+    const totalEmballage = rows.reduce((sum, row) => sum + toNumber(row.emballageFcfa), 0);
+    lines.push(["TOTAL", `${rows.length} commande(s)`, "", "", "", "", totalEmballage]);
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="bilan-emballages-${period.key}.csv"`);
+    return res.send("﻿" + [header, ...lines].map((line) => line.map(csvCell).join(";")).join("\r\n"));
+  } catch (error) {
+    if (!error.statusCode) console.error("exportPackagingSummaryReport error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Impossible de générer l'export du bilan emballages.",
     });
   }
 }
@@ -831,4 +978,5 @@ async function getPackagingSummaryReport(req, res) {
 module.exports = {
   getDailySalesReport,
   getPackagingSummaryReport,
+  exportPackagingSummaryReport,
 };
