@@ -770,17 +770,55 @@ async function getPackagingSummaryReport(req, res) {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     const countryId = pickCountryId(req);
     const where = scopeWhere(req, { paymentStatus: "PAID" });
-    const result = await prisma.preorder.aggregate({
-      where,
-      _count: { _all: true },
-      _sum: { emballageFcfa: true },
-    });
+
+    // Toutes les routes admin sont scopées à un seul pays à la fois (header
+    // X-Country, voir middlewares/countryContext.js) : pas de répartition
+    // "par pays" possible ici, seulement par mois, pour le pays actif.
+    // emballageFcfa est un montant fixe par précommande, dérivé du réglage
+    // CountrySettings.packagingFeeFcfa du pays AU MOMENT de la facturation
+    // (0 possible : CIV ne facture actuellement aucun frais d'emballage,
+    // d'où un total qui peut sembler bas/nul sans être une anomalie). Le
+    // réglage actuel est renvoyé pour que ce soit immédiatement vérifiable.
+    const [totalsResult, zeroFeeResult, rows, countrySettings] = await Promise.all([
+      prisma.preorder.aggregate({
+        where,
+        _count: { _all: true },
+        _sum: { emballageFcfa: true },
+      }),
+      prisma.preorder.count({ where: { ...where, emballageFcfa: 0 } }),
+      prisma.preorder.findMany({
+        where,
+        select: { emballageFcfa: true, paidAt: true, manualPaymentValidatedAt: true },
+      }),
+      prisma.countrySettings.findFirst({
+        where: { countryId },
+        select: { packagingFeeFcfa: true },
+      }),
+    ]);
+
+    const byMonthMap = new Map();
+    for (const row of rows) {
+      const paidAt = effectivePaidAt(row);
+      const monthKey = paidAt ? new Date(paidAt).toISOString().slice(0, 7) : "INCONNU";
+      const monthEntry = byMonthMap.get(monthKey) || {
+        month: monthKey,
+        paidOrdersCount: 0,
+        totalEmballageFcfa: 0,
+      };
+      monthEntry.paidOrdersCount += 1;
+      monthEntry.totalEmballageFcfa += toNumber(row.emballageFcfa);
+      byMonthMap.set(monthKey, monthEntry);
+    }
+
     return res.json({
       ok: true,
       countryId,
       asOf: new Date().toISOString(),
-      paidOrdersCount: result?._count?._all || 0,
-      totalEmballageFcfa: toNumber(result?._sum?.emballageFcfa),
+      currentPackagingFeeFcfa: countrySettings?.packagingFeeFcfa ?? null,
+      paidOrdersCount: totalsResult?._count?._all || 0,
+      totalEmballageFcfa: toNumber(totalsResult?._sum?.emballageFcfa),
+      zeroFeeOrdersCount: zeroFeeResult || 0,
+      byMonth: [...byMonthMap.values()].sort((a, b) => a.month.localeCompare(b.month)),
     });
   } catch (error) {
     console.error("getPackagingSummaryReport error:", error);
