@@ -104,6 +104,10 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
   const mobile = mobileRaw ? normalizePhoneForCountry(mobileRaw, countryCode) : null;
   if (mobileRaw && !mobile) errors.push("Le numéro de téléphone mobile est invalide.");
 
+  const sponsorPhoneRaw = required("sponsorPhone", "Votre téléphone (parrain)");
+  const sponsorPhone = sponsorPhoneRaw ? normalizePhoneForCountry(sponsorPhoneRaw, countryCode) : null;
+  if (sponsorPhoneRaw && !sponsorPhone) errors.push("Votre numéro de téléphone (parrain) est invalide.");
+
   const email = text(raw.email)?.toLowerCase() || null;
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("L'adresse email est invalide.");
 
@@ -148,6 +152,7 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     vatSubject: bool(raw.vatSubject),
     asdiSubject: bool(raw.asdiSubject),
     sponsorCity: text(raw.sponsorCity),
+    sponsorPhone: sponsorPhone || null,
   };
 }
 
@@ -287,6 +292,7 @@ async function notifySms({ to, message, countryCode }) {
 }
 
 async function findSponsorPhone(sponsorship) {
+  if (sponsorship.sponsorPhone) return sponsorship.sponsorPhone;
   const lastOrder = await prisma.preorder.findFirst({
     where: { fboId: sponsorship.sponsorFboId, factureWhatsappTo: { not: null } },
     orderBy: { createdAt: "desc" },

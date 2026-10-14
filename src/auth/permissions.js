@@ -100,6 +100,7 @@ const ROLE_PERMISSIONS = {
     Permission.INVOICE_CREATE,
     Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
     Permission.EXPORT_READ,
+    Permission.SPONSORSHIP_REVIEW,
   ],
 
   [AdminRole.MARKETING_MANAGER]: [
@@ -148,6 +149,7 @@ const ROLE_PERMISSIONS = {
     Permission.PREORDER_READ,
     Permission.INVOICE_CREATE,
     Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
+    Permission.SPONSORSHIP_REVIEW,
   ],
 
   [AdminRole.ORDER_PREPARER]: [

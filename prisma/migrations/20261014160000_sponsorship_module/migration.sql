@@ -24,6 +24,7 @@ CREATE TABLE "Sponsorship" (
     "sponsorNom" TEXT NOT NULL,
     "sponsorGrade" "Grade" NOT NULL,
     "sponsorCity" TEXT,
+    "sponsorPhone" TEXT,
     "lastName" TEXT NOT NULL,
     "firstNames" TEXT NOT NULL,
     "birthDate" DATE NOT NULL,
