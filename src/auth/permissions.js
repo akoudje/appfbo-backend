@@ -42,6 +42,9 @@ const Permission = {
   EXPORT_READ: "EXPORT_READ",
 
   FBO_DOCUMENT_ISSUE: "FBO_DOCUMENT_ISSUE",
+
+  // Vérification et approbation des parrainages (pièces d'identité incluses).
+  SPONSORSHIP_REVIEW: "SPONSORSHIP_REVIEW",
 };
 
 const ROLE_PERMISSIONS = {
@@ -64,6 +67,7 @@ const ROLE_PERMISSIONS = {
     Permission.PREPARATION_UPDATE,
     Permission.EXPORT_READ,
     Permission.FBO_DOCUMENT_ISSUE,
+    Permission.SPONSORSHIP_REVIEW,
   ],
 
   [AdminRole.SALES_DIRECTOR]: [
@@ -78,6 +82,7 @@ const ROLE_PERMISSIONS = {
     Permission.INVOICE_CREATE,
     Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
     Permission.EXPORT_READ,
+    Permission.SPONSORSHIP_REVIEW,
   ],
 
   [AdminRole.FINANCE_MANAGER]: [
@@ -95,6 +100,7 @@ const ROLE_PERMISSIONS = {
     Permission.INVOICE_CREATE,
     Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
     Permission.EXPORT_READ,
+    Permission.SPONSORSHIP_REVIEW,
   ],
 
   [AdminRole.MARKETING_MANAGER]: [
@@ -143,6 +149,7 @@ const ROLE_PERMISSIONS = {
     Permission.PREORDER_READ,
     Permission.INVOICE_CREATE,
     Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
+    Permission.SPONSORSHIP_REVIEW,
   ],
 
   [AdminRole.ORDER_PREPARER]: [

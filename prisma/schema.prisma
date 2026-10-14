@@ -458,6 +458,14 @@ model Fbo {
   customerNotificationReads CustomerNotificationRead[]
   documents FboDocument[]
 
+  // Parrainage : lien officiel parrain -> filleul, posé quand le parrainage est validé.
+  sponsorFboId    String?
+  sponsor         Fbo?         @relation("FboSponsor", fields: [sponsorFboId], references: [id], onDelete: SetNull)
+  sponsoredFbos   Fbo[]        @relation("FboSponsor")
+  sponsorLinkedAt DateTime?
+  sponsorshipsAsSponsor Sponsorship[] @relation("SponsorshipSponsor")
+  sponsorshipsAsRecruit Sponsorship[] @relation("SponsorshipRecruit")
+
   @@index([pointDeVente])
   @@index([grade])
 }
@@ -500,6 +508,7 @@ model Country {
   ticketCheckInSessions TicketCheckInSession[]
   ticketCheckInLogs TicketCheckInLog[]
   fboDocuments FboDocument[]
+  sponsorships Sponsorship[]
   fboDocumentSignatories FboDocumentSignatory[]
   externalPaymentLinks ExternalPaymentLink[]
   memorials Memorial[]
@@ -538,6 +547,12 @@ model CountrySettings {
   minCartFcfa Int @default(0)
   maxQtyPerProduct Int @default(10)
   packagingFeeFcfa Int @default(100)
+
+  // Parrainage (désactivé par défaut ; activé pour la CIV par migration).
+  sponsorshipEnabled            Boolean @default(false)
+  sponsorshipMinPurchaseFcfa    Int     @default(53000)
+  sponsorshipPurchaseWindowHours Int    @default(48)
+  fboNumberPrefix               String?
   preorderSubmissionEnabled Boolean @default(true)
   preorderSubmissionDisabledMessage String? @db.Text
   publicAnnouncementEnabled Boolean @default(false)
@@ -2338,4 +2353,154 @@ model ProductAuditLog {
   createdAt DateTime @default(now())
   @@index([productId, countryId, createdAt])
   @@index([countryId, createdAt])
+}
+
+
+// -----------------------------------------------------------------------------
+// PARRAINAGE : un FBO (Animateur adjoint et plus) inscrit un filleul majeur.
+// Cycle : DRAFT -> SUBMITTED (-> CHANGES_REQUESTED -> SUBMITTED) ->
+// APPROVED_PENDING_PURCHASE (n° FBO saisi depuis AS400, filleul créé en Client
+// privilégié) -> VALIDATED (1re commande payée >= minimum du pays dans le délai :
+// lien officiel parrain-filleul) ; ou REJECTED / EXPIRED.
+// -----------------------------------------------------------------------------
+
+enum SponsorshipStatus {
+  DRAFT
+  SUBMITTED
+  CHANGES_REQUESTED
+  APPROVED_PENDING_PURCHASE
+  VALIDATED
+  REJECTED
+  EXPIRED
+}
+
+enum SponsorshipDocumentType {
+  ID_FRONT
+  ID_BACK
+  PASSPORT
+  OTHER
+}
+
+model Sponsorship {
+  id String @id @default(cuid())
+
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  status SponsorshipStatus @default(DRAFT)
+
+  // Parrain (instantané au moment du parrainage)
+  sponsorFboId    String
+  sponsorFbo      Fbo    @relation("SponsorshipSponsor", fields: [sponsorFboId], references: [id], onDelete: Restrict)
+  sponsorNumero   String
+  sponsorNom      String
+  sponsorGrade    Grade
+  sponsorCity     String?
+  sponsorPhone    String?
+
+  // Filleul
+  lastName          String
+  firstNames        String
+  birthDate         DateTime @db.Date
+  birthPlace        String
+  idDocumentNumber  String
+  passportNumber    String?
+  mobile            String
+  email             String?
+  addressArea       String?
+  city              String
+  postalBox         String?
+  zoneCode          String?
+  homeCountry       String  @default("CI")
+  maritalStatus     String?
+  childrenCount     Int?
+  bankRib           String?
+
+  // Conjoint (optionnel)
+  spouseLastName   String?
+  spouseFirstNames String?
+  spouseBirthDate  DateTime? @db.Date
+  spouseBirthPlace String?
+
+  // Activité commerciale (optionnel)
+  profession          String?
+  businessSector      String?
+  tradeRegisterNumber String?
+  tradeRegisterDate   DateTime? @db.Date
+  tradeRegisterPlace  String?
+  vatSubject          Boolean?
+  asdiSubject         Boolean?
+
+  // Consentement : le parrain atteste disposer de l'accord et de la procuration du filleul.
+  consentText      String?   @db.Text
+  consentVersion   String?
+  consentAcceptedAt DateTime?
+
+  // Vérification Forever
+  submittedAt         DateTime?
+  reviewedAt          DateTime?
+  reviewedById        String?
+  reviewNote          String?   @db.Text
+  rejectionReason     String?   @db.Text
+
+  // Approbation : n° FBO saisi depuis AS400, filleul créé en Client privilégié
+  recruitFboNumero    String?
+  recruitFboId        String?
+  recruitFbo          Fbo?      @relation("SponsorshipRecruit", fields: [recruitFboId], references: [id], onDelete: SetNull)
+  approvedAt          DateTime?
+  approvedById        String?
+
+  // Achat de validation (règles figées à l'approbation)
+  minPurchaseFcfa      Int?
+  purchaseDeadlineAt   DateTime?
+  qualifyingPreorderId String?
+  validatedAt          DateTime?
+  expiredAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents SponsorshipDocument[]
+  logs      SponsorshipLog[]
+
+  @@index([countryId, status])
+  @@index([sponsorFboId, createdAt])
+  @@index([recruitFboId])
+  @@index([idDocumentNumber])
+}
+
+model SponsorshipDocument {
+  id String @id @default(cuid())
+
+  sponsorshipId String
+  sponsorship   Sponsorship @relation(fields: [sponsorshipId], references: [id], onDelete: Cascade)
+
+  type SponsorshipDocumentType
+  // Stockage PRIVÉ (jamais d'URL publique) : identifiant Cloudinary + type de ressource.
+  storagePublicId     String
+  storageResourceType String
+  mimeType            String
+  sizeBytes           Int
+  originalFileName    String?
+
+  createdAt DateTime @default(now())
+
+  @@index([sponsorshipId])
+}
+
+model SponsorshipLog {
+  id String @id @default(cuid())
+
+  sponsorshipId String
+  sponsorship   Sponsorship @relation(fields: [sponsorshipId], references: [id], onDelete: Cascade)
+
+  action       String
+  note         String? @db.Text
+  meta         Json?
+  actorAdminId String?
+  actorFboId   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([sponsorshipId, createdAt])
 }

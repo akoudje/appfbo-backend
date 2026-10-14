@@ -48,6 +48,7 @@ const stockRoutes = require("./admin/stock.routes");
 const reportsRoutes = require("./admin/reports.routes");
 const ticketEventsRoutes = require("./admin/ticketEvents.routes");
 const fboDocumentsRoutes = require("./admin/fboDocuments.routes");
+const sponsorshipsRoutes = require("./admin/sponsorships.routes");
 const externalPaymentLinksRoutes = require("./admin/externalPaymentLinks.routes");
 const as400GatewayRoutes = require("./admin/as400Gateway.routes");
 const memorialsRoutes = require("./admin/memorials.routes");
@@ -150,6 +151,7 @@ router.use("/cash-register-status", cashRegisterStatusRoutes);
 router.use("/stock", stockRoutes);
 router.use("/ticket-events", ticketEventsRoutes);
 router.use("/fbo-documents", fboDocumentsRoutes);
+router.use("/sponsorships", sponsorshipsRoutes);
 router.use("/memorials", memorialsRoutes);
 
 router.get(

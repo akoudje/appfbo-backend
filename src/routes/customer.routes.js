@@ -7,6 +7,8 @@ const customerOrdersController = require("../controllers/customerOrders.controll
 const customerBankProofController = require("../controllers/customerBankProof.controller");
 const customerNotificationsController = require("../controllers/customerNotifications.controller");
 const { createCustomerDraft } = require("../controllers/preorders.controller");
+const customerSponsorshipsController = require("../controllers/customerSponsorships.controller");
+const { uploadSponsorshipDocumentsMiddleware } = require("../services/sponsorship.service");
 
 const router = express.Router();
 
@@ -64,6 +66,35 @@ router.post(
   requireCustomerAuth,
   customerBankProofController.uploadBankProofMiddleware,
   customerBankProofController.submitMyBankProof,
+);
+
+// Parrainage : un FBO (Animateur adjoint et plus) inscrit un filleul.
+const sponsorshipSubmitLimiter = createRateLimiter({
+  keyPrefix: "customer_sponsorship_submit",
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  keyFn: (req) => ({ ip: req.ip, fboId: req.customer?.fboId, country: req.countryId }),
+});
+router.get("/me/sponsorships", requireCustomerAuth, customerSponsorshipsController.listMySponsorships);
+router.get("/me/sponsorships/:id", requireCustomerAuth, customerSponsorshipsController.getMySponsorship);
+router.post(
+  "/me/sponsorships",
+  requireCustomerAuth,
+  sponsorshipSubmitLimiter,
+  uploadSponsorshipDocumentsMiddleware,
+  customerSponsorshipsController.submitSponsorship,
+);
+router.put(
+  "/me/sponsorships/:id",
+  requireCustomerAuth,
+  sponsorshipSubmitLimiter,
+  uploadSponsorshipDocumentsMiddleware,
+  customerSponsorshipsController.resubmitSponsorship,
+);
+router.get(
+  "/me/sponsorships/:id/documents/:documentId/file",
+  requireCustomerAuth,
+  customerSponsorshipsController.downloadMySponsorshipDocument,
 );
 
 module.exports = router;
