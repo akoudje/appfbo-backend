@@ -86,6 +86,7 @@ async function createCashOrder(req, res) {
       buyerFboName,
       holderFullName,
       note,
+      isTest,
     } = req.body || {};
 
     const normalizedEventId = String(eventId || "").trim();
@@ -178,6 +179,7 @@ async function createCashOrder(req, res) {
           paymentStatus: "SUCCEEDED",
           paidAt: new Date(),
           note: note ? String(note).trim() : "Vente ticket espèces au guichet.",
+          isTest: Boolean(isTest),
         },
         include: {
           ticketType: true,
@@ -334,6 +336,33 @@ async function syncOrderWavePayment(req, res) {
   }
 }
 
+async function setOrderTestFlag(req, res) {
+  try {
+    const order = await prisma.ticketOrder.findFirst({
+      where: { id: req.params.orderId, countryId: req.countryId },
+    });
+    if (!order)
+      return res.status(404).json({ message: "Commande billet introuvable" });
+
+    const isTest = Boolean(req.body?.isTest);
+    const updated = await prisma.ticketOrder.update({
+      where: { id: order.id },
+      data: { isTest },
+      include: {
+        event: { select: { id: true, title: true, startsAt: true } },
+        ticketType: true,
+        tickets: { include: { ticketType: true } },
+      },
+    });
+    return res.json(updated);
+  } catch (error) {
+    console.error("ticketEvents.setOrderTestFlag error:", error);
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (setOrderTestFlag)" });
+  }
+}
+
 async function cancelOrder(req, res) {
   try {
     const order = await prisma.ticketOrder.findFirst({
@@ -483,4 +512,5 @@ module.exports = {
   cancelOrder,
   resendOrderTicketsEmail,
   expireOrders,
+  setOrderTestFlag,
 };
