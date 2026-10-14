@@ -65,6 +65,12 @@ router.post(
 );
 
 router.post(
+  "/orders/:orderId/test-flag",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.setOrderTestFlag,
+);
+
+router.post(
   "/assets",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.uploadPosterMiddleware,

@@ -2145,6 +2145,11 @@ model TicketOrder {
   expiresAt DateTime?
   note String? @db.Text
 
+  // Commande créée uniquement pour tester le flux (vente guichet, QR, scan
+  // check-in) : exclue des agrégats du bilan événement mais fonctionnellement
+  // identique à une vraie commande (billet scannable, compte dans la capacité).
+  isTest Boolean @default(false)
+
   tickets Ticket[]
   checkInLogs TicketCheckInLog[]
 
@@ -2160,6 +2165,7 @@ model TicketOrder {
   @@index([countryId, buyerPhone])
   @@index([countryId, buyerEmail, createdAt])
   @@index([buyerFboNumber])
+  @@index([eventId, isTest])
 }
 
 model Ticket {

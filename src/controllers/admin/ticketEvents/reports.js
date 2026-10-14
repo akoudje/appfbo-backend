@@ -62,22 +62,29 @@ async function buildEventSummaryData(req, eventId) {
 
   const ticketCounts = await prisma.ticket.groupBy({
     by: ["status"],
-    where: { eventId, countryId: req.countryId },
+    // Les billets de test restent des billets ACTIVE/USED normaux (scannables
+    // au check-in), mais on les sort des compteurs du bilan via leur commande.
+    where: { eventId, countryId: req.countryId, order: { isTest: false } },
     _count: { _all: true },
   });
   const counts = Object.fromEntries(ticketCounts.map((row) => [row.status, row._count._all]));
 
-  const orders = await prisma.ticketOrder.findMany({
-    where: { eventId, countryId: req.countryId },
-    select: {
-      status: true,
-      paymentMethod: true,
-      paymentProvider: true,
-      paymentStatus: true,
-      quantity: true,
-      totalFcfa: true,
-    },
-  });
+  const [orders, testOrdersCount] = await Promise.all([
+    prisma.ticketOrder.findMany({
+      where: { eventId, countryId: req.countryId, isTest: false },
+      select: {
+        status: true,
+        paymentMethod: true,
+        paymentProvider: true,
+        paymentStatus: true,
+        quantity: true,
+        totalFcfa: true,
+      },
+    }),
+    prisma.ticketOrder.count({
+      where: { eventId, countryId: req.countryId, isTest: true },
+    }),
+  ]);
 
   const paidOrders = orders.filter((order) => order.status === "PAID");
   const byPaymentMethod = new Map();
@@ -113,6 +120,7 @@ async function buildEventSummaryData(req, eventId) {
       allOrdersCount: orders.length,
       cancelledOrdersCount: orders.filter((o) => o.status === "CANCELLED").length,
       pendingOrdersCount: orders.filter((o) => o.status === "PENDING_PAYMENT" || o.status === "DRAFT").length,
+      testOrdersExcludedCount: testOrdersCount,
     },
     byPaymentMethod: [...byPaymentMethod.values()].sort((a, b) => b.totalFcfa - a.totalFcfa),
   };
@@ -157,6 +165,7 @@ async function exportEventOrders(req, res) {
       { label: "Moyen de paiement", value: (o) => classifyPaymentMethodCategory(o) },
       { label: "Statut", value: (o) => o.status },
       { label: "Date d'achat", value: (o) => o.createdAt.toISOString() },
+      { label: "Test", value: (o) => (o.isTest ? "Oui" : "Non") },
     ]);
 
     const safeTitle = normalizeSlug(event.title) || "evenement";
