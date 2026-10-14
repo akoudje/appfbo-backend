@@ -165,6 +165,27 @@ function sanitizeFboDirectoryPayload(payload) {
   };
 }
 
+// Profil d'un filleul dont le parrainage est approuvé ou validé dans ce pays,
+// au même format que normalizeFboDirectoryProfile ; null sinon.
+async function findApprovedRecruitProfile(numeroFbo, countryId) {
+  if (!countryId) return null;
+  // Le parrainage stocke le format 225-000-123-456 ; la commande peut arriver sans tirets.
+  const digits = String(numeroFbo || "").replace(/\D/g, "");
+  if (digits.length !== 12) return null;
+  const canonical = `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6, 9)}-${digits.slice(9, 12)}`;
+  const sponsorship = await prisma.sponsorship.findFirst({
+    where: {
+      countryId,
+      recruitFboNumero: { in: [canonical, digits, String(numeroFbo).trim()] },
+      status: { in: ["APPROVED_PENDING_PURCHASE", "VALIDATED"] },
+    },
+    select: { recruitFbo: { select: { nomComplet: true, grade: true } } },
+  });
+  const fbo = sponsorship?.recruitFbo;
+  if (!fbo?.nomComplet || !fbo?.grade) return null;
+  return { exists: true, fullName: fbo.nomComplet, grade: fbo.grade, source: "SPONSORSHIP" };
+}
+
 function normalizeFboDirectoryProfile(payload) {
   if (!payload || payload.exists === false) {
     return { exists: false };
@@ -331,6 +352,16 @@ async function createDraft(req, res) {
         message: directoryLookupWarning,
         statusCode: error?.statusCode || null,
       });
+    }
+    // Filleul approuvé par Forever (parrainage) mais pas encore dans l'annuaire
+    // AS400 : reconnu comme vérifié avec le profil créé à l'approbation, pour
+    // qu'il (ou son parrain) puisse passer l'achat de validation.
+    if (!directoryProfile.exists) {
+      const recruitProfile = await findApprovedRecruitProfile(
+        normalizedNumeroFbo,
+        req.country?.id || req.scope?.countryId || req.countryId,
+      );
+      if (recruitProfile) directoryProfile = recruitProfile;
     }
     const clientName = String(nomComplet || "").trim();
     const clientGrade = normalizeGrade(grade);
@@ -673,7 +704,13 @@ async function checkFboDirectory(req, res) {
 
     const payload = await fetchFboDirectoryProfile(numero);
     res.setHeader("Cache-Control", "no-store");
-    return res.json(sanitizeFboDirectoryPayload(payload));
+    const sanitized = sanitizeFboDirectoryPayload(payload);
+    if (!sanitized.exists) {
+      // Filleul approuvé (parrainage) pas encore dans l'annuaire : connu de l'app.
+      const recruit = await findApprovedRecruitProfile(numero, req.country?.id || req.countryId);
+      if (recruit) return res.json({ exists: true, grade: recruit.grade });
+    }
+    return res.json(sanitized);
   } catch (e) {
     console.error("checkFboDirectory error:", {
       message: e?.message || String(e),
