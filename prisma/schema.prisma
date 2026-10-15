@@ -620,6 +620,8 @@ model CountryMarketingContent {
   slidesJson Json?
   sidePanelsJson Json?
   publishingJson Json?
+  // Accueil > « Sélection produits » : { enabled, productIds } (ordre affiché).
+  homeFeaturedJson Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
