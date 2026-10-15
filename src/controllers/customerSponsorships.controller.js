@@ -3,6 +3,7 @@
 
 const prisma = require("../prisma");
 const sponsorship = require("../services/sponsorship.service");
+const purchase = require("../services/sponsorship-purchase.service");
 
 // Champs renvoyés au parrain : jamais l'emplacement de stockage des pièces.
 const DOCUMENT_SELECT = { id: true, type: true, mimeType: true, sizeBytes: true, originalFileName: true, createdAt: true };
@@ -53,6 +54,7 @@ async function listMySponsorships(req, res) {
         id: true, status: true, lastName: true, firstNames: true, mobile: true, createdAt: true, submittedAt: true,
         rejectionReason: true, reviewNote: true, recruitFboNumero: true, approvedAt: true, purchaseDeadlineAt: true,
         minPurchaseFcfa: true, validatedAt: true, expiredAt: true,
+        purchaseItems: true, purchaseIndicativeTotalFcfa: true, purchasePreorderId: true,
       },
     });
     return res.json({
@@ -107,6 +109,11 @@ async function submitSponsorship(req, res) {
       throw sponsorship.httpError(400, "Vous devez attester disposer de l'accord et de la procuration du filleul.", "SPONSORSHIP_CONSENT_REQUIRED");
     }
     const data = sponsorship.normalizeRecruitPayload(body, { countryCode: settings.countryCode });
+    const cart = await purchase.normalizePurchaseCart(body.purchaseItems, {
+      countryId: req.countryId,
+      countryCode: settings.countryCode,
+      minPurchaseFcfa: settings.minPurchaseFcfa,
+    });
 
     const hasIdentity = files.some(({ type }) => ["ID_FRONT", "PASSPORT"].includes(type));
     if (!hasIdentity) {
@@ -141,6 +148,8 @@ async function submitSponsorship(req, res) {
         consentVersion: sponsorship.CONSENT_VERSION,
         consentAcceptedAt: now,
         submittedAt: now,
+        purchaseItems: cart ? cart.items : undefined,
+        purchaseIndicativeTotalFcfa: cart ? cart.totalFcfa : null,
       },
     });
 
@@ -179,6 +188,11 @@ async function resubmitSponsorship(req, res) {
       throw sponsorship.httpError(409, "Ce parrainage ne peut plus être modifié.", "SPONSORSHIP_LOCKED");
     }
     const data = sponsorship.normalizeRecruitPayload(req.body || {}, { countryCode: settings.countryCode });
+    const cart = await purchase.normalizePurchaseCart(req.body?.purchaseItems, {
+      countryId: req.countryId,
+      countryCode: settings.countryCode,
+      minPurchaseFcfa: settings.minPurchaseFcfa,
+    });
 
     const documents = [];
     for (const entry of files) {
@@ -187,7 +201,13 @@ async function resubmitSponsorship(req, res) {
     await prisma.$transaction(async (tx) => {
       await tx.sponsorship.update({
         where: { id: existing.id },
-        data: { ...data, status: "SUBMITTED", submittedAt: new Date() },
+        data: {
+          ...data,
+          status: "SUBMITTED",
+          submittedAt: new Date(),
+          purchaseItems: cart ? cart.items : prismaDbNull(),
+          purchaseIndicativeTotalFcfa: cart ? cart.totalFcfa : null,
+        },
       });
       if (documents.length) await tx.sponsorshipDocument.createMany({ data: documents });
       await sponsorship.addSponsorshipLog(tx, {
@@ -223,7 +243,65 @@ async function downloadMySponsorshipDocument(req, res) {
   }
 }
 
+// GET /api/customer/me/sponsorships/catalog : produits proposables pour l'achat de
+// parrainage (prix Client privilégié, en stock).
+async function getSponsorshipCatalog(req, res) {
+  try {
+    const settings = await sponsorship.getSponsorshipSettings(req.countryId);
+    const products = await purchase.getRecruitCatalog({ countryId: req.countryId, countryCode: settings.countryCode });
+    return res.json({ minPurchaseFcfa: settings.minPurchaseFcfa, grade: purchase.RECRUIT_GRADE, products });
+  } catch (error) {
+    return sendError(res, error, "getSponsorshipCatalog error:");
+  }
+}
+
+// POST /api/customer/me/sponsorships/:id/purchase : « Faire l'achat ». Renvoie la
+// commande brouillon préparée à l'approbation (à reprendre au récapitulatif), la
+// commande déjà soumise, ou le profil du filleul pour démarrer une commande.
+async function startSponsorshipPurchase(req, res) {
+  try {
+    const fbo = await loadSponsor(req);
+    const row = await prisma.sponsorship.findFirst({
+      where: { id: req.params.id, sponsorFboId: fbo.id, countryId: req.countryId },
+      include: { recruitFbo: { select: { numeroFbo: true, nomComplet: true, email: true, grade: true } } },
+    });
+    if (!row) return res.status(404).json({ message: "Parrainage introuvable." });
+    if (row.status !== "APPROVED_PENDING_PURCHASE" || !row.recruitFbo) {
+      throw sponsorship.httpError(409, "L'achat de parrainage n'est possible qu'une fois le parrainage approuvé.", "SPONSORSHIP_NOT_APPROVED");
+    }
+    const recruit = {
+      numeroFbo: row.recruitFbo.numeroFbo,
+      nomComplet: row.recruitFbo.nomComplet,
+      grade: row.recruitFbo.grade,
+      email: row.recruitFbo.email || "",
+      phone: row.sponsorPhone || "",
+    };
+    const base = { countryCode: req.country?.code || "CIV", identityVerified: true, fbo: recruit, purchaseDeadlineAt: row.purchaseDeadlineAt };
+    if (row.purchasePreorderId) {
+      const order = await prisma.preorder.findFirst({
+        where: { id: row.purchasePreorderId, countryId: req.countryId },
+        select: { id: true, preorderNumber: true, status: true },
+      });
+      if (order?.status === "DRAFT") {
+        return res.json({ ...base, mode: "DRAFT", preorderId: order.id, preorderNumber: order.preorderNumber });
+      }
+      if (order && order.status !== "CANCELLED") {
+        return res.json({ ...base, mode: "SUBMITTED", preorderId: order.id, preorderNumber: order.preorderNumber });
+      }
+    }
+    return res.json({ ...base, mode: "NEW" });
+  } catch (error) {
+    return sendError(res, error, "startSponsorshipPurchase error:");
+  }
+}
+
+function prismaDbNull() {
+  return require("@prisma/client").Prisma.DbNull;
+}
+
 module.exports = {
+  getSponsorshipCatalog,
+  startSponsorshipPurchase,
   listMySponsorships,
   getMySponsorship,
   submitSponsorship,

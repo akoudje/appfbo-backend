@@ -4,6 +4,7 @@
 const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const sponsorship = require("../../services/sponsorship.service");
+const purchase = require("../../services/sponsorship-purchase.service");
 
 const STATUSES = new Set(Object.keys(sponsorship.STATUS_LABELS));
 const DOCUMENT_SELECT = { id: true, type: true, mimeType: true, sizeBytes: true, originalFileName: true, createdAt: true };
@@ -93,6 +94,13 @@ async function getSponsorship(req, res) {
     });
     if (!row) return res.status(404).json({ message: "Parrainage introuvable." });
 
+    const purchasePreorder = row.purchasePreorderId
+      ? await prisma.preorder.findFirst({
+          where: { id: row.purchasePreorderId },
+          select: { id: true, preorderNumber: true, status: true, totalFcfa: true },
+        })
+      : null;
+
     // Doublons possibles : même pièce ou même mobile sur un autre parrainage.
     const duplicates = await prisma.sponsorship.findMany({
       where: scopeWhere(req, {
@@ -102,7 +110,7 @@ async function getSponsorship(req, res) {
       select: { id: true, status: true, lastName: true, firstNames: true, idDocumentNumber: true, mobile: true, createdAt: true },
       take: 10,
     });
-    return res.json({ ...withComputedFields(row), duplicates });
+    return res.json({ ...withComputedFields(row), duplicates, purchasePreorder });
   } catch (error) {
     return sendError(res, error, "getSponsorship error:");
   }
@@ -230,6 +238,39 @@ async function approveSponsorship(req, res) {
       });
     });
 
+    let purchaseDraft = null;
+    try {
+      const fresh = await prisma.sponsorship.findUnique({ where: { id: row.id }, include: { recruitFbo: true } });
+      purchaseDraft = await purchase.createRecruitPurchaseDraft({
+        sponsorship: fresh,
+        recruitFbo: fresh.recruitFbo,
+        countryId,
+        countryCode: settings.countryCode,
+      });
+      if (purchaseDraft?.preorder) {
+        await prisma.sponsorship.update({ where: { id: row.id }, data: { purchasePreorderId: purchaseDraft.preorder.id } });
+      }
+      if (purchaseDraft) {
+        await sponsorship.addSponsorshipLog(null, {
+          sponsorshipId: row.id,
+          action: "PURCHASE_DRAFT_CREATED",
+          note: purchaseDraft.preorder
+            ? `Commande d'achat préparée : ${purchaseDraft.preorder.preorderNumber} (brouillon, paiement et livraison à choisir par le parrain).`
+            : "Panier d'achat non transformé : plus aucun produit disponible.",
+          meta: { preorderId: purchaseDraft.preorder?.id || null, adjustments: purchaseDraft.adjustments },
+          actorAdminId: req.user?.id || null,
+        });
+      }
+    } catch (error) {
+      console.error("[sponsorship] commande d'achat non créée", { id: row.id, error: error?.message });
+      await sponsorship.addSponsorshipLog(null, {
+        sponsorshipId: row.id,
+        action: "PURCHASE_DRAFT_FAILED",
+        note: "La commande d'achat préparée n'a pas pu être créée : le parrain peut commander normalement.",
+        actorAdminId: req.user?.id || null,
+      }).catch(() => {});
+    }
+
     const amount = new Intl.NumberFormat("fr-FR").format(settings.minPurchaseFcfa);
     await sponsorship.notifySms({
       to: row.mobile,
@@ -241,7 +282,14 @@ async function approveSponsorship(req, res) {
       countryCode: settings.countryCode,
       message: `FOREVER: parrainage de ${row.firstNames} ${row.lastName} approuve, n° FBO ${numero}. Achat d'au moins ${amount} F sous ${settings.purchaseWindowHours} h pour le valider.`,
     });
-    return res.json({ ok: true, status: "APPROVED_PENDING_PURCHASE", recruitFboNumero: numero, purchaseDeadlineAt: deadline });
+    return res.json({
+      ok: true,
+      status: "APPROVED_PENDING_PURCHASE",
+      recruitFboNumero: numero,
+      purchaseDeadlineAt: deadline,
+      purchasePreorderNumber: purchaseDraft?.preorder?.preorderNumber || null,
+      purchaseAdjustments: purchaseDraft?.adjustments || [],
+    });
   } catch (error) {
     return sendError(res, error, "approveSponsorship error:");
   }

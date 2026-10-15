@@ -2454,6 +2454,12 @@ model Sponsorship {
   minPurchaseFcfa      Int?
   purchaseDeadlineAt   DateTime?
   qualifyingPreorderId String?
+
+  // Panier de l'achat de parrainage (optionnel), saisi par le parrain : [{ productId, qty }].
+  // À l'approbation, il devient une commande brouillon du filleul passée par le parrain.
+  purchaseItems              Json?
+  purchaseIndicativeTotalFcfa Int?
+  purchasePreorderId         String?
   validatedAt          DateTime?
   expiredAt            DateTime?
 
