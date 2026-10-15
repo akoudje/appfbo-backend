@@ -10,6 +10,7 @@ const AdminRole = {
   BILLING_MANAGER: "BILLING_MANAGER",
   MARKETING_MANAGER: "MARKETING_MANAGER",
   MARKETING_ASSISTANT: "MARKETING_ASSISTANT",
+  ADMIN_ASSISTANT: "ADMIN_ASSISTANT",
   STOCK_MANAGER: "STOCK_MANAGER",
   COUNTER_MANAGER: "COUNTER_MANAGER",
   CAISSIERE: "CAISSIERE",
@@ -119,6 +120,18 @@ const ROLE_PERMISSIONS = {
     Permission.PRODUCT_READ,
     Permission.DISCOUNT_READ,
     Permission.EXPORT_READ,
+  ],
+
+  // Mêmes attributs que l'assistant marketing, avec en plus l'émission des
+  // documents FBO (attestations/certificats).
+  [AdminRole.ADMIN_ASSISTANT]: [
+    Permission.COUNTRY_READ,
+    Permission.MARKETING_WRITE,
+    Permission.TICKET_CHECKIN,
+    Permission.PRODUCT_READ,
+    Permission.DISCOUNT_READ,
+    Permission.EXPORT_READ,
+    Permission.FBO_DOCUMENT_ISSUE,
   ],
 
   [AdminRole.STOCK_MANAGER]: [
