@@ -77,6 +77,12 @@ const sponsorshipSubmitLimiter = createRateLimiter({
 });
 router.get("/me/sponsorships", requireCustomerAuth, customerSponsorshipsController.listMySponsorships);
 router.get("/me/sponsorships/catalog", requireCustomerAuth, customerSponsorshipsController.getSponsorshipCatalog);
+router.get(
+  "/me/sponsorships/check-email",
+  requireCustomerAuth,
+  createRateLimiter({ keyPrefix: "customer_sponsorship_email", windowMs: 10 * 60 * 1000, max: 60, keyFn: (req) => ({ ip: req.ip, fboId: req.customer?.fboId }) }),
+  customerSponsorshipsController.checkRecruitEmail,
+);
 router.get("/me/sponsorships/:id", requireCustomerAuth, customerSponsorshipsController.getMySponsorship);
 router.post("/me/sponsorships/:id/purchase", requireCustomerAuth, customerSponsorshipsController.startSponsorshipPurchase);
 router.get("/me/sponsorships/:id/agreement.pdf", requireCustomerAuth, customerSponsorshipsController.downloadMySponsorshipAgreement);

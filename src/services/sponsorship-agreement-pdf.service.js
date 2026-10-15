@@ -12,6 +12,14 @@ const LEVELS = [
   { grade: "MANAGER", label: "M" },
 ];
 
+const ID_DOCUMENT_SHORT = {
+  CNI: "CNI",
+  PASSPORT: "Passeport",
+  DRIVING_LICENSE: "Permis de conduire",
+  CONSULAR_CARD: "Carte consulaire",
+  OTHER: "Autre pièce officielle",
+};
+
 const RED = "#b42318";
 const DARK = "#111827";
 const GREY = "#6b7280";
@@ -88,7 +96,7 @@ function writeSponsorshipAgreementPdf(stream, { sponsorship: s, approverName, co
   row({ label: "Mobile", value: s.mobile }, { label: "Email", value: s.email });
   row({ label: "Situation de famille", value: s.maritalStatus }, { label: "Nombre d'enfants", value: s.childrenCount ?? "" });
   row({ label: "Date de naissance", value: formatDate(s.birthDate) }, { label: "Lieu de naissance", value: s.birthPlace });
-  row({ label: "N° CNI", value: s.idDocumentNumber }, { label: "N° Passeport", value: s.passportNumber });
+  row({ label: "Pièce d'identité", value: ID_DOCUMENT_SHORT[s.idDocumentType] || "CNI" }, { label: "N° de la pièce", value: s.idDocumentNumber });
   row({ label: "Naissance conjoint", value: formatDate(s.spouseBirthDate) }, { label: "Lieu naiss. conjoint", value: s.spouseBirthPlace });
   row({ label: "N° RIB", value: s.bankRib }, null);
 
