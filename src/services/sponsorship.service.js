@@ -108,7 +108,8 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
   const sponsorPhone = sponsorPhoneRaw ? normalizePhoneForCountry(sponsorPhoneRaw, countryCode) : null;
   if (sponsorPhoneRaw && !sponsorPhone) errors.push("Votre numéro de téléphone (parrain) est invalide.");
 
-  const email = text(raw.email)?.toLowerCase() || null;
+  // Email obligatoire : canal de contact du filleul (notifications de commande).
+  const email = required("email", "L'email du filleul")?.toLowerCase() || null;
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("L'adresse email est invalide.");
 
   const childrenCount = raw.childrenCount === "" || raw.childrenCount == null ? null : Number.parseInt(raw.childrenCount, 10);
