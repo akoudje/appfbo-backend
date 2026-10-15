@@ -53,6 +53,7 @@ const externalPaymentLinksRoutes = require("./admin/externalPaymentLinks.routes"
 const as400GatewayRoutes = require("./admin/as400Gateway.routes");
 const memorialsRoutes = require("./admin/memorials.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
+const homeFeaturedController = require("../controllers/admin/homeFeatured.controller");
 const eventsController = require("../controllers/admin/events.controller");
 const paymentLinkResendRequestsController = require("../controllers/paymentLinkResendRequests.controller");
 const { adminListCountries, toggleCountry } = require("../controllers/countries.controller");
@@ -249,6 +250,10 @@ router.put(
   requirePermission(Permission.MARKETING_WRITE),
   marketingCampaignsController.updateMarketingCampaigns,
 );
+
+// Accueil > « Sélection produits »
+router.get("/home-featured", requirePermission(Permission.COUNTRY_READ), homeFeaturedController.getHomeFeatured);
+router.put("/home-featured", requirePermission(Permission.MARKETING_WRITE), homeFeaturedController.updateHomeFeatured);
 
 router.post(
   "/marketing-campaigns/publish",

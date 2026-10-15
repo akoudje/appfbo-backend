@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const { pickCountryId } = require("../helpers/countryScope");
+const { normalizeHomeFeatured } = require("../services/homeFeatured.service");
 
 // Cache en mémoire, même principe que le cache pays de resolveCountry.js :
 // cette config change rarement (réglages admin, contenu marketing) mais est
@@ -219,6 +220,7 @@ async function getStorefrontConfig(req, res) {
           slidesJson: true,
           sidePanelsJson: true,
           publishingJson: true,
+          homeFeaturedJson: true,
         },
       }),
     ]);
@@ -302,6 +304,10 @@ async function getStorefrontConfig(req, res) {
           : DEFAULT_MARKETING.slides,
         sidePanels: marketing?.sidePanelsJson || DEFAULT_MARKETING.sidePanels,
         publishing: marketing?.publishingJson || DEFAULT_MARKETING.publishing,
+      },
+      // Accueil : section « Sélection produits » ({ enabled, productIds }).
+      home: {
+        featuredProducts: normalizeHomeFeatured(marketing?.homeFeaturedJson),
       },
     };
 
