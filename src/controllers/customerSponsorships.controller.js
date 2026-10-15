@@ -5,6 +5,7 @@ const prisma = require("../prisma");
 const sponsorship = require("../services/sponsorship.service");
 const purchase = require("../services/sponsorship-purchase.service");
 const { writeSponsorshipAgreementPdf } = require("../services/sponsorship-agreement-pdf.service");
+const { createSubmittedSponsorship } = require("../services/sponsorship-submission.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
 const AGREEMENT_STATUSES = new Set(["APPROVED_PENDING_PURCHASE", "VALIDATED", "EXPIRED"]);
@@ -124,78 +125,14 @@ async function submitSponsorship(req, res) {
   const files = sponsorship.collectUploadedFiles(req);
   try {
     const [fbo, settings] = await Promise.all([loadSponsor(req), sponsorship.getSponsorshipSettings(req.countryId)]);
-    if (!settings.enabled) throw sponsorship.httpError(403, "Le parrainage n'est pas encore ouvert dans ce pays.", "SPONSORSHIP_DISABLED");
-    if (!sponsorship.isSponsorGradeAllowed(fbo.grade)) {
-      throw sponsorship.httpError(403, "Le parrainage est réservé aux FBO de grade Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
-    }
-
-    const body = req.body || {};
-    if (String(body.consentAccepted) !== "true") {
-      throw sponsorship.httpError(400, "Vous devez attester disposer de l'accord et de la procuration du filleul.", "SPONSORSHIP_CONSENT_REQUIRED");
-    }
-    const data = sponsorship.normalizeRecruitPayload(body, { countryCode: settings.countryCode });
-    const cart = await purchase.normalizePurchaseCart(body.purchaseItems, {
+    const created = await createSubmittedSponsorship({
+      sponsorFbo: fbo,
+      settings,
       countryId: req.countryId,
-      countryCode: settings.countryCode,
-      minPurchaseFcfa: settings.minPurchaseFcfa,
+      body: req.body || {},
+      files,
+      channel: "CUSTOMER_PORTAL",
     });
-
-    await sponsorship.assertRecruitEmailAvailable(data.email);
-
-    // Passeport : page d'identité ; autres pièces (CNI, permis…) : recto.
-    const requiredUpload = data.idDocumentType === "PASSPORT" ? "PASSPORT" : "ID_FRONT";
-    if (!files.some(({ type }) => type === requiredUpload)) {
-      const what = data.idDocumentType === "PASSPORT" ? "la page d'identité du passeport" : `le recto de la pièce (${sponsorship.ID_DOCUMENT_LABELS[data.idDocumentType]})`;
-      throw sponsorship.httpError(400, `Joignez ${what} du filleul.`, "SPONSORSHIP_DOCUMENT_REQUIRED");
-    }
-
-    // Une même pièce ne peut pas être en cours de parrainage deux fois.
-    const duplicate = await prisma.sponsorship.findFirst({
-      where: {
-        countryId: req.countryId,
-        idDocumentNumber: data.idDocumentNumber,
-        status: { in: sponsorship.ACTIVE_SPONSORSHIP_STATUSES },
-      },
-      select: { id: true, status: true },
-    });
-    if (duplicate) {
-      throw sponsorship.httpError(409, "Un parrainage existe déjà pour cette pièce d'identité.", "SPONSORSHIP_DUPLICATE_ID");
-    }
-
-    const recruitName = `${data.firstNames} ${data.lastName}`;
-    const now = new Date();
-    const created = await prisma.sponsorship.create({
-      data: {
-        ...data,
-        countryId: req.countryId,
-        status: "SUBMITTED",
-        sponsorFboId: fbo.id,
-        sponsorNumero: fbo.numeroFbo,
-        sponsorNom: fbo.nomComplet,
-        sponsorGrade: fbo.grade,
-        consentText: sponsorship.buildConsentText({ recruitName, countryName: settings.countryName }),
-        consentVersion: sponsorship.CONSENT_VERSION,
-        consentAcceptedAt: now,
-        submittedAt: now,
-        purchaseItems: cart ? cart.items : undefined,
-        purchaseIndicativeTotalFcfa: cart ? cart.totalFcfa : null,
-      },
-    });
-
-    // Les pièces sont stockées après la création (identifiant du parrainage connu).
-    const documents = [];
-    for (const entry of files) {
-      documents.push(await sponsorship.storeSponsorshipDocument({ ...entry, sponsorshipId: created.id }));
-    }
-    await prisma.sponsorshipDocument.createMany({ data: documents });
-    await sponsorship.addSponsorshipLog(null, {
-      sponsorshipId: created.id,
-      action: "SUBMITTED",
-      note: `Parrainage soumis par ${fbo.nomComplet} (${fbo.numeroFbo}).`,
-      meta: { documents: documents.map((d) => d.type), consentVersion: sponsorship.CONSENT_VERSION },
-      actorFboId: fbo.id,
-    });
-
     return res.status(201).json({ id: created.id, status: created.status, statusLabel: sponsorship.STATUS_LABELS[created.status] });
   } catch (error) {
     return sendError(res, error, "submitSponsorship error:");
@@ -222,6 +159,7 @@ async function resubmitSponsorship(req, res) {
       countryId: req.countryId,
       countryCode: settings.countryCode,
       minPurchaseFcfa: settings.minPurchaseFcfa,
+      required: true,
     });
 
     const documents = [];
@@ -235,8 +173,8 @@ async function resubmitSponsorship(req, res) {
           ...data,
           status: "SUBMITTED",
           submittedAt: new Date(),
-          purchaseItems: cart ? cart.items : prismaDbNull(),
-          purchaseIndicativeTotalFcfa: cart ? cart.totalFcfa : null,
+          purchaseItems: cart.items,
+          purchaseIndicativeTotalFcfa: cart.totalFcfa,
         },
       });
       if (documents.length) await tx.sponsorshipDocument.createMany({ data: documents });
@@ -323,10 +261,6 @@ async function startSponsorshipPurchase(req, res) {
   } catch (error) {
     return sendError(res, error, "startSponsorshipPurchase error:");
   }
-}
-
-function prismaDbNull() {
-  return require("@prisma/client").Prisma.DbNull;
 }
 
 // GET /api/customer/me/sponsorships/:id/agreement.pdf : fiche cachetée (parrain).

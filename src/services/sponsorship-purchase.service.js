@@ -51,17 +51,26 @@ async function getRecruitCatalog({ countryId, countryCode }) {
 // Contrôle le panier saisi (champ multipart JSON « purchaseItems »). Renvoie null
 // si aucun panier. Bloque si un produit est indisponible, si une quantité dépasse
 // le stock ou la limite, ou si le total indicatif est sous le minimum du pays.
-async function normalizePurchaseCart(raw, { countryId, countryCode, minPurchaseFcfa }) {
+// `required` : l'achat de validation doit être composé (soumission de la fiche).
+async function normalizePurchaseCart(raw, { countryId, countryCode, minPurchaseFcfa, required = false }) {
+  const missing = () => {
+    if (!required) return null;
+    throw httpError(
+      400,
+      `Composez l'achat de parrainage : au moins ${Number(minPurchaseFcfa || 0).toLocaleString("fr-FR")} F au prix Client privilégié.`,
+      "SPONSORSHIP_CART_REQUIRED",
+    );
+  };
   let items = raw;
   if (typeof raw === "string") {
-    if (!raw.trim()) return null;
+    if (!raw.trim()) return missing();
     try {
       items = JSON.parse(raw);
     } catch {
       throw httpError(400, "Panier d'achat illisible.", "SPONSORSHIP_CART_INVALID");
     }
   }
-  if (!Array.isArray(items) || items.length === 0) return null;
+  if (!Array.isArray(items) || items.length === 0) return missing();
 
   const requested = new Map();
   for (const item of items) {
@@ -70,7 +79,7 @@ async function normalizePurchaseCart(raw, { countryId, countryCode, minPurchaseF
     if (!productId || !Number.isFinite(qty) || qty <= 0) continue;
     requested.set(productId, (requested.get(productId) || 0) + qty);
   }
-  if (!requested.size) return null;
+  if (!requested.size) return missing();
 
   const catalog = await getRecruitCatalog({ countryId, countryCode });
   const byId = new Map(catalog.map((product) => [product.id, product]));
@@ -94,7 +103,7 @@ async function normalizePurchaseCart(raw, { countryId, countryCode, minPurchaseF
   if (totalFcfa < minPurchaseFcfa) {
     throw httpError(
       400,
-      `Le panier d'achat fait ${totalFcfa.toLocaleString("fr-FR")} F : il doit atteindre au moins ${minPurchaseFcfa.toLocaleString("fr-FR")} F. Complétez-le ou retirez-le.`,
+      `Le panier d'achat fait ${totalFcfa.toLocaleString("fr-FR")} F : il doit atteindre au moins ${minPurchaseFcfa.toLocaleString("fr-FR")} F. Complétez-le.`,
       "SPONSORSHIP_CART_BELOW_MINIMUM",
     );
   }
