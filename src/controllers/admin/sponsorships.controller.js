@@ -5,6 +5,31 @@ const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const sponsorship = require("../../services/sponsorship.service");
 const purchase = require("../../services/sponsorship-purchase.service");
+const { writeSponsorshipAgreementPdf } = require("../../services/sponsorship-agreement-pdf.service");
+
+// Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
+const AGREEMENT_STATUSES = new Set(["APPROVED_PENDING_PURCHASE", "VALIDATED", "EXPIRED"]);
+
+async function sendAgreementPdf(res, row) {
+  if (!row || !AGREEMENT_STATUSES.has(row.status) || !row.recruitFboNumero) {
+    return res.status(409).json({ message: "La fiche cachetée est disponible une fois le parrainage approuvé." });
+  }
+  const [approver, country] = await Promise.all([
+    row.approvedById ? prisma.adminUser.findUnique({ where: { id: row.approvedById }, select: { fullName: true, email: true } }) : null,
+    prisma.country.findUnique({ where: { id: row.countryId }, select: { name: true } }),
+  ]);
+  const fileName = `agrement-${row.recruitFboNumero}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  res.setHeader("Cache-Control", "private, no-store");
+  writeSponsorshipAgreementPdf(res, {
+    sponsorship: row,
+    approverName: approver?.fullName || approver?.email || "",
+    countryName: country?.name || "Côte d'Ivoire",
+  });
+  return undefined;
+}
+
 
 const STATUSES = new Set(Object.keys(sponsorship.STATUS_LABELS));
 const DOCUMENT_SELECT = { id: true, type: true, mimeType: true, sizeBytes: true, originalFileName: true, createdAt: true };
@@ -307,7 +332,102 @@ async function evaluateNow(req, res) {
   }
 }
 
+// GET /api/admin/sponsorships/:id/agreement.pdf : fiche cachetée (archive / impression).
+async function downloadSponsorshipAgreement(req, res) {
+  try {
+    const row = await prisma.sponsorship.findFirst({ where: scopeWhere(req, { id: req.params.id }) });
+    if (!row) return res.status(404).json({ message: "Parrainage introuvable." });
+    return await sendAgreementPdf(res, row);
+  } catch (error) {
+    return sendError(res, error, "downloadSponsorshipAgreement error:");
+  }
+}
+
+// GET /api/admin/sponsorships/:id/catalog : produits pour composer l'achat au comptoir.
+async function getCounterCatalog(req, res) {
+  try {
+    const settings = await sponsorship.getSponsorshipSettings(pickCountryId(req));
+    const products = await purchase.getRecruitCatalog({ countryId: pickCountryId(req), countryCode: settings.countryCode });
+    return res.json({ products });
+  } catch (error) {
+    return sendError(res, error, "getCounterCatalog error:");
+  }
+}
+
+// POST /api/admin/sponsorships/:id/counter-purchase
+// { items?, paymentMode, deliveryMode, factureReference, invoiceAmountFcfa, note? }
+// Le facturier fait l'achat de parrainage et le PRÉFACTURE directement (référence
+// et montant AS400), avec exactement la même logique que « Préfacturer ».
+async function counterPurchase(req, res) {
+  try {
+    const row = await loadForReview(req, ["APPROVED_PENDING_PURCHASE"]);
+    const body = req.body || {};
+    if (!String(body.factureReference || "").trim()) throw sponsorship.httpError(400, "La référence AS400 est obligatoire.");
+    if (!Number.isFinite(Number(body.invoiceAmountFcfa)) || Number(body.invoiceAmountFcfa) <= 0) {
+      throw sponsorship.httpError(400, "Le montant AS400 est obligatoire.");
+    }
+    const countryId = pickCountryId(req);
+    const settings = await sponsorship.getSponsorshipSettings(countryId);
+    const recruitFbo = await prisma.fbo.findUnique({ where: { id: row.recruitFboId } });
+    const order = await purchase.prepareCounterPurchase({
+      sponsorship: row,
+      recruitFbo,
+      items: body.items,
+      paymentMode: body.paymentMode,
+      deliveryMode: body.deliveryMode,
+      countryId,
+      countryCode: settings.countryCode,
+      adminId: req.user?.id || null,
+    });
+
+    // Préfacturation : même contrôleur que le bouton « Préfacturer » de la commande.
+    const ordersController = require("./orders.controller");
+    const invoiceReq = Object.create(req);
+    invoiceReq.params = { id: order.id };
+    invoiceReq.body = {
+      factureReference: body.factureReference,
+      invoiceAmountFcfa: Number(body.invoiceAmountFcfa),
+      whatsappTo: row.sponsorPhone || "",
+      fboGrade: purchase.RECRUIT_GRADE,
+      note: body.note || "Achat de parrainage au comptoir.",
+    };
+    const captured = {};
+    const fakeRes = {
+      status(code) { captured.status = code; return this; },
+      json(payload) { captured.body = payload; return this; },
+      setHeader() {}, set() { return this; },
+    };
+    await ordersController.invoiceOrder(invoiceReq, fakeRes);
+    const invoiced = !captured.status || captured.status < 400;
+
+    await sponsorship.addSponsorshipLog(null, {
+      sponsorshipId: row.id,
+      action: invoiced ? "COUNTER_PURCHASE_INVOICED" : "COUNTER_PURCHASE_SUBMITTED",
+      note: invoiced
+        ? `Achat au comptoir préfacturé : ${order.preorderNumber}, réf. AS400 ${String(body.factureReference).trim()}, ${Number(body.invoiceAmountFcfa)} F.`
+        : `Achat au comptoir soumis (${order.preorderNumber}) mais non préfacturé : ${captured.body?.message || "erreur"}.`,
+      meta: { preorderId: order.id, paymentMode: body.paymentMode, deliveryMode: body.deliveryMode },
+      actorAdminId: req.user?.id || null,
+    });
+
+    if (!invoiced) {
+      return res.status(captured.status || 500).json({
+        message: `Commande ${order.preorderNumber} créée et soumise, mais la préfacturation a échoué : ${captured.body?.message || "erreur"}. Vous pouvez la préfacturer depuis la commande.`,
+        code: captured.body?.code,
+        preorderId: order.id,
+        preorderNumber: order.preorderNumber,
+      });
+    }
+    return res.json({ ok: true, preorderId: order.id, preorderNumber: order.preorderNumber, status: captured.body?.status || "INVOICED" });
+  } catch (error) {
+    return sendError(res, error, "counterPurchase error:");
+  }
+}
+
 module.exports = {
+  downloadSponsorshipAgreement,
+  getCounterCatalog,
+  counterPurchase,
   listSponsorships,
   getSponsorship,
   downloadSponsorshipDocument,
