@@ -90,6 +90,9 @@ const text = (value) => {
 const bool = (value) => (value === true || value === "true" ? true : value === false || value === "false" ? false : null);
 
 // Normalise et contrôle la fiche saisie par le parrain. Lève une 400 lisible.
+// Code pays interne -> code ISO alpha-2 (pays de résidence du filleul).
+const COUNTRY_ALPHA2 = { CIV: "CI", BFA: "BF", TGO: "TG", BEN: "BJ", NER: "NE" };
+
 function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date() } = {}) {
   const errors = [];
   const required = (key, label) => {
@@ -153,7 +156,7 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     city,
     postalBox: text(raw.postalBox),
     zoneCode: text(raw.zoneCode),
-    homeCountry: text(raw.homeCountry) || "CI",
+    homeCountry: text(raw.homeCountry) || COUNTRY_ALPHA2[countryCode] || "CI",
     maritalStatus: text(raw.maritalStatus),
     childrenCount,
     bankRib: text(raw.bankRib),
@@ -391,9 +394,10 @@ async function evaluateSponsorship(sponsorship, { now = new Date() } = {}) {
       });
     });
     const sponsorPhone = await findSponsorPhone(sponsorship);
+    const country = await prisma.country.findUnique({ where: { id: sponsorship.countryId }, select: { code: true } });
     await notifySms({
       to: sponsorPhone,
-      countryCode: "CIV",
+      countryCode: country?.code || "CIV",
       message: `FOREVER: parrainage de ${sponsorship.firstNames} ${sponsorship.lastName} valide (FBO ${sponsorship.recruitFboNumero}). Merci !`,
     });
     return { status: "VALIDATED", changed: true };

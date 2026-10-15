@@ -173,7 +173,7 @@ async function requestChanges(req, res) {
     });
     await sponsorship.notifySms({
       to: await sponsorship.findSponsorPhone(row),
-      countryCode: "CIV",
+      countryCode: req.country?.code || "CIV",
       message: `FOREVER: parrainage de ${row.firstNames} ${row.lastName} : complement demande. Consultez votre espace client.`,
     });
     return res.json({ ok: true, status: "CHANGES_REQUESTED" });
@@ -197,7 +197,7 @@ async function rejectSponsorship(req, res) {
     });
     await sponsorship.notifySms({
       to: await sponsorship.findSponsorPhone(row),
-      countryCode: "CIV",
+      countryCode: req.country?.code || "CIV",
       message: `FOREVER: parrainage de ${row.firstNames} ${row.lastName} refuse. Motif : ${reason}`.slice(0, 300),
     });
     return res.json({ ok: true, status: "REJECTED" });
