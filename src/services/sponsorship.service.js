@@ -281,6 +281,20 @@ function buildDocumentDownloadUrl(document) {
   });
 }
 
+// Contenu d'une pièce pour le dossier PDF : images converties en JPEG par
+// Cloudinary (le générateur PDF ne lit ni WEBP ni HEIC), PDF tels quels.
+async function fetchSponsorshipDocumentBuffer(document) {
+  const axios = require("axios");
+  const isImage = document.storageResourceType !== "raw";
+  const url = cloudinary.utils.private_download_url(document.storagePublicId, isImage ? "jpg" : "", {
+    resource_type: document.storageResourceType,
+    type: "private",
+    expires_at: Math.floor(Date.now() / 1000) + 5 * 60,
+  });
+  const response = await axios.get(url, { responseType: "arraybuffer", timeout: 30000 });
+  return { buffer: Buffer.from(response.data), mimeType: isImage ? "image/jpeg" : document.mimeType };
+}
+
 async function streamSponsorshipDocument(document, res) {
   const axios = require("axios");
   const response = await axios.get(buildDocumentDownloadUrl(document), { responseType: "stream", timeout: 20000 });
@@ -483,6 +497,7 @@ module.exports = {
   cleanupTmpFiles,
   storeSponsorshipDocument,
   streamSponsorshipDocument,
+  fetchSponsorshipDocumentBuffer,
   addSponsorshipLog,
   notifySms,
   findSponsorPhone,

@@ -11,6 +11,7 @@ router.get("/", sponsorshipsController.listSponsorships);
 router.get("/:id", sponsorshipsController.getSponsorship);
 router.get("/:id/documents/:documentId/file", sponsorshipsController.downloadSponsorshipDocument);
 router.get("/:id/agreement.pdf", sponsorshipsController.downloadSponsorshipAgreement);
+router.get("/:id/dossier.pdf", sponsorshipsController.downloadSponsorshipDossier);
 router.get("/:id/catalog", sponsorshipsController.getCounterCatalog);
 // L'achat au comptoir préfacture : il faut aussi le droit de facturer.
 router.post("/:id/counter-purchase", requirePermission(Permission.INVOICE_CREATE), sponsorshipsController.counterPurchase);

@@ -64,9 +64,8 @@ function drawStamp(doc, { x, y, date, agentName }) {
 
 // Écrit la fiche dans `stream` (réponse HTTP) ; `sponsorship` inclut les champs
 // du modèle ; `approverName` = nom de l'agent qui a approuvé.
-function writeSponsorshipAgreementPdf(stream, { sponsorship: s, approverName, countryName = "Côte d'Ivoire" }) {
-  const doc = new PDFDocument({ size: "A4", margin: 40, info: { Title: `Agrément de distribution - ${s.lastName} ${s.firstNames}` } });
-  doc.pipe(stream);
+// Dessine la fiche sur la page courante de `doc`.
+function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "Côte d'Ivoire" }) {
 
   // En-tête
   doc.font("Helvetica-Bold").fontSize(16).fillColor(DARK).text("FOREVER LIVING PRODUCTS", 40, 40);
@@ -163,8 +162,86 @@ function writeSponsorshipAgreementPdf(stream, { sponsorship: s, approverName, co
     .fillColor(GREY)
     .text(`Document généré par l'application FBO le ${formatDate(new Date())} · Réf. dossier ${s.id}`, 40, 790, { width: 515, align: "center", lineBreak: false });
 
+}
+
+function newDocument(s) {
+  return new PDFDocument({ size: "A4", margin: 40, info: { Title: `Agrément de distribution - ${s.lastName} ${s.firstNames}` } });
+}
+
+// Fiche seule, écrite dans `stream` (réponse HTTP).
+function writeSponsorshipAgreementPdf(stream, options) {
+  const doc = newDocument(options.sponsorship);
+  doc.pipe(stream);
+  drawAgreementPage(doc, options);
   doc.end();
   return doc;
 }
 
-module.exports = { writeSponsorshipAgreementPdf };
+const DOCUMENT_PAGE_LABELS = {
+  ID_FRONT: "recto",
+  ID_BACK: "verso",
+  PASSPORT: "page d'identité",
+  OTHER: "autre pièce",
+};
+
+// Dossier de traitement : fiche + une page par image de la pièce d'identité,
+// puis les pièces envoyées en PDF ajoutées telles quelles. `documents` :
+// [{ type, mimeType, originalFileName, buffer }]. Renvoie un Buffer PDF.
+async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countryName, documents = [] }) {
+  const doc = newDocument(s);
+  const chunks = [];
+  doc.on("data", (chunk) => chunks.push(chunk));
+  const finished = new Promise((resolve, reject) => {
+    doc.on("end", resolve);
+    doc.on("error", reject);
+  });
+
+  drawAgreementPage(doc, { sponsorship: s, approverName, countryName });
+
+  const pieceLabel = ID_DOCUMENT_SHORT[s.idDocumentType] || "Pièce";
+  const pdfAttachments = [];
+  for (const document of documents) {
+    const title = `Pièce d'identité — ${pieceLabel} (${DOCUMENT_PAGE_LABELS[document.type] || "pièce"})`;
+    if (document.mimeType === "application/pdf") {
+      pdfAttachments.push({ title, buffer: document.buffer });
+      continue;
+    }
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(DARK).text(title, 40, 40);
+    doc
+      .font("Helvetica")
+      .fontSize(8.5)
+      .fillColor(GREY)
+      .text(`${s.lastName} ${s.firstNames} · ${pieceLabel} n° ${s.idDocumentNumber} · dossier ${s.id}`, 40, 60);
+    try {
+      doc.image(document.buffer, 40, 85, { fit: [515, 700], align: "center", valign: "top" });
+    } catch {
+      doc.font("Helvetica").fontSize(10).fillColor(RED).text("Image illisible : consultez la pièce dans l'application.", 40, 100);
+    }
+  }
+  if (pdfAttachments.length) {
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(DARK).text("Pièces jointes au format PDF", 40, 40);
+    doc.font("Helvetica").fontSize(10).fillColor(GREY).text(pdfAttachments.map((a) => `• ${a.title}`).join("\n"), 40, 65);
+  }
+  doc.end();
+  await finished;
+  const mainPdf = Buffer.concat(chunks);
+  if (!pdfAttachments.length) return mainPdf;
+
+  // Ajout des pièces PDF à la suite (pdf-lib).
+  const { PDFDocument: PdfLibDocument } = require("pdf-lib");
+  const merged = await PdfLibDocument.load(mainPdf);
+  for (const attachment of pdfAttachments) {
+    try {
+      const source = await PdfLibDocument.load(attachment.buffer, { ignoreEncryption: true });
+      const pages = await merged.copyPages(source, source.getPageIndices());
+      pages.forEach((page) => merged.addPage(page));
+    } catch {
+      // PDF illisible : la page récapitulative l'indique déjà ; on continue.
+    }
+  }
+  return Buffer.from(await merged.save());
+}
+
+module.exports = { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf };

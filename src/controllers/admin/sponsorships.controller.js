@@ -5,7 +5,7 @@ const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const sponsorship = require("../../services/sponsorship.service");
 const purchase = require("../../services/sponsorship-purchase.service");
-const { writeSponsorshipAgreementPdf } = require("../../services/sponsorship-agreement-pdf.service");
+const { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf } = require("../../services/sponsorship-agreement-pdf.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
 const AGREEMENT_STATUSES = new Set(["APPROVED_PENDING_PURCHASE", "VALIDATED", "EXPIRED"]);
@@ -347,6 +347,55 @@ async function downloadSponsorshipAgreement(req, res) {
   }
 }
 
+// GET /api/admin/sponsorships/:id/dossier.pdf : dossier de traitement à tout
+// statut (fiche + pièce d'identité), pour impression ou export. Chaque export
+// est tracé dans l'historique (la pièce d'identité sort de l'application).
+async function downloadSponsorshipDossier(req, res) {
+  try {
+    const row = await prisma.sponsorship.findFirst({
+      where: scopeWhere(req, { id: req.params.id }),
+      include: { documents: { orderBy: { createdAt: "asc" } } },
+    });
+    if (!row) return res.status(404).json({ message: "Parrainage introuvable." });
+
+    const [approver, country] = await Promise.all([
+      row.approvedById ? prisma.adminUser.findUnique({ where: { id: row.approvedById }, select: { fullName: true, email: true } }) : null,
+      prisma.country.findUnique({ where: { id: row.countryId }, select: { name: true } }),
+    ]);
+    const documents = [];
+    for (const document of row.documents) {
+      try {
+        const content = await sponsorship.fetchSponsorshipDocumentBuffer(document);
+        documents.push({ type: document.type, originalFileName: document.originalFileName, ...content });
+      } catch (error) {
+        console.error("[sponsorship] pièce non récupérée pour le dossier", { id: document.id, error: error?.message });
+      }
+    }
+    const pdf = await buildSponsorshipDossierPdf({
+      sponsorship: row,
+      approverName: approver?.fullName || approver?.email || "",
+      countryName: country?.name || "Côte d'Ivoire",
+      documents,
+    });
+
+    await sponsorship.addSponsorshipLog(null, {
+      sponsorshipId: row.id,
+      action: "DOSSIER_EXPORTED",
+      note: `Dossier exporté (fiche + ${documents.length} pièce(s) d'identité).`,
+      meta: { documents: documents.length, missing: row.documents.length - documents.length },
+      actorAdminId: req.user?.id || null,
+    });
+
+    const safeName = `${row.lastName}-${row.firstNames}`.normalize("NFD").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="dossier-parrainage-${safeName}.pdf"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(pdf);
+  } catch (error) {
+    return sendError(res, error, "downloadSponsorshipDossier error:");
+  }
+}
+
 // GET /api/admin/sponsorships/:id/catalog : produits pour composer l'achat au comptoir.
 async function getCounterCatalog(req, res) {
   try {
@@ -429,6 +478,7 @@ async function counterPurchase(req, res) {
 }
 
 module.exports = {
+  downloadSponsorshipDossier,
   downloadSponsorshipAgreement,
   getCounterCatalog,
   counterPurchase,
