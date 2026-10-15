@@ -177,6 +177,19 @@ function writeSponsorshipAgreementPdf(stream, options) {
   return doc;
 }
 
+// Fiche d'agrément cachetée en mémoire (Buffer), pour une pièce jointe d'email.
+function buildSponsorshipAgreementPdfBuffer(options) {
+  return new Promise((resolve, reject) => {
+    const doc = newDocument(options.sponsorship);
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+    drawAgreementPage(doc, options);
+    doc.end();
+  });
+}
+
 const DOCUMENT_PAGE_LABELS = {
   ID_FRONT: "recto",
   ID_BACK: "verso",
@@ -244,4 +257,4 @@ async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countr
   return Buffer.from(await merged.save());
 }
 
-module.exports = { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf };
+module.exports = { writeSponsorshipAgreementPdf, buildSponsorshipAgreementPdfBuffer, buildSponsorshipDossierPdf };

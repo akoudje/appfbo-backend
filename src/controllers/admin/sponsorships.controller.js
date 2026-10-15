@@ -5,6 +5,7 @@ const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const sponsorship = require("../../services/sponsorship.service");
 const purchase = require("../../services/sponsorship-purchase.service");
+const { notifySponsorshipApproved } = require("../../services/sponsorship-notifications.service");
 const { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf } = require("../../services/sponsorship-agreement-pdf.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
@@ -206,14 +207,19 @@ async function rejectSponsorship(req, res) {
   }
 }
 
-// POST /api/admin/sponsorships/:id/approve { recruitFboNumero }
-// L'agent saisit le n° FBO attribué dans AS400 ; le filleul est créé en Client
-// privilégié et peut commander tout de suite. Le délai d'achat démarre.
+// POST /api/admin/sponsorships/:id/approve
+// { recruitFboNumero, factureReference, invoiceAmountFcfa, paymentMode?, deliveryMode?, items?, note? }
+// Approbation et achat en une action : n° FBO attribué, commande du filleul créée
+// à partir du panier et PRÉFACTURÉE (réf. et montant AS400). Puis UNE notification
+// (SMS + email, parrain et filleul) : n° FBO, commande, montant, lien de paiement,
+// fiche cachetée en pièce jointe. Plus de délai : le parrainage attend le paiement.
 async function approveSponsorship(req, res) {
   try {
     const row = await loadForReview(req, ["SUBMITTED"]);
-    const settings = await sponsorship.getSponsorshipSettings(pickCountryId(req));
-    const numero = sponsorship.canonicalFboNumber(req.body?.recruitFboNumero);
+    const countryId = pickCountryId(req);
+    const settings = await sponsorship.getSponsorshipSettings(countryId);
+    const body = req.body || {};
+    const numero = sponsorship.canonicalFboNumber(body.recruitFboNumero);
     if (!numero) throw sponsorship.httpError(400, "Le n° FBO doit contenir 12 chiffres (ex. 225-000-123-456).");
     if (settings.fboNumberPrefix && !numero.replace(/\D/g, "").startsWith(settings.fboNumberPrefix)) {
       throw sponsorship.httpError(400, `Le n° FBO doit commencer par ${settings.fboNumberPrefix} pour ce pays.`);
@@ -222,17 +228,26 @@ async function approveSponsorship(req, res) {
     if (age === null || age < sponsorship.MIN_RECRUIT_AGE) {
       throw sponsorship.httpError(409, `Le filleul doit être majeur (âge calculé : ${age ?? "inconnu"}).`);
     }
-
     const existing = await prisma.fbo.findUnique({ where: { numeroFbo: numero }, select: { id: true, nomComplet: true } });
     if (existing) {
       throw sponsorship.httpError(409, `Ce n° FBO est déjà attribué à ${existing.nomComplet}.`, "FBO_NUMBER_TAKEN");
     }
 
-    const now = new Date();
-    const deadline = new Date(now.getTime() + settings.purchaseWindowHours * 60 * 60 * 1000);
-    const recruitName = `${row.lastName}, ${row.firstNames}`;
-    const countryId = pickCountryId(req);
+    // Contrôles de l'achat AVANT toute écriture (pas d'approbation à moitié faite).
+    const paymentMode = body.paymentMode || row.purchasePaymentMode;
+    const deliveryMode = body.deliveryMode || row.purchaseDeliveryMode;
+    const options = await purchase.normalizePurchaseOptions({ countryId, paymentMode, deliveryMode });
+    const reference = String(body.factureReference || "").replace(/\s+/g, " ").trim();
+    if (!reference) throw sponsorship.httpError(400, "La référence AS400 est obligatoire.");
+    if (!(Number(body.invoiceAmountFcfa) > 0)) throw sponsorship.httpError(400, "Le montant AS400 est obligatoire.");
+    const duplicate = await prisma.preorder.findFirst({
+      where: { countryId, factureReference: { equals: reference, mode: "insensitive" } },
+      select: { preorderNumber: true },
+    });
+    if (duplicate) throw sponsorship.httpError(409, `Cette référence AS400 est déjà utilisée sur la commande ${duplicate.preorderNumber}.`);
 
+    const now = new Date();
+    const recruitName = `${row.lastName}, ${row.firstNames}`;
     await prisma.$transaction(async (tx) => {
       const recruit = await tx.fbo.create({
         data: {
@@ -255,72 +270,77 @@ async function approveSponsorship(req, res) {
           reviewedAt: now,
           reviewedById: req.user?.id || null,
           minPurchaseFcfa: settings.minPurchaseFcfa,
-          purchaseDeadlineAt: deadline,
+          purchaseDeadlineAt: null,
+          purchasePaymentMode: options.payment,
+          purchaseDeliveryMode: options.delivery,
         },
       });
       await sponsorship.addSponsorshipLog(tx, {
         sponsorshipId: row.id,
         action: "APPROVED",
-        note: `Approuvé : n° FBO ${numero} (Client privilégié). Achat d'au moins ${settings.minPurchaseFcfa} F attendu avant le ${deadline.toISOString()}.`,
-        meta: { recruitFboId: recruit.id, recruitFboNumero: numero, minPurchaseFcfa: settings.minPurchaseFcfa, purchaseDeadlineAt: deadline.toISOString() },
+        note: `Approuvé : n° FBO ${numero} (Client privilégié). Achat d'au moins ${settings.minPurchaseFcfa} F attendu (sans délai).`,
+        meta: { recruitFboId: recruit.id, recruitFboNumero: numero, minPurchaseFcfa: settings.minPurchaseFcfa },
         actorAdminId: req.user?.id || null,
       });
     });
 
-    let purchaseDraft = null;
-    try {
-      const fresh = await prisma.sponsorship.findUnique({ where: { id: row.id }, include: { recruitFbo: true } });
-      purchaseDraft = await purchase.createRecruitPurchaseDraft({
-        sponsorship: fresh,
-        recruitFbo: fresh.recruitFbo,
-        countryId,
-        countryCode: settings.countryCode,
-      });
-      if (purchaseDraft?.preorder) {
-        await prisma.sponsorship.update({ where: { id: row.id }, data: { purchasePreorderId: purchaseDraft.preorder.id } });
-      }
-      if (purchaseDraft) {
-        await sponsorship.addSponsorshipLog(null, {
-          sponsorshipId: row.id,
-          action: "PURCHASE_DRAFT_CREATED",
-          note: purchaseDraft.preorder
-            ? `Commande d'achat préparée : ${purchaseDraft.preorder.preorderNumber} (brouillon, paiement et livraison à choisir par le parrain).`
-            : "Panier d'achat non transformé : plus aucun produit disponible.",
-          meta: { preorderId: purchaseDraft.preorder?.id || null, adjustments: purchaseDraft.adjustments },
-          actorAdminId: req.user?.id || null,
-        });
-      }
-    } catch (error) {
-      console.error("[sponsorship] commande d'achat non créée", { id: row.id, error: error?.message });
-      await sponsorship.addSponsorshipLog(null, {
-        sponsorshipId: row.id,
-        action: "PURCHASE_DRAFT_FAILED",
-        note: "La commande d'achat préparée n'a pas pu être créée : le parrain peut commander normalement.",
-        actorAdminId: req.user?.id || null,
-      }).catch(() => {});
-    }
-
-    const amount = new Intl.NumberFormat("fr-FR").format(settings.minPurchaseFcfa);
-    await sponsorship.notifySms({
-      to: row.mobile,
-      countryCode: settings.countryCode,
-      message: `FOREVER: bienvenue ${row.firstNames} ! Votre n° FBO est ${numero}. Premiere commande d'au moins ${amount} F a passer sous ${settings.purchaseWindowHours} h.`,
-    });
-    await sponsorship.notifySms({
-      to: await sponsorship.findSponsorPhone(row),
-      countryCode: settings.countryCode,
-      message: `FOREVER: parrainage de ${row.firstNames} ${row.lastName} approuve, n° FBO ${numero}. Achat d'au moins ${amount} F sous ${settings.purchaseWindowHours} h pour le valider.`,
-    });
-    return res.json({
+    const outcome = await invoiceAndNotify(req, row.id, { ...body, paymentMode: options.payment, deliveryMode: options.delivery, factureReference: reference });
+    return res.status(outcome.ok ? 200 : 207).json({
       ok: true,
       status: "APPROVED_PENDING_PURCHASE",
       recruitFboNumero: numero,
-      purchaseDeadlineAt: deadline,
-      purchasePreorderNumber: purchaseDraft?.preorder?.preorderNumber || null,
-      purchaseAdjustments: purchaseDraft?.adjustments || [],
+      ...outcome,
     });
   } catch (error) {
     return sendError(res, error, "approveSponsorship error:");
+  }
+}
+
+// Préfacture l'achat de parrainage puis envoie la notification fusionnée.
+// Échec de préfacturation : journalisé, le facturier relance l'achat.
+async function invoiceAndNotify(req, sponsorshipId, body) {
+  const countryId = pickCountryId(req);
+  const settings = await sponsorship.getSponsorshipSettings(countryId);
+  const fresh = await prisma.sponsorship.findUnique({ where: { id: sponsorshipId }, include: { recruitFbo: true } });
+  try {
+    const result = await purchase.preinvoiceSponsorshipPurchase({
+      req,
+      sponsorship: fresh,
+      recruitFbo: fresh.recruitFbo,
+      items: body.items,
+      paymentMode: body.paymentMode,
+      deliveryMode: body.deliveryMode,
+      factureReference: body.factureReference,
+      invoiceAmountFcfa: Number(body.invoiceAmountFcfa),
+      note: body.note,
+      countryId,
+      countryCode: settings.countryCode,
+    });
+    await sponsorship.addSponsorshipLog(null, {
+      sponsorshipId,
+      action: "PURCHASE_INVOICED",
+      note: `Achat de parrainage préfacturé : ${result.order.preorderNumber}, réf. AS400 ${body.factureReference}, ${Number(body.invoiceAmountFcfa)} F.`,
+      meta: { preorderId: result.order.id, paymentMode: body.paymentMode, deliveryMode: body.deliveryMode, paymentLink: result.paymentLink },
+      actorAdminId: req.user?.id || null,
+    });
+    await notifySponsorshipApproved({
+      sponsorshipId,
+      order: { preorderNumber: result.order.preorderNumber, amountToPayFcfa: result.amountToPayFcfa, paymentMode: result.paymentMode },
+      paymentLink: result.paymentLink,
+    }).catch((error) => console.error("[sponsorship] notification d'approbation non envoyée", { sponsorshipId, error: error?.message }));
+    return { ok: true, preorderId: result.order.id, purchasePreorderNumber: result.order.preorderNumber, paymentLink: result.paymentLink };
+  } catch (error) {
+    if (!error.statusCode) console.error("[sponsorship] préfacturation de l'achat échouée", { sponsorshipId, error: error?.message });
+    await sponsorship.addSponsorshipLog(null, {
+      sponsorshipId,
+      action: "PURCHASE_INVOICE_FAILED",
+      note: `Préfacturation de l'achat échouée : ${error.statusCode ? error.message : "erreur serveur"}. À relancer.`,
+      actorAdminId: req.user?.id || null,
+    }).catch(() => {});
+    return {
+      ok: false,
+      purchaseError: `Parrainage approuvé, mais la préfacturation de l'achat a échoué : ${error.statusCode ? error.message : "erreur serveur"}. Relancez l'achat ; aucune notification n'est partie.`,
+    };
   }
 }
 
@@ -408,72 +428,50 @@ async function getCounterCatalog(req, res) {
 }
 
 // POST /api/admin/sponsorships/:id/counter-purchase
-// { items?, paymentMode, deliveryMode, factureReference, invoiceAmountFcfa, note? }
-// Le facturier fait l'achat de parrainage et le PRÉFACTURE directement (référence
-// et montant AS400), avec exactement la même logique que « Préfacturer ».
+// { factureReference, invoiceAmountFcfa, paymentMode?, deliveryMode?, items?, note? }
+// Relance de l'achat d'un parrainage approuvé (préfacturation échouée, ou commande
+// annulée faute de paiement) : nouvelle commande préfacturée et nouvelle
+// notification fusionnée (parrain et filleul).
 async function counterPurchase(req, res) {
   try {
     const row = await loadForReview(req, ["APPROVED_PENDING_PURCHASE"]);
     const body = req.body || {};
-    if (!String(body.factureReference || "").trim()) throw sponsorship.httpError(400, "La référence AS400 est obligatoire.");
-    if (!Number.isFinite(Number(body.invoiceAmountFcfa)) || Number(body.invoiceAmountFcfa) <= 0) {
-      throw sponsorship.httpError(400, "Le montant AS400 est obligatoire.");
-    }
-    const countryId = pickCountryId(req);
-    const settings = await sponsorship.getSponsorshipSettings(countryId);
-    const recruitFbo = await prisma.fbo.findUnique({ where: { id: row.recruitFboId } });
-    const order = await purchase.prepareCounterPurchase({
-      sponsorship: row,
-      recruitFbo,
-      items: body.items,
-      paymentMode: body.paymentMode,
-      deliveryMode: body.deliveryMode,
-      countryId,
-      countryCode: settings.countryCode,
-      adminId: req.user?.id || null,
+    const outcome = await invoiceAndNotify(req, row.id, {
+      ...body,
+      paymentMode: body.paymentMode || row.purchasePaymentMode,
+      deliveryMode: body.deliveryMode || row.purchaseDeliveryMode,
+      factureReference: String(body.factureReference || "").replace(/\s+/g, " ").trim(),
     });
-
-    // Préfacturation : même contrôleur que le bouton « Préfacturer » de la commande.
-    const ordersController = require("./orders.controller");
-    const invoiceReq = Object.create(req);
-    invoiceReq.params = { id: order.id };
-    invoiceReq.body = {
-      factureReference: body.factureReference,
-      invoiceAmountFcfa: Number(body.invoiceAmountFcfa),
-      whatsappTo: row.sponsorPhone || "",
-      fboGrade: purchase.RECRUIT_GRADE,
-      note: body.note || "Achat de parrainage au comptoir.",
-    };
-    const captured = {};
-    const fakeRes = {
-      status(code) { captured.status = code; return this; },
-      json(payload) { captured.body = payload; return this; },
-      setHeader() {}, set() { return this; },
-    };
-    await ordersController.invoiceOrder(invoiceReq, fakeRes);
-    const invoiced = !captured.status || captured.status < 400;
-
-    await sponsorship.addSponsorshipLog(null, {
-      sponsorshipId: row.id,
-      action: invoiced ? "COUNTER_PURCHASE_INVOICED" : "COUNTER_PURCHASE_SUBMITTED",
-      note: invoiced
-        ? `Achat au comptoir préfacturé : ${order.preorderNumber}, réf. AS400 ${String(body.factureReference).trim()}, ${Number(body.invoiceAmountFcfa)} F.`
-        : `Achat au comptoir soumis (${order.preorderNumber}) mais non préfacturé : ${captured.body?.message || "erreur"}.`,
-      meta: { preorderId: order.id, paymentMode: body.paymentMode, deliveryMode: body.deliveryMode },
-      actorAdminId: req.user?.id || null,
-    });
-
-    if (!invoiced) {
-      return res.status(captured.status || 500).json({
-        message: `Commande ${order.preorderNumber} créée et soumise, mais la préfacturation a échoué : ${captured.body?.message || "erreur"}. Vous pouvez la préfacturer depuis la commande.`,
-        code: captured.body?.code,
-        preorderId: order.id,
-        preorderNumber: order.preorderNumber,
-      });
-    }
-    return res.json({ ok: true, preorderId: order.id, preorderNumber: order.preorderNumber, status: captured.body?.status || "INVOICED" });
+    if (!outcome.ok) return res.status(400).json({ message: outcome.purchaseError });
+    return res.json({ ok: true, preorderId: outcome.preorderId, preorderNumber: outcome.purchasePreorderNumber, paymentLink: outcome.paymentLink });
   } catch (error) {
     return sendError(res, error, "counterPurchase error:");
+  }
+}
+
+// POST /api/admin/sponsorships/:id/cancel { reason }
+// Annulation d'un parrainage approuvé dont l'achat n'est pas payé.
+async function cancelSponsorship(req, res) {
+  try {
+    const row = await loadForReview(req, ["APPROVED_PENDING_PURCHASE"]);
+    const reason = String(req.body?.reason || "").trim();
+    if (!reason) throw sponsorship.httpError(400, "Indiquez le motif de l'annulation.");
+    const now = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.sponsorship.update({
+        where: { id: row.id },
+        data: { status: "CANCELLED", cancelledAt: now, cancellationReason: reason, reviewedById: req.user?.id || null },
+      });
+      await sponsorship.addSponsorshipLog(tx, {
+        sponsorshipId: row.id,
+        action: "CANCELLED",
+        note: `Parrainage annulé : ${reason}`,
+        actorAdminId: req.user?.id || null,
+      });
+    });
+    return res.json({ ok: true, status: "CANCELLED", statusLabel: sponsorship.STATUS_LABELS.CANCELLED });
+  } catch (error) {
+    return sendError(res, error, "cancelSponsorship error:");
   }
 }
 
@@ -488,5 +486,6 @@ module.exports = {
   requestChanges,
   rejectSponsorship,
   approveSponsorship,
+  cancelSponsorship,
   evaluateNow,
 };

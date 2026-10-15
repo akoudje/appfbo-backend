@@ -2375,6 +2375,7 @@ enum SponsorshipStatus {
   VALIDATED
   REJECTED
   EXPIRED
+  CANCELLED // annulé par le facturier (achat jamais payé)
 }
 
 // Nature de la pièce d'identité présentée par le filleul.
@@ -2409,6 +2410,7 @@ model Sponsorship {
   sponsorGrade    Grade
   sponsorCity     String?
   sponsorPhone    String?
+  sponsorEmail    String? // pour les notifications (jamais pour la connexion)
 
   // Filleul
   lastName          String
@@ -2468,8 +2470,13 @@ model Sponsorship {
   purchaseDeadlineAt   DateTime?
   qualifyingPreorderId String?
 
-  // Panier de l'achat de parrainage (optionnel), saisi par le parrain : [{ productId, qty }].
-  // À l'approbation, il devient une commande brouillon du filleul passée par le parrain.
+  // Panier de l'achat de parrainage (obligatoire), saisi par le parrain : [{ productId, qty }],
+  // avec le paiement et la livraison choisis. À l'approbation, il devient la commande
+  // préfacturée du filleul.
+  purchasePaymentMode        String?
+  purchaseDeliveryMode       String?
+  cancelledAt                DateTime?
+  cancellationReason         String?
   purchaseItems              Json?
   purchaseIndicativeTotalFcfa Int?
   purchasePreorderId         String?

@@ -441,6 +441,9 @@ async function invoiceAndSendPreorder({
   invoiceAmountOverrideInput = "",
   paymentExpiresAtInput = null,
   paymentWindowMinutesInput = null,
+  // true : pas d'envoi SMS/email ici (ex. achat de parrainage, notifié à part
+  // avec le lien de paiement renvoyé dans le résultat).
+  skipNotification = false,
 }) {
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
@@ -692,7 +695,9 @@ async function invoiceAndSendPreorder({
   console.log("[invoiceAndSendPreorder] paymentLink =", paymentLink);
 
   // 5) Envoi notification (fallback SMS -> WhatsApp -> Email) + logs + mise à jour
-  const notificationResult = await sendPreorderNotification({
+  const notificationResult = skipNotification
+    ? { skipped: true, sent: false, smsSent: false, smsQueued: false, attempts: [] }
+    : await sendPreorderNotification({
     preorder: {
       ...invoicedPreorder,
       factureWhatsappTo: whatsappTo,
@@ -710,7 +715,9 @@ async function invoiceAndSendPreorder({
 
   console.log("[invoiceAndSendPreorder] billingMessage =", whatsappMessage);
 
-  const finalMessageStatus = notificationResult?.smsSent
+  const finalMessageStatus = notificationResult?.skipped
+    ? "SKIPPED"
+    : notificationResult?.smsSent
     ? "SENT"
     : notificationResult?.smsQueued
       ? "QUEUED"
@@ -718,7 +725,9 @@ async function invoiceAndSendPreorder({
         ? "SENT"
         : "FAILED";
 
-  const notificationNote = notificationResult?.smsSent
+  const notificationNote = notificationResult?.skipped
+    ? "Precommande facturee (notification envoyee avec l'approbation du parrainage)."
+    : notificationResult?.smsSent
     ? paymentLink
       ? "Precommande facturee, paiement Wave initie et SMS envoye."
       : "Precommande facturee et SMS envoye."

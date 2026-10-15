@@ -213,31 +213,48 @@ async function createRecruitPurchaseDraft({ sponsorship, recruitFbo, countryId, 
 // demande des informations de destinataire).
 const COUNTER_DELIVERY_MODES = new Set(["RETRAIT_SITE_FLP", "LIVRAISON"]);
 
+// Paiement et livraison de l'achat de parrainage : valeurs connues, ouvertes
+// dans le pays. `required` : les deux sont obligatoires.
+async function normalizePurchaseOptions({ countryId, paymentMode, deliveryMode, required = true }) {
+  const { validateCountryOrderOptions } = require("./country-order-options.service");
+  const payment = String(paymentMode || "").trim().toUpperCase();
+  const delivery = String(deliveryMode || "").trim().toUpperCase();
+  if (!payment || !delivery) {
+    if (!required && !payment && !delivery) return { payment: null, delivery: null };
+    throw httpError(400, "Choisissez le mode de paiement et le mode de livraison de l'achat.", "SPONSORSHIP_PURCHASE_OPTIONS_REQUIRED");
+  }
+  if (!COUNTER_DELIVERY_MODES.has(delivery)) {
+    throw httpError(400, "Achat de parrainage : retrait au siège ou livraison uniquement.", "SPONSORSHIP_DELIVERY_MODE_INVALID");
+  }
+  const settings = await prisma.countrySettings.findUnique({ where: { countryId } });
+  const options = validateCountryOrderOptions({ settings, paymentMode: payment, deliveryMode: delivery, requirePaymentMode: true, requireDeliveryMode: true });
+  if (!options.ok) throw httpError(400, options.message || "Mode de paiement ou de livraison non disponible.", "SPONSORSHIP_PURCHASE_OPTIONS_INVALID");
+  return { payment, delivery };
+}
+
 // Achat au comptoir par le facturier : commande du filleul prête à préfacturer.
 // Reprend le brouillon préparé à l'approbation (ou le crée à partir de `items`),
 // fixe paiement et livraison, fige les prix comme une soumission et met la
 // commande en file de facturation (SUBMITTED). Renvoie la commande.
 async function prepareCounterPurchase({ sponsorship, recruitFbo, items, paymentMode, deliveryMode, countryId, countryCode, adminId }) {
-  const { validateCountryOrderOptions } = require("./country-order-options.service");
-  const settings = await prisma.countrySettings.findUnique({ where: { countryId } });
-  const payment = String(paymentMode || "").trim().toUpperCase();
-  const delivery = String(deliveryMode || "").trim().toUpperCase();
-  if (!payment || !delivery) throw httpError(400, "Choisissez le mode de paiement et le mode de livraison.");
-  if (!COUNTER_DELIVERY_MODES.has(delivery)) {
-    throw httpError(400, "Achat au comptoir : retrait au siège ou livraison uniquement (l'expédition se fait depuis la commande).");
-  }
-  const options = validateCountryOrderOptions({ settings, paymentMode: payment, deliveryMode: delivery, requirePaymentMode: true, requireDeliveryMode: true });
-  if (!options.ok) throw httpError(400, options.message || "Mode de paiement ou de livraison non disponible.");
+  const { payment, delivery } = await normalizePurchaseOptions({ countryId, paymentMode, deliveryMode });
 
-  // 1) Commande brouillon : celle préparée à l'approbation, sinon une nouvelle.
+  // 1) Commande brouillon déjà préparée, sinon une nouvelle à partir du panier
+  // (celui passé, ou celui du parrainage). Une commande annulée (ex. préfacture
+  // non payée dans le délai) est remplacée : c'est une relance.
   let preorder = sponsorship.purchasePreorderId
     ? await prisma.preorder.findFirst({ where: { id: sponsorship.purchasePreorderId, countryId } })
     : null;
+  if (preorder?.status === "CANCELLED") preorder = null;
   if (preorder && preorder.status !== "DRAFT") {
     throw httpError(409, `La commande d'achat ${preorder.preorderNumber} est déjà soumise : préfacturez-la depuis la commande.`, "SPONSORSHIP_PURCHASE_ALREADY_SUBMITTED");
   }
   if (!preorder) {
-    const cart = await normalizePurchaseCart(items, { countryId, countryCode, minPurchaseFcfa: Number(sponsorship.minPurchaseFcfa || 0) });
+    const cart = await normalizePurchaseCart(Array.isArray(items) && items.length ? items : sponsorship.purchaseItems, {
+      countryId,
+      countryCode,
+      minPurchaseFcfa: Number(sponsorship.minPurchaseFcfa || 0),
+    });
     if (!cart) throw httpError(400, "Aucun panier préparé : ajoutez les produits de l'achat.");
     const created = await createRecruitPurchaseDraft({
       sponsorship: { ...sponsorship, purchaseItems: cart.items },
@@ -302,7 +319,56 @@ async function prepareCounterPurchase({ sponsorship, recruitFbo, items, paymentM
   return prisma.preorder.findUnique({ where: { id: preorder.id } });
 }
 
+// Achat de parrainage préfacturé (approbation ou relance) : commande du filleul
+// créée à partir du panier, préfacturée avec la référence et le montant AS400,
+// SANS la notification habituelle (le parrainage envoie la sienne, avec le lien
+// de paiement renvoyé ici).
+async function preinvoiceSponsorshipPurchase({ req, sponsorship, recruitFbo, items, paymentMode, deliveryMode, factureReference, invoiceAmountFcfa, note, countryId, countryCode }) {
+  const { invoiceAndSendPreorder } = require("./invoiceAndSendPreorder.service");
+  const { publishRealtimeEvent } = require("./realtime-events.service");
+  const reference = String(factureReference || "").replace(/\s+/g, " ").trim();
+  if (!reference) throw httpError(400, "La référence AS400 est obligatoire.", "AS400_REFERENCE_REQUIRED");
+  const amount = Number(invoiceAmountFcfa);
+  if (!Number.isFinite(amount) || amount <= 0) throw httpError(400, "Le montant AS400 est obligatoire.", "AS400_AMOUNT_REQUIRED");
+  const duplicate = await prisma.preorder.findFirst({
+    where: { countryId, factureReference: { equals: reference, mode: "insensitive" } },
+    select: { preorderNumber: true },
+  });
+  if (duplicate) {
+    throw httpError(409, `Cette référence AS400 est déjà utilisée sur la commande ${duplicate.preorderNumber}.`, "AS400_REFERENCE_DUPLICATE");
+  }
+
+  const order = await prepareCounterPurchase({ sponsorship, recruitFbo, items, paymentMode, deliveryMode, countryId, countryCode, adminId: req.user?.id || null });
+  const result = await invoiceAndSendPreorder({
+    req,
+    preorderId: order.id,
+    actorName: req.user?.fullName || req.user?.email || "admin",
+    actorAdminId: req.user?.id || null,
+    invoiceRefInput: reference,
+    whatsappToInput: sponsorship.sponsorPhone || "",
+    notificationEmailInput: sponsorship.sponsorEmail || undefined,
+    invoiceNote: note || "Achat de parrainage.",
+    billingGradeInput: RECRUIT_GRADE,
+    invoiceAmountOverrideInput: amount,
+    skipNotification: true,
+  });
+  publishRealtimeEvent({
+    countryId,
+    eventKey: "cashier_collect_new",
+    orderId: result.preorder.id,
+    meta: { status: result.preorder.status, paymentStatus: result.preorder.paymentStatus || null },
+  });
+  return {
+    order: result.preorder,
+    paymentLink: result.paymentLinkTarget || null,
+    amountToPayFcfa: result.paymentPricing?.amountToPayFcfa ?? result.preorder.as400InvoiceTotalFcfa ?? result.preorder.totalFcfa,
+    paymentMode: order.preorderPaymentMode,
+  };
+}
+
 module.exports = {
+  normalizePurchaseOptions,
+  preinvoiceSponsorshipPurchase,
   RECRUIT_GRADE,
   getRecruitCatalog,
   normalizePurchaseCart,

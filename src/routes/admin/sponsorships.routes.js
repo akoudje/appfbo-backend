@@ -13,11 +13,12 @@ router.get("/:id/documents/:documentId/file", sponsorshipsController.downloadSpo
 router.get("/:id/agreement.pdf", sponsorshipsController.downloadSponsorshipAgreement);
 router.get("/:id/dossier.pdf", sponsorshipsController.downloadSponsorshipDossier);
 router.get("/:id/catalog", sponsorshipsController.getCounterCatalog);
-// L'achat au comptoir préfacture : il faut aussi le droit de facturer.
+// L'approbation et la relance de l'achat préfacturent : il faut aussi le droit de facturer.
 router.post("/:id/counter-purchase", requirePermission(Permission.INVOICE_CREATE), sponsorshipsController.counterPurchase);
+router.post("/:id/cancel", sponsorshipsController.cancelSponsorship);
 router.post("/:id/request-changes", sponsorshipsController.requestChanges);
 router.post("/:id/reject", sponsorshipsController.rejectSponsorship);
-router.post("/:id/approve", sponsorshipsController.approveSponsorship);
+router.post("/:id/approve", requirePermission(Permission.INVOICE_CREATE), sponsorshipsController.approveSponsorship);
 router.post("/:id/evaluate", sponsorshipsController.evaluateNow);
 
 module.exports = router;
