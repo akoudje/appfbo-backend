@@ -294,16 +294,26 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
     throw new Error("PREORDER_NOT_FOUND");
   }
 
+  return computeCatalogProductsForGrade({
+    countryId: preorder.countryId,
+    countryCode: preorder.country?.code,
+    grade: preorder.fboGrade,
+  });
+}
+
+// Catalogue aux prix d'un grade donné, sans commande (ex. panier de parrainage
+// au grade Client privilégié). Même calcul que pour une commande.
+async function computeCatalogProductsForGrade({ countryId, countryCode, grade }) {
   const discountPercent = await getDiscountPercentByGrade(
-    preorder.fboGrade,
-    preorder.countryId
+    grade,
+    countryId
   );
 
   const products = await prisma.product.findMany({
     where: {
       countryProducts: {
         some: {
-          countryId: preorder.countryId,
+          countryId: countryId,
           actif: true,
         },
       },
@@ -311,10 +321,10 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
     orderBy: { nom: "asc" },
     include: {
       countryProducts: {
-        where: { countryId: preorder.countryId },
+        where: { countryId: countryId },
       },
       gradePrices: {
-        where: { countryId: preorder.countryId },
+        where: { countryId: countryId },
       },
       packagings: {
         where: { actif: true },
@@ -323,14 +333,14 @@ async function computeCatalogProductsForPreorder(preorderId, countryId) {
     },
   });
 
-  const directPricing = usesDirectGradePricing(preorder.country?.code);
+  const directPricing = usesDirectGradePricing(countryCode);
 
   return products
     .map((product) => {
-      const effectiveProduct = applyCountryAvailability(product, preorder.countryId);
+      const effectiveProduct = applyCountryAvailability(product, countryId);
       const prixBaseFcfa = Number(effectiveProduct.prixBaseFcfa || 0);
       const gradePrice = directPricing
-        ? pickGradePrice(product, preorder.countryId, preorder.fboGrade)
+        ? pickGradePrice(product, countryId, grade)
         : null;
 
       if (directPricing && !gradePrice) return null;
@@ -589,6 +599,7 @@ async function computePreorderTotalsForGrade(preorderId, countryId, gradeOverrid
 }
 
 module.exports = {
+  computeCatalogProductsForGrade,
   computePreorderTotals,
   computePreorderTotalsForGrade,
   computeCatalogProductsForPreorder,

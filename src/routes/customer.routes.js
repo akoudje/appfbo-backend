@@ -76,7 +76,9 @@ const sponsorshipSubmitLimiter = createRateLimiter({
   keyFn: (req) => ({ ip: req.ip, fboId: req.customer?.fboId, country: req.countryId }),
 });
 router.get("/me/sponsorships", requireCustomerAuth, customerSponsorshipsController.listMySponsorships);
+router.get("/me/sponsorships/catalog", requireCustomerAuth, customerSponsorshipsController.getSponsorshipCatalog);
 router.get("/me/sponsorships/:id", requireCustomerAuth, customerSponsorshipsController.getMySponsorship);
+router.post("/me/sponsorships/:id/purchase", requireCustomerAuth, customerSponsorshipsController.startSponsorshipPurchase);
 router.post(
   "/me/sponsorships",
   requireCustomerAuth,
