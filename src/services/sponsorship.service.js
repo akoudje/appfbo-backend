@@ -19,6 +19,19 @@ const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "ima
 const MIME_FORMATS = { "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp" };
 const TMP_DIR = path.join(os.tmpdir(), "appfbo-sponsorships");
 
+// Pièces d'identité acceptées (toutes portent la date de naissance).
+const ID_DOCUMENT_LABELS = {
+  CNI: "Carte nationale d'identité",
+  PASSPORT: "Passeport",
+  DRIVING_LICENSE: "Permis de conduire",
+  CONSULAR_CARD: "Carte consulaire",
+  OTHER: "Autre pièce officielle",
+};
+
+// Un email (ou une pièce) ne peut servir qu'à un parrainage en cours, approuvé
+// ou validé ; un parrainage refusé ou expiré le libère.
+const ACTIVE_SPONSORSHIP_STATUSES = ["SUBMITTED", "CHANGES_REQUESTED", "APPROVED_PENDING_PURCHASE", "VALIDATED"];
+
 const STATUS_LABELS = {
   DRAFT: "Brouillon",
   SUBMITTED: "Soumis",
@@ -88,7 +101,9 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
   const lastName = required("lastName", "Le nom");
   const firstNames = required("firstNames", "Le prénom");
   const birthPlace = required("birthPlace", "Le lieu de naissance");
-  const idDocumentNumber = required("idDocumentNumber", "Le n° de CNI");
+  const idDocumentType = String(raw.idDocumentType || "CNI").trim().toUpperCase();
+  if (!ID_DOCUMENT_LABELS[idDocumentType]) errors.push("Le type de pièce d'identité est invalide.");
+  const idDocumentNumber = required("idDocumentNumber", "Le n° de la pièce d'identité");
   const city = required("city", "La ville");
   const mobileRaw = required("mobile", "Le téléphone mobile");
 
@@ -129,6 +144,7 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     firstNames: firstNames.toUpperCase(),
     birthDate,
     birthPlace,
+    idDocumentType,
     idDocumentNumber: idDocumentNumber.toUpperCase().replace(/\s+/g, ""),
     passportNumber: text(raw.passportNumber)?.toUpperCase() || null,
     mobile,
@@ -426,7 +442,32 @@ function startSponsorshipScheduler() {
   return timer;
 }
 
+// true si l'email n'est utilisé par aucun autre parrainage actif (tous pays).
+async function isRecruitEmailAvailable(email, { excludeSponsorshipId = null } = {}) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized) return true;
+  const existing = await prisma.sponsorship.findFirst({
+    where: {
+      email: { equals: normalized, mode: "insensitive" },
+      status: { in: ACTIVE_SPONSORSHIP_STATUSES },
+      ...(excludeSponsorshipId ? { id: { not: excludeSponsorshipId } } : {}),
+    },
+    select: { id: true },
+  });
+  return !existing;
+}
+
+async function assertRecruitEmailAvailable(email, options) {
+  if (!(await isRecruitEmailAvailable(email, options))) {
+    throw httpError(409, "Cet email est déjà utilisé pour un autre parrainage. Utilisez l'email personnel du filleul.", "SPONSORSHIP_DUPLICATE_EMAIL");
+  }
+}
+
 module.exports = {
+  ID_DOCUMENT_LABELS,
+  ACTIVE_SPONSORSHIP_STATUSES,
+  isRecruitEmailAvailable,
+  assertRecruitEmailAvailable,
   MIN_RECRUIT_AGE,
   CONSENT_VERSION,
   STATUS_LABELS,

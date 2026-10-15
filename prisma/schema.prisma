@@ -2374,6 +2374,15 @@ enum SponsorshipStatus {
   EXPIRED
 }
 
+// Nature de la pièce d'identité présentée par le filleul.
+enum SponsorshipIdDocumentType {
+  CNI
+  PASSPORT
+  DRIVING_LICENSE
+  CONSULAR_CARD
+  OTHER
+}
+
 enum SponsorshipDocumentType {
   ID_FRONT
   ID_BACK
@@ -2403,6 +2412,7 @@ model Sponsorship {
   firstNames        String
   birthDate         DateTime @db.Date
   birthPlace        String
+  idDocumentType    SponsorshipIdDocumentType @default(CNI)
   idDocumentNumber  String
   passportNumber    String?
   mobile            String

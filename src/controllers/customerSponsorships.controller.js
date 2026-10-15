@@ -140,9 +140,13 @@ async function submitSponsorship(req, res) {
       minPurchaseFcfa: settings.minPurchaseFcfa,
     });
 
-    const hasIdentity = files.some(({ type }) => ["ID_FRONT", "PASSPORT"].includes(type));
-    if (!hasIdentity) {
-      throw sponsorship.httpError(400, "Joignez la pièce d'identité du filleul (CNI recto ou passeport).", "SPONSORSHIP_DOCUMENT_REQUIRED");
+    await sponsorship.assertRecruitEmailAvailable(data.email);
+
+    // Passeport : page d'identité ; autres pièces (CNI, permis…) : recto.
+    const requiredUpload = data.idDocumentType === "PASSPORT" ? "PASSPORT" : "ID_FRONT";
+    if (!files.some(({ type }) => type === requiredUpload)) {
+      const what = data.idDocumentType === "PASSPORT" ? "la page d'identité du passeport" : `le recto de la pièce (${sponsorship.ID_DOCUMENT_LABELS[data.idDocumentType]})`;
+      throw sponsorship.httpError(400, `Joignez ${what} du filleul.`, "SPONSORSHIP_DOCUMENT_REQUIRED");
     }
 
     // Une même pièce ne peut pas être en cours de parrainage deux fois.
@@ -150,7 +154,7 @@ async function submitSponsorship(req, res) {
       where: {
         countryId: req.countryId,
         idDocumentNumber: data.idDocumentNumber,
-        status: { in: ["SUBMITTED", "CHANGES_REQUESTED", "APPROVED_PENDING_PURCHASE", "VALIDATED"] },
+        status: { in: sponsorship.ACTIVE_SPONSORSHIP_STATUSES },
       },
       select: { id: true, status: true },
     });
@@ -213,6 +217,7 @@ async function resubmitSponsorship(req, res) {
       throw sponsorship.httpError(409, "Ce parrainage ne peut plus être modifié.", "SPONSORSHIP_LOCKED");
     }
     const data = sponsorship.normalizeRecruitPayload(req.body || {}, { countryCode: settings.countryCode });
+    await sponsorship.assertRecruitEmailAvailable(data.email, { excludeSponsorshipId: existing.id });
     const cart = await purchase.normalizePurchaseCart(req.body?.purchaseItems, {
       countryId: req.countryId,
       countryCode: settings.countryCode,
@@ -336,7 +341,29 @@ async function downloadMySponsorshipAgreement(req, res) {
   }
 }
 
+// GET /api/customer/me/sponsorships/check-email?email=…&excludeId=… : l'email est-il
+// libre ? (vérification dès la saisie dans le formulaire ; renvoie un booléen seul).
+async function checkRecruitEmail(req, res) {
+  try {
+    await loadSponsor(req);
+    const email = String(req.query.email || "").trim();
+    if (!email) return res.json({ available: true });
+    let excludeSponsorshipId = null;
+    if (req.query.excludeId) {
+      const own = await prisma.sponsorship.findFirst({
+        where: { id: String(req.query.excludeId), sponsorFboId: req.customer.fboId },
+        select: { id: true },
+      });
+      excludeSponsorshipId = own?.id || null;
+    }
+    return res.json({ available: await sponsorship.isRecruitEmailAvailable(email, { excludeSponsorshipId }) });
+  } catch (error) {
+    return sendError(res, error, "checkRecruitEmail error:");
+  }
+}
+
 module.exports = {
+  checkRecruitEmail,
   downloadMySponsorshipAgreement,
   getSponsorshipCatalog,
   startSponsorshipPurchase,
