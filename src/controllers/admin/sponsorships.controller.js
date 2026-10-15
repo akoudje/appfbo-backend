@@ -126,13 +126,17 @@ async function getSponsorship(req, res) {
         })
       : null;
 
-    // Doublons possibles : même pièce ou même mobile sur un autre parrainage.
+    // Doublons possibles : même pièce, même mobile ou même email sur un autre parrainage.
     const duplicates = await prisma.sponsorship.findMany({
       where: scopeWhere(req, {
         id: { not: row.id },
-        OR: [{ idDocumentNumber: row.idDocumentNumber }, { mobile: row.mobile }],
+        OR: [
+          { idDocumentNumber: row.idDocumentNumber },
+          { mobile: row.mobile },
+          ...(row.email ? [{ email: { equals: row.email, mode: "insensitive" } }] : []),
+        ],
       }),
-      select: { id: true, status: true, lastName: true, firstNames: true, idDocumentNumber: true, mobile: true, createdAt: true },
+      select: { id: true, status: true, lastName: true, firstNames: true, idDocumentNumber: true, mobile: true, email: true, createdAt: true },
       take: 10,
     });
     return res.json({ ...withComputedFields(row), duplicates, purchasePreorder });
