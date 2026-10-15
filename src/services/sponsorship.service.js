@@ -40,6 +40,7 @@ const STATUS_LABELS = {
   VALIDATED: "Parrainage validé",
   REJECTED: "Refusé",
   EXPIRED: "Expiré",
+  CANCELLED: "Annulé",
 };
 
 function httpError(statusCode, message, code) {
@@ -129,6 +130,9 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
   // Email obligatoire : canal de contact du filleul (notifications de commande).
   const email = required("email", "L'email du filleul")?.toLowerCase() || null;
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("L'adresse email est invalide.");
+  // Email du parrain : notifications du parrainage uniquement (jamais la connexion).
+  const sponsorEmail = required("sponsorEmail", "Votre email (parrain)")?.toLowerCase() || null;
+  if (sponsorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sponsorEmail)) errors.push("Votre adresse email (parrain) est invalide.");
 
   const childrenCount = raw.childrenCount === "" || raw.childrenCount == null ? null : Number.parseInt(raw.childrenCount, 10);
   if (childrenCount !== null && (!Number.isFinite(childrenCount) || childrenCount < 0 || childrenCount > 50)) {
@@ -173,6 +177,7 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     asdiSubject: bool(raw.asdiSubject),
     sponsorCity: text(raw.sponsorCity),
     sponsorPhone: sponsorPhone || null,
+    sponsorEmail,
   };
 }
 
@@ -393,13 +398,11 @@ async function evaluateSponsorship(sponsorship, { now = new Date() } = {}) {
         meta: { preorderId: qualifying.id, as400BaseAmountFcfa: as400BaseAmount(qualifying), minPurchaseFcfa: sponsorship.minPurchaseFcfa },
       });
     });
-    const sponsorPhone = await findSponsorPhone(sponsorship);
-    const country = await prisma.country.findUnique({ where: { id: sponsorship.countryId }, select: { code: true } });
-    await notifySms({
-      to: sponsorPhone,
-      countryCode: country?.code || "CIV",
-      message: `FOREVER: parrainage de ${sponsorship.firstNames} ${sponsorship.lastName} valide (FBO ${sponsorship.recruitFboNumero}). Merci !`,
-    });
+    // Parrain et filleul, par SMS et email (chargement différé : dépendance circulaire).
+    const { notifySponsorshipValidated } = require("./sponsorship-notifications.service");
+    await notifySponsorshipValidated({ sponsorshipId: sponsorship.id, preorderNumber: qualifying.preorderNumber }).catch((error) =>
+      console.error("[sponsorship] notification de validation non envoyée", { id: sponsorship.id, error: error?.message }),
+    );
     return { status: "VALIDATED", changed: true };
   }
 

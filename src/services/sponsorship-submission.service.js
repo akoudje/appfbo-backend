@@ -85,6 +85,12 @@ async function createSubmittedSponsorship({ sponsorFbo, settings, countryId, bod
     minPurchaseFcfa: settings.minPurchaseFcfa,
     required: true,
   });
+  // Paiement et livraison de l'achat, choisis par le parrain.
+  const purchaseOptions = await purchase.normalizePurchaseOptions({
+    countryId,
+    paymentMode: body.purchasePaymentMode,
+    deliveryMode: body.purchaseDeliveryMode,
+  });
 
   await sponsorship.assertRecruitEmailAvailable(data.email);
 
@@ -125,6 +131,8 @@ async function createSubmittedSponsorship({ sponsorFbo, settings, countryId, bod
       submittedAt: now,
       purchaseItems: cart.items,
       purchaseIndicativeTotalFcfa: cart.totalFcfa,
+      purchasePaymentMode: purchaseOptions.payment,
+      purchaseDeliveryMode: purchaseOptions.delivery,
     },
   });
 

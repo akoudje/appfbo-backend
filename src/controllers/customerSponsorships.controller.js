@@ -81,6 +81,7 @@ async function listMySponsorships(req, res) {
         rejectionReason: true, reviewNote: true, recruitFboNumero: true, approvedAt: true, purchaseDeadlineAt: true,
         minPurchaseFcfa: true, validatedAt: true, expiredAt: true,
         purchaseItems: true, purchaseIndicativeTotalFcfa: true, purchasePreorderId: true,
+        purchasePaymentMode: true, purchaseDeliveryMode: true, cancelledAt: true, cancellationReason: true,
       },
     });
     return res.json({
@@ -161,6 +162,11 @@ async function resubmitSponsorship(req, res) {
       minPurchaseFcfa: settings.minPurchaseFcfa,
       required: true,
     });
+    const purchaseOptions = await purchase.normalizePurchaseOptions({
+      countryId: req.countryId,
+      paymentMode: req.body?.purchasePaymentMode,
+      deliveryMode: req.body?.purchaseDeliveryMode,
+    });
 
     const documents = [];
     for (const entry of files) {
@@ -175,6 +181,8 @@ async function resubmitSponsorship(req, res) {
           submittedAt: new Date(),
           purchaseItems: cart.items,
           purchaseIndicativeTotalFcfa: cart.totalFcfa,
+          purchasePaymentMode: purchaseOptions.payment,
+          purchaseDeliveryMode: purchaseOptions.delivery,
         },
       });
       if (documents.length) await tx.sponsorshipDocument.createMany({ data: documents });
