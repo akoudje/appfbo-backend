@@ -135,7 +135,7 @@ function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "C
     .fontSize(7.5)
     .fillColor(DARK)
     .text(
-      "Je soussigné, candidat distributeur, m'engage à respecter les conditions énoncées et atteste, moi et/ou mon conjoint, n'avoir jamais signé de contrat Distributeur Forever dans les 24 derniers mois (2 ans). En cas de non-respect de l'une quelconque des conditions indiquées ou si les renseignements indiqués s'avèrent inexacts, FOREVER LIVING PRODUCTS Côte d'Ivoire pourra résilier de plein droit le présent contrat sans préjudice de toutes poursuites par les administrations compétentes. Cette résiliation prendra effet cinq jours après la notification envoyée par lettre recommandée avec accusé de réception.",
+      `Je soussigné, candidat distributeur, m'engage à respecter les conditions énoncées et atteste, moi et/ou mon conjoint, n'avoir jamais signé de contrat Distributeur Forever dans les 24 derniers mois (2 ans). En cas de non-respect de l'une quelconque des conditions indiquées ou si les renseignements indiqués s'avèrent inexacts, FOREVER LIVING PRODUCTS ${countryName} pourra résilier de plein droit le présent contrat sans préjudice de toutes poursuites par les administrations compétentes. Cette résiliation prendra effet cinq jours après la notification envoyée par lettre recommandée avec accusé de réception.`,
       40,
       y,
       { width: 515, align: "justify" },
