@@ -79,6 +79,7 @@ router.get("/me/sponsorships", requireCustomerAuth, customerSponsorshipsControll
 router.get("/me/sponsorships/catalog", requireCustomerAuth, customerSponsorshipsController.getSponsorshipCatalog);
 router.get("/me/sponsorships/:id", requireCustomerAuth, customerSponsorshipsController.getMySponsorship);
 router.post("/me/sponsorships/:id/purchase", requireCustomerAuth, customerSponsorshipsController.startSponsorshipPurchase);
+router.get("/me/sponsorships/:id/agreement.pdf", requireCustomerAuth, customerSponsorshipsController.downloadMySponsorshipAgreement);
 router.post(
   "/me/sponsorships",
   requireCustomerAuth,

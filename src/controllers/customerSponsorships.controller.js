@@ -4,6 +4,31 @@
 const prisma = require("../prisma");
 const sponsorship = require("../services/sponsorship.service");
 const purchase = require("../services/sponsorship-purchase.service");
+const { writeSponsorshipAgreementPdf } = require("../services/sponsorship-agreement-pdf.service");
+
+// Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
+const AGREEMENT_STATUSES = new Set(["APPROVED_PENDING_PURCHASE", "VALIDATED", "EXPIRED"]);
+
+async function sendAgreementPdf(res, row) {
+  if (!row || !AGREEMENT_STATUSES.has(row.status) || !row.recruitFboNumero) {
+    return res.status(409).json({ message: "La fiche cachetée est disponible une fois le parrainage approuvé." });
+  }
+  const [approver, country] = await Promise.all([
+    row.approvedById ? prisma.adminUser.findUnique({ where: { id: row.approvedById }, select: { fullName: true, email: true } }) : null,
+    prisma.country.findUnique({ where: { id: row.countryId }, select: { name: true } }),
+  ]);
+  const fileName = `agrement-${row.recruitFboNumero}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  res.setHeader("Cache-Control", "private, no-store");
+  writeSponsorshipAgreementPdf(res, {
+    sponsorship: row,
+    approverName: approver?.fullName || approver?.email || "",
+    countryName: country?.name || "Côte d'Ivoire",
+  });
+  return undefined;
+}
+
 
 // Champs renvoyés au parrain : jamais l'emplacement de stockage des pièces.
 const DOCUMENT_SELECT = { id: true, type: true, mimeType: true, sizeBytes: true, originalFileName: true, createdAt: true };
@@ -299,7 +324,20 @@ function prismaDbNull() {
   return require("@prisma/client").Prisma.DbNull;
 }
 
+// GET /api/customer/me/sponsorships/:id/agreement.pdf : fiche cachetée (parrain).
+async function downloadMySponsorshipAgreement(req, res) {
+  try {
+    const fbo = await loadSponsor(req);
+    const row = await prisma.sponsorship.findFirst({ where: { id: req.params.id, sponsorFboId: fbo.id, countryId: req.countryId } });
+    if (!row) return res.status(404).json({ message: "Parrainage introuvable." });
+    return await sendAgreementPdf(res, row);
+  } catch (error) {
+    return sendError(res, error, "downloadMySponsorshipAgreement error:");
+  }
+}
+
 module.exports = {
+  downloadMySponsorshipAgreement,
   getSponsorshipCatalog,
   startSponsorshipPurchase,
   listMySponsorships,

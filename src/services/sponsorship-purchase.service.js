@@ -200,9 +200,103 @@ async function createRecruitPurchaseDraft({ sponsorship, recruitFbo, countryId, 
   return { preorder, adjustments };
 }
 
+// Modes de livraison autorisés pour l'achat au comptoir (pas d'expédition, qui
+// demande des informations de destinataire).
+const COUNTER_DELIVERY_MODES = new Set(["RETRAIT_SITE_FLP", "LIVRAISON"]);
+
+// Achat au comptoir par le facturier : commande du filleul prête à préfacturer.
+// Reprend le brouillon préparé à l'approbation (ou le crée à partir de `items`),
+// fixe paiement et livraison, fige les prix comme une soumission et met la
+// commande en file de facturation (SUBMITTED). Renvoie la commande.
+async function prepareCounterPurchase({ sponsorship, recruitFbo, items, paymentMode, deliveryMode, countryId, countryCode, adminId }) {
+  const { validateCountryOrderOptions } = require("./country-order-options.service");
+  const settings = await prisma.countrySettings.findUnique({ where: { countryId } });
+  const payment = String(paymentMode || "").trim().toUpperCase();
+  const delivery = String(deliveryMode || "").trim().toUpperCase();
+  if (!payment || !delivery) throw httpError(400, "Choisissez le mode de paiement et le mode de livraison.");
+  if (!COUNTER_DELIVERY_MODES.has(delivery)) {
+    throw httpError(400, "Achat au comptoir : retrait au siège ou livraison uniquement (l'expédition se fait depuis la commande).");
+  }
+  const options = validateCountryOrderOptions({ settings, paymentMode: payment, deliveryMode: delivery, requirePaymentMode: true, requireDeliveryMode: true });
+  if (!options.ok) throw httpError(400, options.message || "Mode de paiement ou de livraison non disponible.");
+
+  // 1) Commande brouillon : celle préparée à l'approbation, sinon une nouvelle.
+  let preorder = sponsorship.purchasePreorderId
+    ? await prisma.preorder.findFirst({ where: { id: sponsorship.purchasePreorderId, countryId } })
+    : null;
+  if (preorder && preorder.status !== "DRAFT") {
+    throw httpError(409, `La commande d'achat ${preorder.preorderNumber} est déjà soumise : préfacturez-la depuis la commande.`, "SPONSORSHIP_PURCHASE_ALREADY_SUBMITTED");
+  }
+  if (!preorder) {
+    const cart = await normalizePurchaseCart(items, { countryId, countryCode, minPurchaseFcfa: Number(sponsorship.minPurchaseFcfa || 0) });
+    if (!cart) throw httpError(400, "Aucun panier préparé : ajoutez les produits de l'achat.");
+    const created = await createRecruitPurchaseDraft({
+      sponsorship: { ...sponsorship, purchaseItems: cart.items },
+      recruitFbo,
+      countryId,
+      countryCode,
+    });
+    if (!created?.preorder) throw httpError(409, "Aucun produit du panier n'est disponible en stock.");
+    preorder = created.preorder;
+    await prisma.sponsorship.update({ where: { id: sponsorship.id }, data: { purchasePreorderId: preorder.id } });
+  }
+
+  // 2) Paiement / livraison, puis prix figés comme lors d'une soumission.
+  await prisma.preorder.update({ where: { id: preorder.id }, data: { preorderPaymentMode: payment, deliveryMode: delivery } });
+  const summary = await computePreorderTotals(preorder.id, countryId);
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    for (const it of summary.items) {
+      await tx.preorderItem.update({
+        where: { preorderId_productId: { preorderId: preorder.id, productId: it.productId } },
+        data: {
+          productSkuSnapshot: it.sku || null,
+          productNameSnapshot: it.nom || null,
+          prixCatalogueFcfa: it.prixCatalogueFcfa != null ? it.prixCatalogueFcfa : it.prixUnitaireFcfa,
+          discountPercent: String(Number(it.discountPercent != null ? it.discountPercent : 0).toFixed(2)),
+          prixUnitaireFcfa: it.prixUnitaireFcfa,
+          ccUnitaire: String(Number(it.ccUnitaire || 0).toFixed(3)),
+          poidsUnitaireKg: String(Number(it.poidsUnitaireKg || 0).toFixed(3)),
+          lineTotalFcfa: it.lineTotalFcfa,
+          lineTotalCc: String(Number(it.lineTotalCc || 0).toFixed(3)),
+          lineTotalPoids: String(Number(it.lineTotalPoids || 0).toFixed(3)),
+        },
+      });
+    }
+    await tx.preorder.update({
+      where: { id: preorder.id },
+      data: {
+        status: "SUBMITTED",
+        paymentStatus: "UNPAID",
+        billingWorkStatus: "QUEUED",
+        billingQueueEnteredAt: now,
+        submittedAt: now,
+        factureWhatsappTo: sponsorship.sponsorPhone || null,
+        totalCc: String(Number(summary.totals.totalCc || 0).toFixed(3)),
+        totalPoidsKg: String(Number(summary.totals.totalPoidsKg || 0).toFixed(3)),
+        totalProduitsFcfa: summary.totals.totalProduitsFcfa || 0,
+        fraisLivraisonFcfa: summary.totals.fraisLivraisonFcfa || 0,
+        emballageFcfa: summary.totals.emballageFcfa || 0,
+        totalFcfa: summary.totals.totalFcfa || 0,
+      },
+    });
+    await tx.preorderLog.create({
+      data: {
+        preorderId: preorder.id,
+        action: "SUBMIT",
+        note: "Achat de parrainage soumis au comptoir par le facturier.",
+        meta: { source: "SPONSORSHIP_COUNTER_PURCHASE", sponsorshipId: sponsorship.id, preorderPaymentMode: payment, deliveryMode: delivery },
+        actorAdminId: adminId || null,
+      },
+    });
+  });
+  return prisma.preorder.findUnique({ where: { id: preorder.id } });
+}
+
 module.exports = {
   RECRUIT_GRADE,
   getRecruitCatalog,
   normalizePurchaseCart,
   createRecruitPurchaseDraft,
+  prepareCounterPurchase,
 };
