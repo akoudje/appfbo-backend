@@ -391,17 +391,43 @@ async function downloadSponsorshipDossier(req, res) {
         console.error("[sponsorship] pièce non récupérée pour le dossier", { id: document.id, error: error?.message });
       }
     }
+    // Achat de parrainage : commande liée (lignes réellement commandées) et,
+    // si différente, commande qui a validé le parrainage.
+    const ORDER_SELECT = {
+      id: true, preorderNumber: true, status: true, paymentStatus: true, factureReference: true,
+      as400InvoiceTotalFcfa: true, totalFcfa: true, paidAt: true, invoicedAt: true,
+    };
+    const [order, qualifyingOrder] = await Promise.all([
+      row.purchasePreorderId
+        ? prisma.preorder.findFirst({
+            where: { id: row.purchasePreorderId, countryId: row.countryId },
+            select: { ...ORDER_SELECT, items: { select: { qty: true, productSkuSnapshot: true, productNameSnapshot: true, prixUnitaireFcfa: true, lineTotalFcfa: true, product: { select: { sku: true, nom: true } } } } },
+          })
+        : null,
+      row.qualifyingPreorderId
+        ? prisma.preorder.findFirst({ where: { id: row.qualifyingPreorderId, countryId: row.countryId }, select: ORDER_SELECT })
+        : null,
+    ]);
+    const orderLines = (order?.items || []).map((item) => ({
+      sku: item.productSkuSnapshot || item.product?.sku,
+      nom: item.productNameSnapshot || item.product?.nom,
+      qty: item.qty,
+      unitFcfa: item.prixUnitaireFcfa != null ? Number(item.prixUnitaireFcfa) : null,
+      totalFcfa: item.lineTotalFcfa,
+    }));
+
     const pdf = await buildSponsorshipDossierPdf({
       sponsorship: row,
       approverName: approver?.fullName || approver?.email || "",
       countryName: country?.name || "Côte d'Ivoire",
       documents,
+      purchase: { order, orderLines, qualifyingOrder },
     });
 
     await sponsorship.addSponsorshipLog(null, {
       sponsorshipId: row.id,
       action: "DOSSIER_EXPORTED",
-      note: `Dossier exporté (fiche + ${documents.length} pièce(s) d'identité).`,
+      note: `Dossier exporté (fiche, achat${order ? ` ${order.preorderNumber}` : ""} + ${documents.length} pièce(s) d'identité).`,
       meta: { documents: documents.length, missing: row.documents.length - documents.length },
       actorAdminId: req.user?.id || null,
     });

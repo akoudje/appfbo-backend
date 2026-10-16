@@ -190,6 +190,128 @@ function buildSponsorshipAgreementPdfBuffer(options) {
   });
 }
 
+const fcfa = (value) => `${new Intl.NumberFormat("fr-FR").format(Math.round(Number(value) || 0)).replace(/\u202f|\u00a0/g, " ")} F`;
+
+const PAYMENT_LABELS = {
+  WAVE: "Wave",
+  BANK_TRANSFER: "Virement bancaire",
+  ECOBANK_PAY: "Ecobank Pay",
+  PI_SPI: "PI SPI",
+  ESPECES: "Espèces",
+  ORANGE_MONEY: "Orange Money",
+};
+const DELIVERY_LABELS = { RETRAIT_SITE_FLP: "Retrait au siège", LIVRAISON: "Livraison" };
+const ORDER_STATUS_LABELS = {
+  DRAFT: "Brouillon",
+  SUBMITTED: "Soumise",
+  INVOICED: "Préfacturée",
+  PAID: "Payée",
+  READY: "Prête",
+  FULFILLED: "Servie",
+  CANCELLED: "Annulée",
+};
+const PAYMENT_STATUS_LABELS = { UNPAID: "Non payée", PAID: "Payée", PARTIAL: "Partiellement payée", REFUNDED: "Remboursée" };
+
+// Tableau produits : [{ sku, nom, qty, unitFcfa, totalFcfa }] ; renvoie le y final.
+function drawLinesTable(doc, lines, y) {
+  const cols = [
+    { label: "Réf.", x: 40, w: 55 },
+    { label: "Produit", x: 95, w: 245 },
+    { label: "Qté", x: 340, w: 40, align: "right" },
+    { label: "Prix unit.", x: 385, w: 80, align: "right" },
+    { label: "Total", x: 470, w: 85, align: "right" },
+  ];
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(GREY);
+  cols.forEach((c) => doc.text(c.label.toUpperCase(), c.x, y, { width: c.w, align: c.align || "left" }));
+  y += 14;
+  doc.moveTo(40, y - 3).lineTo(555, y - 3).lineWidth(0.5).strokeColor("#d1d5db").stroke();
+  doc.font("Helvetica").fontSize(9).fillColor(DARK);
+  for (const line of lines) {
+    if (y > 760) {
+      doc.addPage();
+      y = 40;
+    }
+    const values = [line.sku || "", line.nom || "", String(line.qty ?? ""), line.unitFcfa != null ? fcfa(line.unitFcfa) : "", fcfa(line.totalFcfa)];
+    cols.forEach((c, i) => doc.text(values[i], c.x, y, { width: c.w, align: c.align || "left", height: 12, ellipsis: true }));
+    y += 15;
+  }
+  return y;
+}
+
+// Page « Achat de parrainage » du dossier : panier du parrain, paiement choisi
+// et commande réelle (préfacture, montant AS400, paiement). `purchase` :
+// { order, orderLines, qualifyingOrder } (peut être vide).
+function drawPurchasePage(doc, { sponsorship: s, purchase = {} }) {
+  doc.addPage();
+  doc.font("Helvetica-Bold").fontSize(15).fillColor(DARK).text("Achat de parrainage", 40, 40);
+  doc
+    .font("Helvetica")
+    .fontSize(8.5)
+    .fillColor(GREY)
+    .text(`${s.lastName} ${s.firstNames}${s.recruitFboNumero ? ` · FBO ${s.recruitFboNumero}` : ""} · parrain ${s.sponsorNom} (${s.sponsorNumero}) · dossier ${s.id}`, 40, 60);
+
+  let y = 85;
+  field(doc, { x: 40, y, w: 255, label: "Achat minimum", value: s.minPurchaseFcfa != null ? fcfa(s.minPurchaseFcfa) : "Fixé à l'approbation" });
+  field(doc, { x: 300, y, w: 255, label: "Paiement choisi", value: PAYMENT_LABELS[s.purchasePaymentMode] || s.purchasePaymentMode || "—" });
+  y += 24;
+  field(doc, { x: 40, y, w: 255, label: "Livraison", value: DELIVERY_LABELS[s.purchaseDeliveryMode] || s.purchaseDeliveryMode || "—" });
+  field(doc, { x: 300, y, w: 255, label: "Parrainage validé", value: s.validatedAt ? `le ${formatDate(s.validatedAt)}` : "Non (en attente de paiement)" });
+  y += 36;
+
+  // 1) Panier composé par le parrain à la soumission.
+  sectionTitle(doc, "Panier du parrain (prix Client privilégié indicatifs)", y);
+  y += 26;
+  const cart = Array.isArray(s.purchaseItems) ? s.purchaseItems : [];
+  if (cart.length) {
+    y = drawLinesTable(
+      doc,
+      cart.map((l) => ({ sku: l.sku, nom: l.nom, qty: l.qty, unitFcfa: l.prixFcfa, totalFcfa: l.lineTotalFcfa })),
+      y,
+    );
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(DARK).text(`Total indicatif : ${fcfa(s.purchaseIndicativeTotalFcfa)}`, 340, y + 4, { width: 215, align: "right" });
+    y += 26;
+  } else {
+    doc.font("Helvetica").fontSize(9.5).fillColor(GREY).text("Aucun panier enregistré.", 40, y);
+    y += 22;
+  }
+
+  // 2) Commande réelle (préfacturée à l'approbation ou relancée).
+  if (y > 640) {
+    doc.addPage();
+    y = 40;
+  }
+  sectionTitle(doc, "Commande d'achat", y);
+  y += 26;
+  const order = purchase.order;
+  if (!order) {
+    doc.font("Helvetica").fontSize(9.5).fillColor(GREY).text("Aucune commande d'achat créée pour l'instant.", 40, y);
+    return;
+  }
+  field(doc, { x: 40, y, w: 255, label: "N° de commande", value: order.preorderNumber });
+  field(doc, { x: 300, y, w: 255, label: "Statut", value: ORDER_STATUS_LABELS[order.status] || order.status });
+  y += 24;
+  field(doc, { x: 40, y, w: 255, label: "Réf. AS400", value: order.factureReference || "—" });
+  field(doc, { x: 300, y, w: 255, label: "Montant AS400", value: order.as400InvoiceTotalFcfa != null ? fcfa(order.as400InvoiceTotalFcfa) : "—" });
+  y += 24;
+  field(doc, { x: 40, y, w: 255, label: "Paiement", value: PAYMENT_STATUS_LABELS[order.paymentStatus] || order.paymentStatus });
+  field(doc, { x: 300, y, w: 255, label: "Payée le", value: order.paidAt ? formatDate(order.paidAt) : "—" });
+  y += 30;
+  const lines = purchase.orderLines || [];
+  if (lines.length) {
+    y = drawLinesTable(doc, lines, y);
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(DARK).text(`Total commande : ${fcfa(order.totalFcfa)}`, 340, y + 4, { width: 215, align: "right" });
+    y += 26;
+  }
+  const qualifying = purchase.qualifyingOrder;
+  if (qualifying && qualifying.id !== order.id) {
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .fillColor(DARK)
+      .text(`Parrainage validé par la commande ${qualifying.preorderNumber} (réf. AS400 ${qualifying.factureReference || "—"}, ${fcfa(qualifying.as400InvoiceTotalFcfa ?? qualifying.totalFcfa)}).`, 40, y + 4, { width: 515 });
+  }
+}
+
 const DOCUMENT_PAGE_LABELS = {
   ID_FRONT: "recto",
   ID_BACK: "verso",
@@ -197,10 +319,11 @@ const DOCUMENT_PAGE_LABELS = {
   OTHER: "autre pièce",
 };
 
-// Dossier de traitement : fiche + une page par image de la pièce d'identité,
-// puis les pièces envoyées en PDF ajoutées telles quelles. `documents` :
-// [{ type, mimeType, originalFileName, buffer }]. Renvoie un Buffer PDF.
-async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countryName, documents = [] }) {
+// Dossier de traitement : fiche + achat de parrainage + une page par image de
+// la pièce d'identité, puis les pièces envoyées en PDF ajoutées telles quelles.
+// `documents` : [{ type, mimeType, originalFileName, buffer }] ; `purchase` :
+// voir drawPurchasePage. Renvoie un Buffer PDF.
+async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countryName, documents = [], purchase = {} }) {
   const doc = newDocument(s);
   const chunks = [];
   doc.on("data", (chunk) => chunks.push(chunk));
@@ -210,6 +333,7 @@ async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countr
   });
 
   drawAgreementPage(doc, { sponsorship: s, approverName, countryName });
+  drawPurchasePage(doc, { sponsorship: s, purchase });
 
   const pieceLabel = ID_DOCUMENT_SHORT[s.idDocumentType] || "Pièce";
   const pdfAttachments = [];
