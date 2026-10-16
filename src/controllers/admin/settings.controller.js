@@ -194,6 +194,8 @@ async function getCountrySettings(req, res) {
         preinvoicedAutoReminderAfterHours: true,
         preinvoicedAutoCancelAfterMinutes: true,
         preinvoicedAutoReminderAfterMinutes: true,
+        sponsorshipEnabled: true,
+        sponsorshipMinPurchaseFcfa: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -257,6 +259,8 @@ async function getCountrySettings(req, res) {
         preinvoicedAutoReminderAfterHours: 1,
         preinvoicedAutoCancelAfterMinutes: 120,
         preinvoicedAutoReminderAfterMinutes: 60,
+        sponsorshipEnabled: false,
+        sponsorshipMinPurchaseFcfa: 53000,
         createdAt: null,
         updatedAt: null,
       });
@@ -334,6 +338,8 @@ async function updateCountrySettings(req, res) {
       preinvoicedAutoReminderAfterHours,
       preinvoicedAutoCancelAfterMinutes,
       preinvoicedAutoReminderAfterMinutes,
+      sponsorshipEnabled,
+      sponsorshipMinPurchaseFcfa,
     } = req.body || {};
 
     const validationErrors = validateCountrySettings(req.body || {}, existingSettings || {});
@@ -614,6 +620,16 @@ async function updateCountrySettings(req, res) {
       data.fboHelpTopics = sanitizeFboHelpTopics(fboHelpTopics);
     }
 
+    // Parrainage en ligne : ouverture et achat minimum de validation.
+    if (sponsorshipEnabled !== undefined) data.sponsorshipEnabled = Boolean(sponsorshipEnabled);
+    if (sponsorshipMinPurchaseFcfa !== undefined) {
+      const parsed = Number.parseInt(sponsorshipMinPurchaseFcfa, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({ message: "sponsorshipMinPurchaseFcfa invalide" });
+      }
+      data.sponsorshipMinPurchaseFcfa = parsed;
+    }
+
     const updated = await persistCountrySettings(prisma, req, existingSettings, {
       where: { countryId },
       update: data,
@@ -714,6 +730,8 @@ async function updateCountrySettings(req, res) {
             data.preinvoicedAutoReminderAfterMinutes !== undefined
               ? data.preinvoicedAutoReminderAfterMinutes
               : 60,
+          sponsorshipEnabled: data.sponsorshipEnabled ?? false,
+          sponsorshipMinPurchaseFcfa: data.sponsorshipMinPurchaseFcfa ?? 53000,
       },
       select: {
         id: true,
@@ -771,6 +789,8 @@ async function updateCountrySettings(req, res) {
         preinvoicedAutoReminderAfterHours: true,
         preinvoicedAutoCancelAfterMinutes: true,
         preinvoicedAutoReminderAfterMinutes: true,
+        sponsorshipEnabled: true,
+        sponsorshipMinPurchaseFcfa: true,
         createdAt: true,
         updatedAt: true,
       },

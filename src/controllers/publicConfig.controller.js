@@ -179,6 +179,7 @@ async function getStorefrontConfig(req, res) {
           supportPhone: true,
           pickupAddress: true,
           defaultPointDeVente: true,
+          sponsorshipEnabled: true,
           enableWave: true,
           enableOrangeMoney: true,
           enableCash: true,
@@ -305,6 +306,8 @@ async function getStorefrontConfig(req, res) {
         sidePanels: marketing?.sidePanelsJson || DEFAULT_MARKETING.sidePanels,
         publishing: marketing?.publishingJson || DEFAULT_MARKETING.publishing,
       },
+      // Parrainage en ligne ouvert dans ce pays (réglage admin).
+      sponsorship: { enabled: Boolean(settings?.sponsorshipEnabled) },
       // Accueil : section « Sélection produits » ({ enabled, productIds }).
       home: {
         featuredProducts: normalizeHomeFeatured(marketing?.homeFeaturedJson),

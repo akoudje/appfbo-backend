@@ -13,6 +13,7 @@ function validateCountrySettings(patch, existing = {}) {
     preinvoicedAutoReminderAfterHours: [1, 719],
     preinvoicedAutoCancelAfterMinutes: [1, 43200],
     preinvoicedAutoReminderAfterMinutes: [1, 43199],
+    sponsorshipMinPurchaseFcfa: [0, 100000000],
   };
   for (const [key, [min, max]] of Object.entries(numbers))
     if (
@@ -37,6 +38,7 @@ function validateCountrySettings(patch, existing = {}) {
     "enablePickup",
     "themeSliderEnabled",
     "themeSidePanelsEnabled",
+    "sponsorshipEnabled",
   ];
   for (const key of booleans)
     if (key in patch && typeof patch[key] !== "boolean")
