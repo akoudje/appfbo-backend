@@ -664,3 +664,25 @@ test("repeating a free purchase does not duplicate tickets or confirmation email
 
 test('a paid purchase without issued tickets can be repaired without another checkout',async()=>{const f=fixture(1),r=await f.buy();f.state.orders[0].status='PAID';f.state.orders[0].paymentStatus='SUCCEEDED';const result=await f.wave.syncTicketWavePaymentStatus({req:f.request(),orderNumber:r.body.orderNumber});assert.equal(result.order.tickets.length,1);assert.equal(f.state.providerCreates,1);assert.equal(f.state.emails,1);});
 test('paid purchases awaiting ticket issuance still consume their places',async()=>{const f=fixture(1);await f.buy();f.state.orders[0].status='PAID';f.state.orders[0].ticketIssueCode=null;const r=await f.buy({clientRequestId:'request_test_000002'});assert.equal(r.code,409);});
+
+test("configured 1000-ticket limit is accepted by quote and purchase", async () => {
+  const f = fixture(2000);
+  f.state.types[0].maxPerOrder = 1000;
+  const quote = response();
+  await f.api.quote(f.request({ quantity: 1000 }), quote);
+  assert.equal(quote.code, 200);
+  assert.equal(quote.body.quantity, 1000);
+  const purchase = await f.buy({ quantity: 1000 });
+  assert.equal(purchase.code, 201);
+  assert.equal(purchase.body.quantity, 1000);
+});
+test("configured limit and remaining stock still reject excess bulk purchases", async () => {
+  const f = fixture(2000);
+  f.state.types[0].maxPerOrder = 1000;
+  assert.equal((await f.buy({ quantity: 1001 })).code, 400);
+  assert.equal(f.state.orders.length, 0);
+  const limited = fixture(900);
+  limited.state.types[0].maxPerOrder = 1000;
+  assert.equal((await limited.buy({ quantity: 1000 })).code, 409);
+  assert.equal(limited.state.orders.length, 0);
+});

@@ -7,9 +7,9 @@ function quantity(value) {
     !/^\d+$/.test(String(value ?? "")) ||
     !Number.isInteger(Number(value)) ||
     Number(value) < 1 ||
-    Number(value) > 50
+    Number(value) > 1000
   )
-    fail("Choisissez de 1 à 50 billets.");
+    fail("Choisissez de 1 à 1000 billets.");
   return Number(value);
 }
 function graceMs() {
