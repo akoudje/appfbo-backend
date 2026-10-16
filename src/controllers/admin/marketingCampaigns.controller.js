@@ -1,3 +1,4 @@
+const { isEligibleRecipient } = require("../../services/marketing-sms-policy");
 const crypto = require("crypto");
 const multer = require("multer");
 const prisma = require("../../prisma");
@@ -860,7 +861,7 @@ async function sendSmsCampaignTest(req, res) {
     const updatedCampaign = {
       ...campaign,
       testPhone,
-      lastTestAt: new Date().toISOString(),
+      lastTestAt: result.accepted ? new Date().toISOString() : null,
       updatedAt: new Date().toISOString(),
     };
     payload.smsCampaigns[campaignIndex] = normalizeSmsCampaign(updatedCampaign, campaignIndex);
@@ -901,14 +902,7 @@ async function processCampaignSends({ countryId, campaignId, actorEmail, failedO
         continue;
       }
 
-      const recipientStatus = String(recipient.status || "").toUpperCase();
-
-      if (failedOnly && recipientStatus !== "FAILED") {
-        nextRecipients.push(recipient);
-        continue;
-      }
-
-      if (["SENT", "SKIPPED"].includes(recipientStatus)) {
+      if (!isEligibleRecipient(recipient, failedOnly)) {
         nextRecipients.push(recipient);
         continue;
       }
@@ -1014,13 +1008,7 @@ async function sendSmsCampaign(req, res) {
     }
 
     const failedOnly = Boolean(req.body?.failedOnly);
-    const eligibleCount = campaign.recipients.filter(
-      (recipient) =>
-        recipient.phoneNormalized &&
-        (failedOnly
-          ? String(recipient.status || "").toUpperCase() === "FAILED"
-          : !["SENT", "SKIPPED"].includes(String(recipient.status || "").toUpperCase())),
-    ).length;
+    const eligibleCount = campaign.recipients.filter((recipient) => isEligibleRecipient(recipient, failedOnly)).length;
 
     if (!eligibleCount) {
       return res.status(400).json({
