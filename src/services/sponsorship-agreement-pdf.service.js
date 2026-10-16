@@ -91,22 +91,11 @@ function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "C
   row({ label: "Nom", value: s.lastName }, { label: "Prénoms", value: s.firstNames });
   row({ label: "Nom du conjoint", value: s.spouseLastName }, { label: "Prénoms conjoint", value: s.spouseFirstNames });
   row({ label: "Adresse (commune / quartier)", value: s.addressArea }, { label: "Ville", value: s.city });
-  row({ label: "Boîte postale", value: s.postalBox }, { label: "Pays", value: s.homeCountry });
   row({ label: "Mobile", value: s.mobile }, { label: "Email", value: s.email });
-  row({ label: "Situation de famille", value: s.maritalStatus }, { label: "Nombre d'enfants", value: s.childrenCount ?? "" });
+  row({ label: "Situation de famille", value: s.maritalStatus }, { label: "Pays", value: s.homeCountry });
   row({ label: "Date de naissance", value: formatDate(s.birthDate) }, { label: "Lieu de naissance", value: s.birthPlace });
   row({ label: "Pièce d'identité", value: ID_DOCUMENT_SHORT[s.idDocumentType] || "CNI" }, { label: "N° de la pièce", value: s.idDocumentNumber });
   row({ label: "Naissance conjoint", value: formatDate(s.spouseBirthDate) }, { label: "Lieu naiss. conjoint", value: s.spouseBirthPlace });
-  row({ label: "N° RIB", value: s.bankRib }, null);
-
-  // Registre de commerce
-  y += 4;
-  doc.font("Helvetica-Bold").fontSize(9).fillColor(DARK).text("Si vous avez un numéro de Registre de Commerce", 40, y);
-  y += 16;
-  row({ label: "Profession", value: s.profession }, { label: "Secteur d'activité", value: s.businessSector });
-  row({ label: "N° Registre Commerce", value: s.tradeRegisterNumber }, { label: "Date / lieu", value: [formatDate(s.tradeRegisterDate), s.tradeRegisterPlace].filter(Boolean).join(" - ") });
-  const regime = (v) => (v === true ? "SOUMIS" : v === false ? "NON SOUMIS" : "");
-  row({ label: "Régime de TVA", value: regime(s.vatSubject) }, { label: "Régime d'ASDI", value: regime(s.asdiSubject) });
 
   // Parrain
   y += 8;

@@ -88,7 +88,6 @@ const text = (value) => {
   const trimmed = String(value ?? "").trim();
   return trimmed || null;
 };
-const bool = (value) => (value === true || value === "true" ? true : value === false || value === "false" ? false : null);
 
 // Normalise et contrôle la fiche saisie par le parrain. Lève une 400 lisible.
 // Code pays interne -> code ISO alpha-2 (pays de résidence du filleul).
@@ -134,15 +133,9 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
   const sponsorEmail = required("sponsorEmail", "Votre email (parrain)")?.toLowerCase() || null;
   if (sponsorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sponsorEmail)) errors.push("Votre adresse email (parrain) est invalide.");
 
-  const childrenCount = raw.childrenCount === "" || raw.childrenCount == null ? null : Number.parseInt(raw.childrenCount, 10);
-  if (childrenCount !== null && (!Number.isFinite(childrenCount) || childrenCount < 0 || childrenCount > 50)) {
-    errors.push("Le nombre d'enfants est invalide.");
-  }
 
   const spouseBirthDate = raw.spouseBirthDate ? parseDateOnly(raw.spouseBirthDate) : null;
   if (raw.spouseBirthDate && !spouseBirthDate) errors.push("La date de naissance du conjoint est invalide.");
-  const tradeRegisterDate = raw.tradeRegisterDate ? parseDateOnly(raw.tradeRegisterDate) : null;
-  if (raw.tradeRegisterDate && !tradeRegisterDate) errors.push("La date du registre de commerce est invalide.");
 
   if (errors.length) throw httpError(400, errors.join(" "), "SPONSORSHIP_INVALID");
 
@@ -158,23 +151,12 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     email,
     addressArea: text(raw.addressArea),
     city,
-    postalBox: text(raw.postalBox),
-    zoneCode: text(raw.zoneCode),
     homeCountry: text(raw.homeCountry) || COUNTRY_ALPHA2[countryCode] || "CI",
     maritalStatus: text(raw.maritalStatus),
-    childrenCount,
-    bankRib: text(raw.bankRib),
     spouseLastName: text(raw.spouseLastName)?.toUpperCase() || null,
     spouseFirstNames: text(raw.spouseFirstNames)?.toUpperCase() || null,
     spouseBirthDate,
     spouseBirthPlace: text(raw.spouseBirthPlace),
-    profession: text(raw.profession),
-    businessSector: text(raw.businessSector),
-    tradeRegisterNumber: text(raw.tradeRegisterNumber),
-    tradeRegisterDate,
-    tradeRegisterPlace: text(raw.tradeRegisterPlace),
-    vatSubject: bool(raw.vatSubject),
-    asdiSubject: bool(raw.asdiSubject),
     sponsorCity: text(raw.sponsorCity),
     sponsorPhone: sponsorPhone || null,
     sponsorEmail,
