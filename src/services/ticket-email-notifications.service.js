@@ -45,7 +45,7 @@ function buildTicketEmailText({ order, tickets, ticketUrl }) {
       `${index + 1}. ${ticket.ticketType?.label || order.ticketType?.label || "Ticket"} - ${ticket.ticketCode}`
     )),
     "",
-    ticketUrl ? `Afficher et télécharger vos tickets : ${ticketUrl}` : "",
+    ticketUrl ? `Afficher vos billets : ${ticketUrl}` : "",
     "",
     "Présentez le QR code de chaque ticket à l'entrée.",
     "Chaque ticket possède un QR code unique. Une fois scanné, il ne peut plus être réutilisé.",
@@ -89,7 +89,7 @@ function buildTicketEmailHtml({ order, tickets, ticketUrl }) {
       </thead>
       <tbody>${ticketRows}</tbody>
     </table>
-    ${renderButton({ href: ticketUrl, label: "Afficher et télécharger mes tickets" })}
+    ${renderButton({ href: ticketUrl, label: "Afficher mes billets" })}
     <p style="margin:18px 0 0;color:#6b6b6b;font-size:13px;line-height:1.6;">
       Présentez le QR code de chaque ticket à l'entrée. Chaque QR code est unique et valable pour une seule entrée.
     </p>
