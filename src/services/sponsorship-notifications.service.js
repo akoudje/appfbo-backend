@@ -8,7 +8,7 @@
 
 const prisma = require("../prisma");
 const { sendEmail } = require("./email.service");
-const { notifySms, addSponsorshipLog, findSponsorPhone } = require("./sponsorship.service");
+const { addSponsorshipLog, findSponsorPhone } = require("./sponsorship.service");
 const { buildSponsorshipAgreementPdfBuffer } = require("./sponsorship-agreement-pdf.service");
 
 const fcfa = (value) => `${new Intl.NumberFormat("fr-FR").format(Math.round(Number(value) || 0))} F`;
@@ -67,8 +67,22 @@ async function safeEmail(args, context) {
 
 async function safeSms({ to, message, countryCode }) {
   if (!to) return { channel: "SMS", to: null, ok: false, skipped: true };
-  await notifySms({ to, message, countryCode });
-  return { channel: "SMS", to, ok: true };
+  try {
+    const { sendSms } = require("./sms.service");
+    const result = await sendSms({ to, message, countryCode });
+    return { channel: "SMS", to, ok: Boolean(result?.accepted), error: result?.accepted ? undefined : result?.errorMessage || result?.errorCode };
+  } catch (error) {
+    console.error("[sponsorship] SMS non envoyé", { to, error: error?.message || String(error) });
+    return { channel: "SMS", to, ok: false, error: error?.message };
+  }
+}
+
+// Résumé lisible des envois pour l'historique du parrainage.
+function summarizeResults(results) {
+  const who = { 0: "filleul", 1: "parrain", 2: "filleul", 3: "parrain" };
+  return results
+    .map((r, i) => `${r.channel === "SMS" ? "SMS" : "email"} ${who[i]} : ${r.skipped ? "pas de destinataire" : r.ok ? "envoyé" : `échec${r.error ? ` (${r.error})` : ""}`}`)
+    .join(" · ");
 }
 
 async function countryInfo(countryId) {
@@ -179,7 +193,7 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink }) 
   await addSponsorshipLog(null, {
     sponsorshipId: s.id,
     action: "APPROVAL_NOTIFIED",
-    note: `Notification d'approbation (commande ${order.preorderNumber}) : ${results.filter((r) => r.ok).length} envoi(s) réussi(s).`,
+    note: `Notification d'approbation (commande ${order.preorderNumber}) : ${summarizeResults(results)}.`,
     meta: { results, paymentLink: paymentLink || null },
   }).catch(() => {});
   return results;
@@ -215,4 +229,68 @@ async function notifySponsorshipValidated({ sponsorshipId, preorderNumber }) {
   ]);
 }
 
-module.exports = { notifySponsorshipApproved, notifySponsorshipValidated };
+// Demande de complément ou refus : motif envoyé au filleul ET au parrain (SMS +
+// email), résultat des envois journalisé. `kind` : "CHANGES_REQUESTED" | "REJECTED".
+async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
+  const s = await prisma.sponsorship.findUnique({ where: { id: sponsorshipId } });
+  if (!s) return [];
+  const { countryCode } = await countryInfo(s.countryId);
+  const recruitName = `${s.firstNames} ${s.lastName}`;
+  const reason = String(note || "").trim();
+  const changes = kind === "CHANGES_REQUESTED";
+  const shortReason = reason.length > 70 ? `${reason.slice(0, 67)}...` : reason;
+
+  const recruitSms = changes
+    ? fitSms([
+        `FOREVER: votre fiche de parrainage doit etre completee : ${shortReason}. Votre parrain fera la correction.`,
+        `FOREVER: fiche de parrainage a completer : ${shortReason}`,
+        "FOREVER: votre fiche de parrainage doit etre completee. Contactez votre parrain.",
+      ])
+    : fitSms([
+        `FOREVER: votre fiche de parrainage n'a pas ete acceptee. Motif : ${shortReason}`,
+        "FOREVER: votre fiche de parrainage n'a pas ete acceptee. Contactez votre parrain.",
+      ]);
+  const sponsorSms = changes
+    ? fitSms([
+        `FOREVER: parrainage de ${recruitName} a completer : ${shortReason}. Corrigez la fiche dans Mon espace.`,
+        `FOREVER: parrainage a completer : ${shortReason}. Corrigez-le dans Mon espace.`,
+        "FOREVER: un parrainage est a completer. Corrigez la fiche dans Mon espace.",
+      ])
+    : fitSms([
+        `FOREVER: parrainage de ${recruitName} refuse. Motif : ${shortReason}`,
+        "FOREVER: un parrainage a ete refuse. Details dans Mon espace.",
+      ]);
+
+  const rows = [[changes ? "Complément demandé" : "Motif du refus", reason]];
+  const recruitContent = {
+    greeting: `Bonjour ${recruitName},`,
+    paragraphs: changes
+      ? [`Votre fiche d'inscription parrainée par ${s.sponsorNom} doit être complétée avant sa validation par Forever.`, "Votre parrain corrige la fiche depuis son espace : rapprochez-vous de lui avec les éléments demandés."]
+      : [`Votre fiche d'inscription parrainée par ${s.sponsorNom} n'a pas été acceptée par Forever.`, "Rapprochez-vous de votre parrain pour toute question."],
+    rows,
+  };
+  const sponsorContent = {
+    greeting: `Bonjour ${s.sponsorNom},`,
+    paragraphs: changes
+      ? [`La fiche de parrainage de ${recruitName} doit être complétée avant sa validation.`, "Corrigez-la depuis « Mon espace » > « Mes parrainages » (connexion par code), puis renvoyez-la."]
+      : [`Le parrainage de ${recruitName} n'a pas été accepté par Forever.`],
+    rows,
+  };
+  const subject = changes ? `Parrainage à compléter : ${recruitName}` : `Parrainage non accepté : ${recruitName}`;
+
+  const results = await Promise.all([
+    safeSms({ to: s.mobile, countryCode, message: recruitSms }),
+    safeSms({ to: s.sponsorPhone || (await findSponsorPhone(s)), countryCode, message: sponsorSms }),
+    safeEmail({ to: s.email, subject, html: emailHtml(recruitContent), body: emailText(recruitContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "RECRUIT" } }, `recruit-${kind}`),
+    safeEmail({ to: s.sponsorEmail, subject, html: emailHtml(sponsorContent), body: emailText(sponsorContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "SPONSOR" } }, `sponsor-${kind}`),
+  ]);
+  await addSponsorshipLog(null, {
+    sponsorshipId: s.id,
+    action: changes ? "CHANGES_REQUESTED_NOTIFIED" : "REJECTION_NOTIFIED",
+    note: `Notification ${changes ? "de demande de complément" : "de refus"} : ${summarizeResults(results)}.`,
+    meta: { results },
+  }).catch(() => {});
+  return results;
+}
+
+module.exports = { notifySponsorshipApproved, notifySponsorshipReview, notifySponsorshipValidated };

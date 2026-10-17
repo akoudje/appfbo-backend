@@ -5,7 +5,7 @@ const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const sponsorship = require("../../services/sponsorship.service");
 const purchase = require("../../services/sponsorship-purchase.service");
-const { notifySponsorshipApproved } = require("../../services/sponsorship-notifications.service");
+const { notifySponsorshipApproved, notifySponsorshipReview } = require("../../services/sponsorship-notifications.service");
 const { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf } = require("../../services/sponsorship-agreement-pdf.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
@@ -172,11 +172,10 @@ async function requestChanges(req, res) {
       });
       await sponsorship.addSponsorshipLog(tx, { sponsorshipId: row.id, action: "CHANGES_REQUESTED", note, actorAdminId: req.user?.id || null });
     });
-    await sponsorship.notifySms({
-      to: await sponsorship.findSponsorPhone(row),
-      countryCode: req.country?.code || "CIV",
-      message: `FOREVER: parrainage de ${row.firstNames} ${row.lastName} : complement demande. Consultez votre espace client.`,
-    });
+    // Filleul et parrain, SMS + email, avec le motif (résultat journalisé).
+    await notifySponsorshipReview({ sponsorshipId: row.id, kind: "CHANGES_REQUESTED", note }).catch((error) =>
+      console.error("[sponsorship] notification de complément non envoyée", { id: row.id, error: error?.message }),
+    );
     return res.json({ ok: true, status: "CHANGES_REQUESTED" });
   } catch (error) {
     return sendError(res, error, "requestChanges error:");
@@ -196,11 +195,9 @@ async function rejectSponsorship(req, res) {
       });
       await sponsorship.addSponsorshipLog(tx, { sponsorshipId: row.id, action: "REJECTED", note: reason, actorAdminId: req.user?.id || null });
     });
-    await sponsorship.notifySms({
-      to: await sponsorship.findSponsorPhone(row),
-      countryCode: req.country?.code || "CIV",
-      message: `FOREVER: parrainage de ${row.firstNames} ${row.lastName} refuse. Motif : ${reason}`.slice(0, 300),
-    });
+    await notifySponsorshipReview({ sponsorshipId: row.id, kind: "REJECTED", note: reason }).catch((error) =>
+      console.error("[sponsorship] notification de refus non envoyée", { id: row.id, error: error?.message }),
+    );
     return res.json({ ok: true, status: "REJECTED" });
   } catch (error) {
     return sendError(res, error, "rejectSponsorship error:");
