@@ -7,6 +7,7 @@ const sponsorship = require("../services/sponsorship.service");
 const purchase = require("../services/sponsorship-purchase.service");
 const {
   createSubmittedSponsorship,
+  lookupPublicSponsor,
   upsertSponsorFbo,
   verifyPublicSponsor,
 } = require("../services/sponsorship-submission.service");
@@ -43,6 +44,16 @@ async function verifySponsor(req, res) {
     return res.json({ sponsor: profile });
   } catch (error) {
     return sendError(res, error, "verifySponsor error:");
+  }
+}
+
+// POST /api/sponsorships/sponsor/lookup { numeroFbo } : le filleul saisit le
+// numéro de son parrain ; nom et grade affichés pour confirmation.
+async function lookupSponsor(req, res) {
+  try {
+    return res.json({ sponsor: await lookupPublicSponsor(req.body || {}) });
+  } catch (error) {
+    return sendError(res, error, "lookupSponsor error:");
   }
 }
 
@@ -98,6 +109,7 @@ module.exports = {
   checkPublicRecruitEmail,
   getPublicSponsorshipCatalog,
   getPublicSponsorshipConfig,
+  lookupSponsor,
   submitPublicSponsorship,
   verifySponsor,
 };

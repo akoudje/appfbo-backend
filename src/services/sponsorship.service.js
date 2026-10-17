@@ -14,6 +14,8 @@ const { sendSms, normalizePhoneForCountry } = require("./sms.service");
 const MIN_RECRUIT_AGE = 18;
 const SPONSOR_ALLOWED_GRADES = new Set(["ANIMATEUR_ADJOINT", "ANIMATEUR", "MANAGER_ADJOINT", "MANAGER"]);
 const CONSENT_VERSION = "sponsorship-consent-v1";
+// Fiche remplie par le filleul lui-même (parcours public) : son attestation.
+const RECRUIT_CONSENT_VERSION = "sponsorship-recruit-consent-v1";
 const DOCUMENT_FIELDS = { idFront: "ID_FRONT", idBack: "ID_BACK", passport: "PASSPORT", other: "OTHER" };
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf"]);
 const MIME_FORMATS = { "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp" };
@@ -62,6 +64,16 @@ function buildConsentText({ recruitName, countryName }) {
     `comme distributeur et transmettre ses informations et sa pièce d'identité à ` +
     `Forever Living Products ${countryName || ""}. Je certifie que ces informations sont exactes ` +
     `et que ${recruitName} n'a pas signé de contrat Distributeur Forever au cours des 24 derniers mois.`
+  ).replace(/\s+/g, " ").trim();
+}
+
+// Attestation du filleul qui remplit lui-même sa fiche.
+function buildRecruitConsentText({ recruitName, sponsorName, countryName }) {
+  return (
+    `Je, ${recruitName}, certifie l'exactitude des informations de cette fiche et n'avoir pas signé ` +
+    `de contrat Distributeur Forever au cours des 24 derniers mois. J'accepte que ces informations et ` +
+    `ma pièce d'identité soient transmises à Forever Living Products ${countryName || ""} pour mon ` +
+    `inscription comme distributeur, parrainée par ${sponsorName}.`
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -134,8 +146,6 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
   if (sponsorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sponsorEmail)) errors.push("Votre adresse email (parrain) est invalide.");
 
 
-  const spouseBirthDate = raw.spouseBirthDate ? parseDateOnly(raw.spouseBirthDate) : null;
-  if (raw.spouseBirthDate && !spouseBirthDate) errors.push("La date de naissance du conjoint est invalide.");
 
   if (errors.length) throw httpError(400, errors.join(" "), "SPONSORSHIP_INVALID");
 
@@ -152,11 +162,6 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     addressArea: text(raw.addressArea),
     city,
     homeCountry: text(raw.homeCountry) || COUNTRY_ALPHA2[countryCode] || "CI",
-    maritalStatus: text(raw.maritalStatus),
-    spouseLastName: text(raw.spouseLastName)?.toUpperCase() || null,
-    spouseFirstNames: text(raw.spouseFirstNames)?.toUpperCase() || null,
-    spouseBirthDate,
-    spouseBirthPlace: text(raw.spouseBirthPlace),
     sponsorCity: text(raw.sponsorCity),
     sponsorPhone: sponsorPhone || null,
     sponsorEmail,
@@ -473,6 +478,8 @@ module.exports = {
   assertRecruitEmailAvailable,
   MIN_RECRUIT_AGE,
   CONSENT_VERSION,
+  RECRUIT_CONSENT_VERSION,
+  buildRecruitConsentText,
   STATUS_LABELS,
   httpError,
   ageOn,
