@@ -1,11 +1,9 @@
 // src/services/document-quality.service.js
-// Contrôle qualité des pièces d'identité envoyées (parrainage) : poids minimal,
-// format réel (signature du fichier, pas seulement le type annoncé), résolution
+// Contrôle qualité des pièces d'identité envoyées (parrainage) : format réel (signature du fichier, pas seulement le type annoncé), résolution
 // des images (lue dans l'en-tête, sans dépendance) et PDF lisible.
 
 const fs = require("fs");
 
-const MIN_FILE_BYTES = 50 * 1024;
 const MIN_LONG_SIDE_PX = 1000;
 const MIN_SHORT_SIDE_PX = 600;
 
@@ -53,12 +51,8 @@ function readImageSize(buffer, format) {
 
 // Renvoie un message d'erreur, ou null si la pièce est acceptable.
 // `label` : « Recto de la pièce », « Passeport »…
-async function checkDocumentQuality({ path, mimetype, size }, label) {
+async function checkDocumentQuality({ path, mimetype }, label) {
   const buffer = fs.readFileSync(path);
-  const bytes = size || buffer.length;
-  if (bytes < MIN_FILE_BYTES) {
-    return `${label} : fichier trop léger (${Math.round(bytes / 1024)} Ko). Envoyez une photo nette de la pièce entière, 50 Ko au minimum.`;
-  }
   const format = detectFormat(buffer);
   const declaredPdf = String(mimetype || "").toLowerCase() === "application/pdf";
   if (!format || (format === "pdf") !== declaredPdf) {
@@ -84,4 +78,4 @@ async function checkDocumentQuality({ path, mimetype, size }, label) {
   return null;
 }
 
-module.exports = { MIN_FILE_BYTES, MIN_LONG_SIDE_PX, MIN_SHORT_SIDE_PX, checkDocumentQuality, detectFormat, readImageSize };
+module.exports = { MIN_LONG_SIDE_PX, MIN_SHORT_SIDE_PX, checkDocumentQuality, detectFormat, readImageSize };
