@@ -107,6 +107,7 @@ async function createSubmittedSponsorship({ sponsorFbo, settings, countryId, bod
     const what = data.idDocumentType === "PASSPORT" ? "la page d'identité du passeport" : `le recto de la pièce (${sponsorship.ID_DOCUMENT_LABELS[data.idDocumentType]})`;
     throw sponsorship.httpError(400, `Joignez ${what} du filleul.`, "SPONSORSHIP_DOCUMENT_REQUIRED");
   }
+  await sponsorship.assertDocumentsQuality(files);
 
   // Une même pièce ne peut pas être en cours de parrainage deux fois.
   const duplicate = await prisma.sponsorship.findFirst({
