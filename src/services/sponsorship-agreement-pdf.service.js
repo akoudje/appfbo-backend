@@ -24,6 +24,19 @@ const RED = "#b42318";
 const DARK = "#111827";
 const GREY = "#6b7280";
 
+// « Fait à » de la fiche : ville par défaut du pays du parrainage.
+const SIGNING_CITY_BY_COUNTRY = {
+  "cote d'ivoire": "Abidjan",
+  "burkina faso": "Ouagadougou",
+  niger: "Niamey",
+  benin: "Cotonou",
+  togo: "Lomé",
+};
+function signingCity(countryName) {
+  const key = String(countryName || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/’/g, "'").trim().toLowerCase();
+  return SIGNING_CITY_BY_COUNTRY[key] || "";
+}
+
 function formatDate(value) {
   if (!value) return "";
   return new Date(value).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
@@ -113,7 +126,7 @@ function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "C
     if (checked) doc.lineWidth(1.4).strokeColor(RED).rect(bx + 1.5, y + 1.5, 34, 15).stroke();
   });
   y += 24;
-  row({ label: "Téléphone parrain", value: s.sponsorPhone }, { label: "Fait à", value: s.sponsorCity });
+  row({ label: "Téléphone parrain", value: s.sponsorPhone }, { label: "Fait à", value: signingCity(countryName) });
 
   // Mentions de la fiche papier
   y += 6;

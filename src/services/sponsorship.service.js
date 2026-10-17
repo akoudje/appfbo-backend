@@ -162,7 +162,6 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     addressArea: text(raw.addressArea),
     city,
     homeCountry: text(raw.homeCountry) || COUNTRY_ALPHA2[countryCode] || "CI",
-    sponsorCity: text(raw.sponsorCity),
     sponsorPhone: sponsorPhone || null,
     sponsorEmail,
   };
