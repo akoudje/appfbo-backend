@@ -234,6 +234,17 @@ function collectUploadedFiles(req) {
   return files;
 }
 
+// Qualité des pièces envoyées (poids, format réel, résolution, PDF lisible) :
+// refus explicite avant tout stockage.
+const DOCUMENT_QUALITY_LABELS = { ID_FRONT: "Recto de la pièce", ID_BACK: "Verso de la pièce", PASSPORT: "Passeport", OTHER: "Pièce complémentaire" };
+async function assertDocumentsQuality(files = []) {
+  const { checkDocumentQuality } = require("./document-quality.service");
+  for (const { file, type } of files) {
+    const problem = await checkDocumentQuality(file, DOCUMENT_QUALITY_LABELS[type] || "Pièce d'identité");
+    if (problem) throw httpError(400, problem, "SPONSORSHIP_DOCUMENT_QUALITY");
+  }
+}
+
 function cleanupTmpFiles(files = []) {
   for (const { file } of files) {
     try {
@@ -489,6 +500,7 @@ module.exports = {
   isSponsorGradeAllowed,
   uploadSponsorshipDocumentsMiddleware,
   collectUploadedFiles,
+  assertDocumentsQuality,
   cleanupTmpFiles,
   storeSponsorshipDocument,
   streamSponsorshipDocument,

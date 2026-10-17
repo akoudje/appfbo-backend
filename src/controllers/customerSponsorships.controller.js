@@ -168,6 +168,7 @@ async function resubmitSponsorship(req, res) {
       deliveryMode: req.body?.purchaseDeliveryMode,
     });
 
+    await sponsorship.assertDocumentsQuality(files);
     const documents = [];
     for (const entry of files) {
       documents.push(await sponsorship.storeSponsorshipDocument({ ...entry, sponsorshipId: existing.id }));
