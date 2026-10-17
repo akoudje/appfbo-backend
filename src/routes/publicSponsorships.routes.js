@@ -23,6 +23,11 @@ router.post(
   createRateLimiter({ keyPrefix: "public_sponsorship_sponsor", windowMs: 10 * 60 * 1000, max: 15, keyFn: byIp }),
   controller.verifySponsor,
 );
+router.post(
+  "/sponsor/lookup",
+  createRateLimiter({ keyPrefix: "public_sponsorship_lookup", windowMs: 10 * 60 * 1000, max: 20, keyFn: byIp }),
+  controller.lookupSponsor,
+);
 router.get(
   "/check-email",
   createRateLimiter({ keyPrefix: "public_sponsorship_email", windowMs: 10 * 60 * 1000, max: 40, keyFn: byIp }),

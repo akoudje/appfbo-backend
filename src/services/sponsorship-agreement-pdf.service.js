@@ -89,13 +89,11 @@ function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "C
     y += 24;
   };
   row({ label: "Nom", value: s.lastName }, { label: "Prénoms", value: s.firstNames });
-  row({ label: "Nom du conjoint", value: s.spouseLastName }, { label: "Prénoms conjoint", value: s.spouseFirstNames });
+  row({ label: "Date de naissance", value: formatDate(s.birthDate) }, { label: "Lieu de naissance", value: s.birthPlace });
   row({ label: "Adresse (commune / quartier)", value: s.addressArea }, { label: "Ville", value: s.city });
   row({ label: "Mobile", value: s.mobile }, { label: "Email", value: s.email });
-  row({ label: "Situation de famille", value: s.maritalStatus }, { label: "Pays", value: s.homeCountry });
-  row({ label: "Date de naissance", value: formatDate(s.birthDate) }, { label: "Lieu de naissance", value: s.birthPlace });
   row({ label: "Pièce d'identité", value: ID_DOCUMENT_SHORT[s.idDocumentType] || "CNI" }, { label: "N° de la pièce", value: s.idDocumentNumber });
-  row({ label: "Naissance conjoint", value: formatDate(s.spouseBirthDate) }, { label: "Lieu naiss. conjoint", value: s.spouseBirthPlace });
+  row({ label: "Pays", value: s.homeCountry }, null);
 
   // Parrain
   y += 8;
@@ -132,13 +130,16 @@ function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "C
   y = doc.y + 10;
 
   // Signatures remplacées par l'attestation électronique + cachet
-  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(DARK).text("Fiche remplie en ligne par le parrain", 40, y);
+  const filledByRecruit = String(s.consentVersion || "").startsWith("sponsorship-recruit");
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor(DARK).text(filledByRecruit ? "Fiche remplie en ligne par le candidat" : "Fiche remplie en ligne par le parrain", 40, y);
   doc
     .font("Helvetica")
     .fontSize(7.5)
     .fillColor(GREY)
     .text(
-      `Attestation d'accord et de procuration du candidat acceptée le ${formatDate(s.consentAcceptedAt)} par ${s.sponsorNom} (${s.sponsorNumero}). Pièce d'identité du candidat jointe au dossier numérique.`,
+      filledByRecruit
+        ? `Attestation du candidat acceptée le ${formatDate(s.consentAcceptedAt)} par ${s.lastName} ${s.firstNames} (parrain : ${s.sponsorNom}, ${s.sponsorNumero}). Pièce d'identité du candidat jointe au dossier numérique.`
+        : `Attestation d'accord et de procuration du candidat acceptée le ${formatDate(s.consentAcceptedAt)} par ${s.sponsorNom} (${s.sponsorNumero}). Pièce d'identité du candidat jointe au dossier numérique.`,
       40,
       y + 13,
       { width: 300 },
