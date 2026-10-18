@@ -5,7 +5,7 @@ const prisma = require("../prisma");
 const sponsorship = require("../services/sponsorship.service");
 const purchase = require("../services/sponsorship-purchase.service");
 const { writeSponsorshipAgreementPdf } = require("../services/sponsorship-agreement-pdf.service");
-const { createSubmittedSponsorship } = require("../services/sponsorship-submission.service");
+const { applySponsorshipCorrection, createSubmittedSponsorship } = require("../services/sponsorship-submission.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
 const AGREEMENT_STATUSES = new Set(["APPROVED_PENDING_PURCHASE", "VALIDATED", "EXPIRED"]);
@@ -151,51 +151,7 @@ async function resubmitSponsorship(req, res) {
       where: { id: req.params.id, sponsorFboId: fbo.id, countryId: req.countryId },
     });
     if (!existing) return res.status(404).json({ message: "Parrainage introuvable." });
-    if (existing.status !== "CHANGES_REQUESTED") {
-      throw sponsorship.httpError(409, "Ce parrainage ne peut plus être modifié.", "SPONSORSHIP_LOCKED");
-    }
-    const data = sponsorship.normalizeRecruitPayload(req.body || {}, { countryCode: settings.countryCode });
-    await sponsorship.assertRecruitEmailAvailable(data.email, { excludeSponsorshipId: existing.id });
-    const cart = await purchase.normalizePurchaseCart(req.body?.purchaseItems, {
-      countryId: req.countryId,
-      countryCode: settings.countryCode,
-      minPurchaseFcfa: settings.minPurchaseFcfa,
-      required: true,
-    });
-    const purchaseOptions = await purchase.normalizePurchaseOptions({
-      countryId: req.countryId,
-      paymentMode: req.body?.purchasePaymentMode,
-      deliveryMode: req.body?.purchaseDeliveryMode,
-    });
-
-    await sponsorship.assertDocumentsQuality(files);
-    const documents = [];
-    for (const entry of files) {
-      documents.push(await sponsorship.storeSponsorshipDocument({ ...entry, sponsorshipId: existing.id }));
-    }
-    await prisma.$transaction(async (tx) => {
-      await tx.sponsorship.update({
-        where: { id: existing.id },
-        data: {
-          ...data,
-          status: "SUBMITTED",
-          submittedAt: new Date(),
-          purchaseItems: cart.items,
-          purchaseIndicativeTotalFcfa: cart.totalFcfa,
-          purchasePaymentMode: purchaseOptions.payment,
-          purchaseDeliveryMode: purchaseOptions.delivery,
-        },
-      });
-      if (documents.length) await tx.sponsorshipDocument.createMany({ data: documents });
-      await sponsorship.addSponsorshipLog(tx, {
-        sponsorshipId: existing.id,
-        action: "RESUBMITTED",
-        note: "Parrainage corrigé et resoumis par le parrain.",
-        meta: { newDocuments: documents.map((d) => d.type) },
-        actorFboId: fbo.id,
-      });
-    });
-    return res.json({ id: existing.id, status: "SUBMITTED", statusLabel: sponsorship.STATUS_LABELS.SUBMITTED });
+    return res.json(await applySponsorshipCorrection({ existing, body: req.body || {}, files, settings, by: "SPONSOR", actorFboId: fbo.id }));
   } catch (error) {
     return sendError(res, error, "resubmitSponsorship error:");
   } finally {

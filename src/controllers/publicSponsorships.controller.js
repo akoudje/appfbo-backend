@@ -5,7 +5,10 @@
 
 const sponsorship = require("../services/sponsorship.service");
 const purchase = require("../services/sponsorship-purchase.service");
+const prisma = require("../prisma");
+const { loadByCorrectionToken } = require("../services/sponsorship-correction.service");
 const {
+  applySponsorshipCorrection,
   createSubmittedSponsorship,
   lookupPublicSponsor,
   upsertSponsorFbo,
@@ -68,12 +71,17 @@ async function getPublicSponsorshipCatalog(req, res) {
   }
 }
 
-// GET /api/sponsorships/check-email?email=… : l'email du filleul est-il libre ?
+// GET /api/sponsorships/check-email?email=…[&token=…] : l'email du filleul est-il
+// libre ? Avec un lien de correction, sa propre fiche est ignorée.
 async function checkPublicRecruitEmail(req, res) {
   try {
     const email = String(req.query.email || "").trim();
     if (!email) return res.json({ available: true });
-    return res.json({ available: await sponsorship.isRecruitEmailAvailable(email) });
+    let excludeSponsorshipId = null;
+    if (req.query.token) {
+      excludeSponsorshipId = (await loadByCorrectionToken(String(req.query.token)).catch(() => null))?.id || null;
+    }
+    return res.json({ available: await sponsorship.isRecruitEmailAvailable(email, { excludeSponsorshipId }) });
   } catch (error) {
     return sendError(res, error, "checkPublicRecruitEmail error:");
   }
@@ -105,7 +113,52 @@ async function submitPublicSponsorship(req, res) {
   }
 }
 
+const toDateInput = (value) => (value ? new Date(value).toISOString().slice(0, 10) : "");
+
+// GET /api/sponsorships/correction/:token : fiche à corriger (lien du filleul).
+async function getCorrection(req, res) {
+  try {
+    const row = await loadByCorrectionToken(req.params.token);
+    const documents = await prisma.sponsorshipDocument.findMany({
+      where: { sponsorshipId: row.id },
+      select: { type: true, originalFileName: true },
+      orderBy: { createdAt: "asc" },
+    });
+    return res.json({
+      reviewNote: row.reviewNote || "",
+      countryId: row.countryId,
+      sponsor: { numeroFbo: row.sponsorNumero, nomComplet: row.sponsorNom, grade: row.sponsorGrade },
+      form: {
+        lastName: row.lastName, firstNames: row.firstNames, birthDate: toDateInput(row.birthDate), birthPlace: row.birthPlace,
+        idDocumentType: row.idDocumentType, idDocumentNumber: row.idDocumentNumber, passportNumber: row.passportNumber || "",
+        mobile: row.mobile, email: row.email, addressArea: row.addressArea || "", city: row.city, homeCountry: row.homeCountry,
+        sponsorPhone: row.sponsorPhone || "", sponsorEmail: row.sponsorEmail || "", purchasePaymentMode: row.purchasePaymentMode || "",
+      },
+      cart: Array.isArray(row.purchaseItems) ? row.purchaseItems.map((line) => ({ productId: line.productId, qty: line.qty })) : [],
+      documents,
+    });
+  } catch (error) {
+    return sendError(res, error, "getCorrection error:");
+  }
+}
+
+// PUT /api/sponsorships/correction/:token (multipart) : fiche corrigée renvoyée.
+async function submitCorrection(req, res) {
+  const files = sponsorship.collectUploadedFiles(req);
+  try {
+    const existing = await loadByCorrectionToken(req.params.token);
+    const settings = await sponsorship.getSponsorshipSettings(existing.countryId);
+    return res.json(await applySponsorshipCorrection({ existing, body: req.body || {}, files, settings, by: "RECRUIT" }));
+  } catch (error) {
+    return sendError(res, error, "submitCorrection error:");
+  } finally {
+    sponsorship.cleanupTmpFiles(files);
+  }
+}
+
 module.exports = {
+  getCorrection,
+  submitCorrection,
   checkPublicRecruitEmail,
   getPublicSponsorshipCatalog,
   getPublicSponsorshipConfig,

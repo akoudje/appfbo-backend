@@ -167,4 +167,55 @@ async function createSubmittedSponsorship({ sponsorFbo, settings, countryId, bod
   return created;
 }
 
-module.exports = { createSubmittedSponsorship, lookupPublicSponsor, upsertSponsorFbo, verifyPublicSponsor };
+// Correction d'une fiche « Complément demandé » puis renvoi à Forever.
+// `by` : "RECRUIT" (lien de correction) ou "SPONSOR" (espace du parrain).
+async function applySponsorshipCorrection({ existing, body = {}, files = [], settings, by, actorFboId = null }) {
+  if (existing.status !== "CHANGES_REQUESTED") {
+    throw sponsorship.httpError(409, "Cette fiche ne peut plus être modifiée.", "SPONSORSHIP_LOCKED");
+  }
+  const countryId = existing.countryId;
+  const data = sponsorship.normalizeRecruitPayload(body, { countryCode: settings.countryCode });
+  await sponsorship.assertRecruitEmailAvailable(data.email, { excludeSponsorshipId: existing.id });
+  const cart = await purchase.normalizePurchaseCart(body.purchaseItems, {
+    countryId,
+    countryCode: settings.countryCode,
+    minPurchaseFcfa: settings.minPurchaseFcfa,
+    required: true,
+  });
+  const purchaseOptions = await purchase.normalizePurchaseOptions({
+    countryId,
+    paymentMode: body.purchasePaymentMode,
+    deliveryMode: body.purchaseDeliveryMode,
+  });
+
+  await sponsorship.assertDocumentsQuality(files);
+  const documents = [];
+  for (const entry of files) {
+    documents.push(await sponsorship.storeSponsorshipDocument({ ...entry, sponsorshipId: existing.id }));
+  }
+  await prisma.$transaction(async (tx) => {
+    await tx.sponsorship.update({
+      where: { id: existing.id },
+      data: {
+        ...data,
+        status: "SUBMITTED",
+        submittedAt: new Date(),
+        purchaseItems: cart.items,
+        purchaseIndicativeTotalFcfa: cart.totalFcfa,
+        purchasePaymentMode: purchaseOptions.payment,
+        purchaseDeliveryMode: purchaseOptions.delivery,
+      },
+    });
+    if (documents.length) await tx.sponsorshipDocument.createMany({ data: documents });
+    await sponsorship.addSponsorshipLog(tx, {
+      sponsorshipId: existing.id,
+      action: "RESUBMITTED",
+      note: by === "RECRUIT" ? "Fiche corrigée et renvoyée par le filleul (lien de correction)." : "Fiche corrigée et renvoyée par le parrain.",
+      meta: { newDocuments: documents.map((d) => d.type), by },
+      actorFboId,
+    });
+  });
+  return { id: existing.id, status: "SUBMITTED", statusLabel: sponsorship.STATUS_LABELS.SUBMITTED };
+}
+
+module.exports = { applySponsorshipCorrection, createSubmittedSponsorship, lookupPublicSponsor, upsertSponsorFbo, verifyPublicSponsor };
