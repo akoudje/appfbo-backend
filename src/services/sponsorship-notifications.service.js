@@ -240,11 +240,13 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
   const changes = kind === "CHANGES_REQUESTED";
   const shortReason = reason.length > 70 ? `${reason.slice(0, 67)}...` : reason;
 
+  // Le lien doit tenir en entier : motif complet s'il tient, sinon renvoi à
+  // l'email (qui contient toujours le motif complet).
   const recruitSms = changes
     ? fitSms([
-        `FOREVER: votre fiche de parrainage doit etre completee : ${shortReason}. Votre parrain fera la correction.`,
-        `FOREVER: fiche de parrainage a completer : ${shortReason}`,
-        "FOREVER: votre fiche de parrainage doit etre completee. Contactez votre parrain.",
+        `FOREVER: fiche a completer : ${reason}. Corrigez-la : ${link}`,
+        `FOREVER: fiche a completer (motif par email). Corrigez-la : ${link}`,
+        `FOREVER: corrigez votre fiche : ${link}`,
       ])
     : fitSms([
         `FOREVER: votre fiche de parrainage n'a pas ete acceptee. Motif : ${shortReason}`,
@@ -252,9 +254,9 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
       ]);
   const sponsorSms = changes
     ? fitSms([
-        `FOREVER: parrainage de ${recruitName} a completer : ${shortReason}. Corrigez la fiche dans Mon espace.`,
-        `FOREVER: parrainage a completer : ${shortReason}. Corrigez-le dans Mon espace.`,
-        "FOREVER: un parrainage est a completer. Corrigez la fiche dans Mon espace.",
+        `FOREVER: parrainage de ${recruitName} a completer : ${shortReason}. Votre filleul a recu un lien pour corriger.`,
+        `FOREVER: parrainage a completer : ${shortReason}. Votre filleul a recu un lien pour corriger.`,
+        `FOREVER: parrainage de ${recruitName} a completer. Votre filleul a recu un lien pour corriger.`,
       ])
     : fitSms([
         `FOREVER: parrainage de ${recruitName} refuse. Motif : ${shortReason}`,
@@ -262,17 +264,21 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
       ]);
 
   const rows = [[changes ? "Complément demandé" : "Motif du refus", reason]];
+  // Lien de correction du filleul (complément demandé uniquement).
+  const { correctionUrl, createCorrectionToken } = require("./sponsorship-correction.service");
+  const link = changes ? correctionUrl(createCorrectionToken(s)) : "";
   const recruitContent = {
     greeting: `Bonjour ${recruitName},`,
     paragraphs: changes
-      ? [`Votre fiche d'inscription parrainée par ${s.sponsorNom} doit être complétée avant sa validation par Forever.`, "Votre parrain corrige la fiche depuis son espace : rapprochez-vous de lui avec les éléments demandés."]
+      ? [`Votre fiche d'inscription parrainée par ${s.sponsorNom} doit être complétée avant sa validation par Forever.`, "Corrigez-la avec le bouton ci-dessous, puis renvoyez-la. Ce lien est personnel et valable 30 jours."]
       : [`Votre fiche d'inscription parrainée par ${s.sponsorNom} n'a pas été acceptée par Forever.`, "Rapprochez-vous de votre parrain pour toute question."],
     rows,
+    cta: changes ? { label: "Corriger ma fiche", href: link } : null,
   };
   const sponsorContent = {
     greeting: `Bonjour ${s.sponsorNom},`,
     paragraphs: changes
-      ? [`La fiche de parrainage de ${recruitName} doit être complétée avant sa validation.`, "Corrigez-la depuis « Mon espace » > « Mes parrainages » (connexion par code), puis renvoyez-la."]
+      ? [`La fiche de parrainage de ${recruitName} doit être complétée avant sa validation.`, `${s.firstNames} a reçu par SMS et par email un lien pour la corriger. Pensez à le lui rappeler s'il ne l'a pas encore fait ; vous pouvez aussi la corriger depuis « Mon espace » > « Mes parrainages ».`]
       : [`Le parrainage de ${recruitName} n'a pas été accepté par Forever.`],
     rows,
   };

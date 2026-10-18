@@ -33,6 +33,18 @@ router.get(
   createRateLimiter({ keyPrefix: "public_sponsorship_email", windowMs: 10 * 60 * 1000, max: 40, keyFn: byIp }),
   controller.checkPublicRecruitEmail,
 );
+// Lien de correction du filleul (complément demandé).
+router.get(
+  "/correction/:token",
+  createRateLimiter({ keyPrefix: "public_sponsorship_correction_read", windowMs: 10 * 60 * 1000, max: 30, keyFn: byIp }),
+  controller.getCorrection,
+);
+router.put(
+  "/correction/:token",
+  createRateLimiter({ keyPrefix: "public_sponsorship_correction", windowMs: 60 * 60 * 1000, max: 10, keyFn: byIp }),
+  uploadSponsorshipDocumentsMiddleware,
+  controller.submitCorrection,
+);
 router.post(
   "/",
   createRateLimiter({ keyPrefix: "public_sponsorship_submit", windowMs: 60 * 60 * 1000, max: 10, keyFn: byIp }),
