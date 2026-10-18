@@ -239,6 +239,10 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
   const reason = String(note || "").trim();
   const changes = kind === "CHANGES_REQUESTED";
   const shortReason = reason.length > 70 ? `${reason.slice(0, 67)}...` : reason;
+  // Lien de correction du filleul (complément demandé uniquement), calculé avant
+  // les messages qui l'utilisent.
+  const { correctionUrl, createCorrectionToken } = require("./sponsorship-correction.service");
+  const link = changes ? correctionUrl(createCorrectionToken(s)) : "";
 
   // Le lien doit tenir en entier : motif complet s'il tient, sinon renvoi à
   // l'email (qui contient toujours le motif complet).
@@ -264,9 +268,6 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
       ]);
 
   const rows = [[changes ? "Complément demandé" : "Motif du refus", reason]];
-  // Lien de correction du filleul (complément demandé uniquement).
-  const { correctionUrl, createCorrectionToken } = require("./sponsorship-correction.service");
-  const link = changes ? correctionUrl(createCorrectionToken(s)) : "";
   const recruitContent = {
     greeting: `Bonjour ${recruitName},`,
     paragraphs: changes
