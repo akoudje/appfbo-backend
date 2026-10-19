@@ -2,10 +2,19 @@ const express = require("express");
 const { Permission } = require("../../auth/permissions");
 const { requirePermission } = require("../../middlewares/rbac");
 const sponsorshipsController = require("../../controllers/admin/sponsorships.controller");
+const { uploadSponsorshipDocumentsMiddleware } = require("../../services/sponsorship.service");
 
 const router = express.Router();
 
 router.use(requirePermission(Permission.SPONSORSHIP_REVIEW));
+
+// Soumission assistée au comptoir (parrain non reconnu par FBO Service, donc
+// sans accès à son espace client) : avant /:id pour ne pas être capté par lui.
+router.post(
+  "/counter-submit",
+  uploadSponsorshipDocumentsMiddleware,
+  sponsorshipsController.counterSubmitSponsorship,
+);
 
 router.get("/", sponsorshipsController.listSponsorships);
 router.get("/:id", sponsorshipsController.getSponsorship);

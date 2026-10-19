@@ -498,11 +498,128 @@ async function cancelSponsorship(req, res) {
   }
 }
 
+// POST /api/admin/sponsorships/counter-submit
+// { sponsorNumero, sponsorNom, sponsorGrade, consentAccepted, ...champs filleul }
+// + fichiers (idFront/idBack/passport/other), comme la soumission client.
+//
+// Soumission assistée au comptoir pour un parrain dont le numéro n'est pas
+// (encore) reconnu par FBO Service (non synchronisé AS400) : il ne peut donc
+// pas se connecter à l'espace client pour soumettre lui-même son parrainage.
+// Le facturier saisit l'identité du parrain en personne, comme s'il se
+// présentait au comptoir. Si une fiche FBO locale existe déjà pour ce
+// numéro, on fait confiance à cette fiche (nom/grade) plutôt qu'à la saisie
+// de l'admin, pour ne jamais écraser une fiche déjà synchronisée.
+async function counterSubmitSponsorship(req, res) {
+  const files = sponsorship.collectUploadedFiles(req);
+  try {
+    const countryId = pickCountryId(req);
+    const settings = await sponsorship.getSponsorshipSettings(countryId);
+    if (!settings.enabled) {
+      throw sponsorship.httpError(403, "Le parrainage n'est pas encore ouvert dans ce pays.", "SPONSORSHIP_DISABLED");
+    }
+
+    const body = req.body || {};
+    const sponsorNumero = sponsorship.canonicalFboNumber(body.sponsorNumero);
+    if (!sponsorNumero) {
+      throw sponsorship.httpError(400, "Numéro FBO du parrain invalide (12 chiffres).", "SPONSORSHIP_INVALID");
+    }
+    const enteredSponsorNom = String(body.sponsorNom || "").trim().toUpperCase();
+    if (!enteredSponsorNom) {
+      throw sponsorship.httpError(400, "Le nom complet du parrain est obligatoire.", "SPONSORSHIP_INVALID");
+    }
+    const enteredSponsorGrade = String(body.sponsorGrade || "").trim().toUpperCase();
+
+    const existingSponsorFbo = await prisma.fbo.findUnique({ where: { numeroFbo: sponsorNumero } });
+    const effectiveSponsorGrade = existingSponsorFbo?.grade || enteredSponsorGrade;
+    if (!sponsorship.isSponsorGradeAllowed(effectiveSponsorGrade)) {
+      throw sponsorship.httpError(403, "Le parrainage est réservé aux FBO de grade Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
+    }
+
+    if (String(body.consentAccepted) !== "true") {
+      throw sponsorship.httpError(400, "Le parrain doit attester disposer de l'accord et de la procuration du filleul.", "SPONSORSHIP_CONSENT_REQUIRED");
+    }
+    const data = sponsorship.normalizeRecruitPayload(body, { countryCode: settings.countryCode });
+
+    await sponsorship.assertRecruitEmailAvailable(data.email);
+
+    const requiredUpload = data.idDocumentType === "PASSPORT" ? "PASSPORT" : "ID_FRONT";
+    if (!files.some(({ type }) => type === requiredUpload)) {
+      const what = data.idDocumentType === "PASSPORT" ? "la page d'identité du passeport" : `le recto de la pièce (${sponsorship.ID_DOCUMENT_LABELS[data.idDocumentType]})`;
+      throw sponsorship.httpError(400, `Joignez ${what} du filleul.`, "SPONSORSHIP_DOCUMENT_REQUIRED");
+    }
+
+    const duplicate = await prisma.sponsorship.findFirst({
+      where: {
+        countryId,
+        idDocumentNumber: data.idDocumentNumber,
+        status: { in: sponsorship.ACTIVE_SPONSORSHIP_STATUSES },
+      },
+      select: { id: true, status: true },
+    });
+    if (duplicate) {
+      throw sponsorship.httpError(409, "Un parrainage existe déjà pour cette pièce d'identité.", "SPONSORSHIP_DUPLICATE_ID");
+    }
+
+    const countrySettings = await prisma.countrySettings.findUnique({
+      where: { countryId },
+      select: { defaultPointDeVente: true },
+    });
+    const sponsorFbo = existingSponsorFbo
+      ? existingSponsorFbo
+      : await prisma.fbo.create({
+          data: {
+            numeroFbo: sponsorNumero,
+            nomComplet: enteredSponsorNom,
+            grade: effectiveSponsorGrade,
+            pointDeVente: countrySettings?.defaultPointDeVente || "",
+          },
+        });
+
+    const recruitName = `${data.firstNames} ${data.lastName}`;
+    const now = new Date();
+    const created = await prisma.sponsorship.create({
+      data: {
+        ...data,
+        countryId,
+        status: "SUBMITTED",
+        sponsorFboId: sponsorFbo.id,
+        sponsorNumero: sponsorFbo.numeroFbo,
+        sponsorNom: sponsorFbo.nomComplet,
+        sponsorGrade: sponsorFbo.grade,
+        consentText: sponsorship.buildConsentText({ recruitName, countryName: settings.countryName }),
+        consentVersion: sponsorship.CONSENT_VERSION,
+        consentAcceptedAt: now,
+        submittedAt: now,
+      },
+    });
+
+    const documents = [];
+    for (const entry of files) {
+      documents.push(await sponsorship.storeSponsorshipDocument({ ...entry, sponsorshipId: created.id }));
+    }
+    await prisma.sponsorshipDocument.createMany({ data: documents });
+    await sponsorship.addSponsorshipLog(null, {
+      sponsorshipId: created.id,
+      action: "SUBMITTED",
+      note: `Parrainage saisi au comptoir pour le compte de ${sponsorFbo.nomComplet} (${sponsorFbo.numeroFbo})${existingSponsorFbo ? "" : ", numéro non reconnu par FBO Service au moment de la saisie"}.`,
+      meta: { documents: documents.map((d) => d.type), consentVersion: sponsorship.CONSENT_VERSION, counterEntry: true },
+      actorAdminId: req.user?.id || null,
+    });
+
+    return res.status(201).json({ id: created.id, status: created.status, statusLabel: sponsorship.STATUS_LABELS[created.status] });
+  } catch (error) {
+    return sendError(res, error, "counterSubmitSponsorship error:");
+  } finally {
+    sponsorship.cleanupTmpFiles(files);
+  }
+}
+
 module.exports = {
   downloadSponsorshipDossier,
   downloadSponsorshipAgreement,
   getCounterCatalog,
   counterPurchase,
+  counterSubmitSponsorship,
   listSponsorships,
   getSponsorship,
   downloadSponsorshipDocument,
