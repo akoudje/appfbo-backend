@@ -8,6 +8,7 @@
 
 const prisma = require("../prisma");
 const { sendEmail } = require("./email.service");
+const { BRAND, renderLayout, renderButton } = require("./email-templates/layout");
 const { addSponsorshipLog, findSponsorPhone } = require("./sponsorship.service");
 const { buildSponsorshipAgreementPdfBuffer } = require("./sponsorship-agreement-pdf.service");
 
@@ -33,21 +34,26 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// Mise en page commune des emails de l'application (document HTML complet,
+// bouton en tableau) : le fragment <div> nu utilisé auparavant donnait des
+// boutons inertes dans certaines messageries. Le lien est aussi affiché en
+// clair sous le bouton, pour le cas où le bouton ne serait pas cliquable.
 function emailHtml({ greeting, paragraphs, rows = [], cta = null }) {
+  const p = (text) => `<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:${BRAND.bodyText};">${escapeHtml(text)}</p>`;
   const rowsHtml = rows.length
-    ? `<table style="border-collapse:collapse;margin:16px 0;width:100%;max-width:520px">${rows
-        .map(([label, value]) => `<tr><td style="padding:6px 12px 6px 0;color:#6b6b6b">${escapeHtml(label)}</td><td style="padding:6px 0;font-weight:600">${escapeHtml(value)}</td></tr>`)
+    ? `<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:8px 0 16px;width:100%;">${rows
+        .map(([label, value]) => `<tr><td style="padding:6px 12px 6px 0;font-size:14px;color:${BRAND.mutedText};vertical-align:top;">${escapeHtml(label)}</td><td style="padding:6px 0;font-size:14px;font-weight:700;color:${BRAND.ink};">${escapeHtml(value)}</td></tr>`)
         .join("")}</table>`
     : "";
   const ctaHtml = cta
-    ? `<p style="margin:20px 0"><a href="${escapeHtml(cta.href)}" style="background:#FFC600;color:#000;padding:12px 20px;text-decoration:none;font-weight:600;border-radius:6px;display:inline-block">${escapeHtml(cta.label)}</a></p>`
+    ? `${renderButton({ href: cta.href, label: cta.label })}
+<p style="margin:10px 0 18px;font-size:12px;line-height:1.5;color:${BRAND.mutedText};">Si le bouton ne fonctionne pas, ouvrez ce lien :<br /><a href="${escapeHtml(cta.href)}" target="_blank" rel="noopener" style="color:${BRAND.ink};word-break:break-all;">${escapeHtml(cta.href)}</a></p>`
     : "";
-  return `<div style="font-family:Helvetica,Arial,sans-serif;color:#171717;font-size:15px;line-height:1.5">
-<p style="font-size:13px;letter-spacing:3px;margin:0 0 16px">FOREVER</p>
-<p>${escapeHtml(greeting)}</p>
-${paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("\n")}
-${rowsHtml}${ctaHtml}
-<p style="color:#6b6b6b;font-size:13px">Forever Living Products</p></div>`;
+  return renderLayout({
+    previewText: paragraphs[0] || "",
+    eyebrow: "Parrainage",
+    bodyHtml: `${p(greeting)}${paragraphs.map(p).join("")}${rowsHtml}${ctaHtml}`,
+  });
 }
 
 function emailText({ greeting, paragraphs, rows = [], cta = null }) {
