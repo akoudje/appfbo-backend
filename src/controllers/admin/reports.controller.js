@@ -241,7 +241,9 @@ function normalizePaymentModeFilter(value) {
 }
 
 function applyCommonFilters(where = {}, filters = {}) {
-  const next = { ...(where || {}) };
+  // Les précommandes de test (isTest, ex. pour valider le rôle Facturier
+  // caissier) ne doivent jamais fausser les bilans/rapports.
+  const next = { ...(where || {}), isTest: false };
   if (filters.paymentMode) {
     next.preorderPaymentMode = filters.paymentMode;
   }
@@ -770,7 +772,7 @@ async function getPackagingSummaryReport(req, res) {
   try {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     const countryId = pickCountryId(req);
-    const where = scopeWhere(req, { paymentStatus: "PAID" });
+    const where = scopeWhere(req, { paymentStatus: "PAID", isTest: false });
 
     // Toutes les routes admin sont scopées à un seul pays à la fois (header
     // X-Country, voir middlewares/countryContext.js) : pas de répartition
@@ -874,6 +876,7 @@ async function loadPackagingPeriodRows(req, period) {
   return prisma.preorder.findMany({
     where: scopeWhere(req, {
       paymentStatus: "PAID",
+      isTest: false,
       OR: [
         { manualPaymentValidatedAt: range },
         { manualPaymentValidatedAt: null, paidAt: range },

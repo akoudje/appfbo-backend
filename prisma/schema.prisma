@@ -1166,6 +1166,11 @@ model Preorder {
   stockDeductedAt DateTime?
   stockRestoredAt DateTime?
 
+  // Précommande créée pour tester un rôle/workflow (ex. Facturier caissier) :
+  // traitée normalement (file de facturation, paiement, AS400, préparation)
+  // mais exclue des bilans/rapports. Même principe que TicketOrder.isTest.
+  isTest Boolean @default(false)
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   submittedAt DateTime?
@@ -1187,6 +1192,7 @@ model Preorder {
   @@index([status, createdAt])
   @@index([preorderPaymentMode])
   @@index([countryId, status, createdAt])
+  @@index([countryId, isTest])
   @@unique([countryId, clientDraftKey])
   @@unique([countryId, clientSubmissionKey])
   @@index([paymentStatus, createdAt])
