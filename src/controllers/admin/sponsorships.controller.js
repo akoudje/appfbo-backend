@@ -35,6 +35,16 @@ async function sendAgreementPdf(res, row) {
 const STATUSES = new Set(Object.keys(sponsorship.STATUS_LABELS));
 const DOCUMENT_SELECT = { id: true, type: true, mimeType: true, sizeBytes: true, originalFileName: true, createdAt: true };
 
+// Le facturier caissier traite aussi les parrainages : les soumissions
+// fraîches (SUBMITTED) restent dans le pot commun (personne ne les a encore
+// prises en charge), mais une fois qu'il a statué (complément demandé,
+// refus, approbation — reviewedById/approvedById posés par requestChanges/
+// rejectSponsorship/approveSponsorship), le dossier ne doit apparaître que
+// dans SON espace, pas dans celui des autres facturiers caissiers.
+function isFacturierCaissier(role) {
+  return String(role || "").trim().toUpperCase() === "FACTURIER_CAISSIER";
+}
+
 function sendError(res, error, fallback) {
   if (!error.statusCode) console.error(fallback, error);
   return res.status(error.statusCode || 500).json({
@@ -66,20 +76,35 @@ async function listSponsorships(req, res) {
   try {
     const status = String(req.query.status || "").toUpperCase();
     const q = String(req.query.q || "").trim();
+
+    const searchCondition = q
+      ? {
+          OR: [
+            { lastName: { contains: q, mode: "insensitive" } },
+            { firstNames: { contains: q, mode: "insensitive" } },
+            { idDocumentNumber: { contains: q, mode: "insensitive" } },
+            { sponsorNumero: { contains: q } },
+            { sponsorNom: { contains: q, mode: "insensitive" } },
+            { recruitFboNumero: { contains: q } },
+            { mobile: { contains: q } },
+          ],
+        }
+      : null;
+
+    const ownershipCondition = isFacturierCaissier(req.user?.role)
+      ? {
+          OR: [
+            { status: "SUBMITTED" },
+            { reviewedById: req.user?.id || "__no_user__" },
+            { approvedById: req.user?.id || "__no_user__" },
+          ],
+        }
+      : null;
+
     const where = scopeWhere(req, {
       ...(STATUSES.has(status) ? { status } : {}),
-      ...(q
-        ? {
-            OR: [
-              { lastName: { contains: q, mode: "insensitive" } },
-              { firstNames: { contains: q, mode: "insensitive" } },
-              { idDocumentNumber: { contains: q, mode: "insensitive" } },
-              { sponsorNumero: { contains: q } },
-              { sponsorNom: { contains: q, mode: "insensitive" } },
-              { recruitFboNumero: { contains: q } },
-              { mobile: { contains: q } },
-            ],
-          }
+      ...([searchCondition, ownershipCondition].filter(Boolean).length
+        ? { AND: [searchCondition, ownershipCondition].filter(Boolean) }
         : {}),
     });
     const [rows, counts] = await Promise.all([
@@ -95,7 +120,13 @@ async function listSponsorships(req, res) {
           _count: { select: { documents: true } },
         },
       }),
-      prisma.sponsorship.groupBy({ by: ["status"], where: scopeWhere(req, {}), _count: { _all: true } }),
+      // Les compteurs des onglets suivent la même règle que la liste (pot
+      // commun pour SUBMITTED, personnel au-delà), sans filtre de recherche.
+      prisma.sponsorship.groupBy({
+        by: ["status"],
+        where: scopeWhere(req, ownershipCondition ? ownershipCondition : {}),
+        _count: { _all: true },
+      }),
     ]);
     return res.json({
       data: rows.map(withComputedFields),
