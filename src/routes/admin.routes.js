@@ -55,6 +55,7 @@ const memorialsRoutes = require("./admin/memorials.routes");
 const marketingCampaignsController = require("../controllers/admin/marketingCampaigns.controller");
 const homeFeaturedController = require("../controllers/admin/homeFeatured.controller");
 const eventsController = require("../controllers/admin/events.controller");
+const navBadgesController = require("../controllers/admin/navBadges.controller");
 const paymentLinkResendRequestsController = require("../controllers/paymentLinkResendRequests.controller");
 const { adminListCountries, toggleCountry } = require("../controllers/countries.controller");
 
@@ -81,6 +82,11 @@ router.post(
   requirePermission(Permission.PREORDER_READ),
   eventsController.ackAlertPlayback,
 );
+
+// Pastilles du menu latéral (facturation/caisse/parrainages en attente) :
+// pas de droit unique requis, chaque compteur se calcule selon les droits
+// effectifs de l'utilisateur (0 si le droit correspondant est absent).
+router.get("/nav-badges", navBadgesController.getNavBadges);
 
 // alias "preorders" pour compatibilite
 router.get(

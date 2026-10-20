@@ -7,6 +7,7 @@ const sponsorship = require("../../services/sponsorship.service");
 const purchase = require("../../services/sponsorship-purchase.service");
 const { notifySponsorshipApproved, notifySponsorshipReview } = require("../../services/sponsorship-notifications.service");
 const { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf } = require("../../services/sponsorship-agreement-pdf.service");
+const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
 const AGREEMENT_STATUSES = new Set(["APPROVED_PENDING_PURCHASE", "VALIDATED", "EXPIRED"]);
@@ -635,6 +636,13 @@ async function counterSubmitSponsorship(req, res) {
       note: `Parrainage saisi au comptoir pour le compte de ${sponsorFbo.nomComplet} (${sponsorFbo.numeroFbo})${existingSponsorFbo ? "" : ", numéro non reconnu par FBO Service au moment de la saisie"}.`,
       meta: { documents: documents.map((d) => d.type), consentVersion: sponsorship.CONSENT_VERSION, counterEntry: true },
       actorAdminId: req.user?.id || null,
+    });
+
+    publishRealtimeEvent({
+      countryId,
+      eventKey: "sponsorship_submitted",
+      orderId: created.id,
+      meta: { status: "SUBMITTED", channel: "COUNTER" },
     });
 
     return res.status(201).json({ id: created.id, status: created.status, statusLabel: sponsorship.STATUS_LABELS[created.status] });
