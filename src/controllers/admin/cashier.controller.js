@@ -66,6 +66,16 @@ function canViewConsolidated(role) {
   ]).has(String(role || "").trim().toUpperCase());
 }
 
+// Le facturier caissier facture, encaisse, certifie AS400 et lance la
+// préparation pour les MÊMES commandes : à la différence d'une caissière
+// classique (file de paiement partagée, n'importe qui peut encaisser
+// n'importe quelle commande déjà facturée), chaque facturier caissier ne
+// doit voir que les commandes qu'il a lui-même facturées (assignedInvoicerId),
+// pour un suivi et un bilan personnels cohérents de bout en bout.
+function isOwnershipScopedCashier(role) {
+  return String(role || "").trim().toUpperCase() === AdminRole.FACTURIER_CAISSIER;
+}
+
 function buildOrderSummary(order) {
   const latestAttempt = order?.activePayment?.attempts?.[0] || null;
   const latestCashierTx = order?.cashierTransactions?.[0] || null;
@@ -317,6 +327,12 @@ async function getWorkspace(req, res) {
       const normalizedMode = String(paymentMode).trim().toUpperCase();
       toCollectWhere.preorderPaymentMode = normalizedMode;
       toLaunchWhere.preorderPaymentMode = normalizedMode;
+    }
+
+    if (isOwnershipScopedCashier(req.user?.role)) {
+      const ownerId = req.user?.id || "__no_user__";
+      toCollectWhere.assignedInvoicerId = ownerId;
+      toLaunchWhere.assignedInvoicerId = ownerId;
     }
 
     const journalWhere = scopeWhere(req, {
@@ -577,6 +593,7 @@ async function getPaidToday(req, res) {
     const where = scopeWhere(req, {
       paymentStatus: "PAID",
       ...(idList.length ? { id: { in: idList } } : { paidAt: { gte: dayStart, lte: dayEnd } }),
+      ...(isOwnershipScopedCashier(req.user?.role) ? { assignedInvoicerId: req.user?.id || "__no_user__" } : {}),
     });
 
     const includeShape = {
