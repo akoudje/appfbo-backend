@@ -270,6 +270,16 @@ enum TicketStatus {
   ACTIVE
   USED
   CANCELLED
+  // Event clôturé, billet jamais scanné : converti en TicketCredit.
+  // Distinct de CANCELLED (réservé aux échecs/annulations de paiement).
+  EXPIRED
+}
+
+enum TicketCreditStatus {
+  ISSUED
+  REDEEMED
+  EXPIRED
+  REVOKED
 }
 
 enum TicketCheckInResult {
@@ -509,6 +519,7 @@ model Country {
   tickets Ticket[]
   ticketCheckInSessions TicketCheckInSession[]
   ticketCheckInLogs TicketCheckInLog[]
+  ticketCredits TicketCredit[]
   fboDocuments FboDocument[]
   sponsorships Sponsorship[]
   fboDocumentSignatories FboDocumentSignatory[]
@@ -677,6 +688,7 @@ model AdminUser {
   checkedInTickets Ticket[] @relation("TicketCheckedInBy")
   ticketCheckInSessions TicketCheckInSession[] @relation("TicketCheckInSessionAgent")
   ticketCheckInLogs TicketCheckInLog[] @relation("TicketCheckInLogAgent")
+  revokedTicketCredits TicketCredit[] @relation("TicketCreditRevokedBy")
   issuedFboDocuments FboDocument[] @relation("FboDocumentIssuedBy")
   cancelledFboDocuments FboDocument[] @relation("FboDocumentCancelledBy")
   createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
@@ -2078,6 +2090,10 @@ model TicketEvent {
   salesOpenAt DateTime?
   salesCloseAt DateTime?
 
+  // Nombre minimum de billets achetés dans une même commande pour que ses
+  // billets non scannés génèrent un crédit à la clôture de l'événement.
+  creditEligibilityMinQuantity Int @default(5)
+
   createdById String?
   createdBy AdminUser? @relation("TicketEventCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
@@ -2089,6 +2105,8 @@ model TicketEvent {
   tickets Ticket[]
   checkInSessions TicketCheckInSession[]
   checkInLogs TicketCheckInLog[]
+  ticketCreditsOrigin TicketCredit[] @relation("TicketCreditOriginEvent")
+  ticketCreditsRedeemed TicketCredit[] @relation("TicketCreditRedeemedEvent")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2111,6 +2129,11 @@ model TicketType {
   maxPerOrder Int @default(10)
   active Boolean @default(true)
   sortOrder Int @default(0)
+
+  // Places retirées de `capacity` pour la vente publique, mises de côté pour
+  // l'échange des crédits de billets non scannés (saisie manuelle par
+  // l'admin, informée par le nombre de crédits actifs sur cette catégorie).
+  creditReservedCapacity Int @default(0)
 
   tickets Ticket[]
   checkInLogs TicketCheckInLog[]
@@ -2177,6 +2200,8 @@ model TicketOrder {
 
   tickets Ticket[]
   checkInLogs TicketCheckInLog[]
+  ticketCreditsOrigin TicketCredit[] @relation("TicketCreditOriginOrder")
+  ticketCreditsRedeemed TicketCredit[] @relation("TicketCreditRedeemedOrder")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2221,6 +2246,8 @@ model Ticket {
   checkedInById String?
   checkedInBy AdminUser? @relation("TicketCheckedInBy", fields: [checkedInById], references: [id], onDelete: SetNull)
   checkInLogs TicketCheckInLog[]
+  ticketCreditOrigin TicketCredit? @relation("TicketCreditOriginTicket")
+  ticketCreditRedeemed TicketCredit? @relation("TicketCreditRedeemedTicket")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2339,6 +2366,63 @@ model TicketCheckInLog {
   @@index([sessionId, scannedAt])
   @@index([checkedById, scannedAt])
   @@index([result, scannedAt])
+}
+
+// Crédit nominatif émis quand un billet payé n'a jamais été scanné à la
+// clôture de son événement (commande d'au moins `creditEligibilityMinQuantity`
+// billets). Échangeable contre un nouveau billet de même catégorie sur le
+// prochain événement PUBLISHED du même pays, avant expiration.
+model TicketCredit {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  originEventId String
+  originEvent TicketEvent @relation("TicketCreditOriginEvent", fields: [originEventId], references: [id], onDelete: Restrict)
+
+  originOrderId String
+  originOrder TicketOrder @relation("TicketCreditOriginOrder", fields: [originOrderId], references: [id], onDelete: Restrict)
+
+  originTicketId String @unique
+  originTicket Ticket @relation("TicketCreditOriginTicket", fields: [originTicketId], references: [id], onDelete: Restrict)
+
+  originTicketTypeId String?
+  // Libellé de la catégorie au moment de l'émission, utilisé pour retrouver
+  // la catégorie équivalente sur l'événement suivant (les TicketType sont
+  // propres à chaque événement, il n'y a pas de FK stable entre éditions).
+  ticketTypeLabel String
+  priceFcfaSnapshot Int
+
+  holderFullName String
+  holderPhone String?
+  holderEmail String?
+
+  status TicketCreditStatus @default(ISSUED)
+  issuedAt DateTime @default(now())
+  expiresAt DateTime
+
+  redeemedAt DateTime?
+  redeemedEventId String?
+  redeemedEvent TicketEvent? @relation("TicketCreditRedeemedEvent", fields: [redeemedEventId], references: [id], onDelete: SetNull)
+  redeemedOrderId String?
+  redeemedOrder TicketOrder? @relation("TicketCreditRedeemedOrder", fields: [redeemedOrderId], references: [id], onDelete: SetNull)
+  redeemedTicketId String? @unique
+  redeemedTicket Ticket? @relation("TicketCreditRedeemedTicket", fields: [redeemedTicketId], references: [id], onDelete: SetNull)
+
+  revokedAt DateTime?
+  revokedById String?
+  revokedBy AdminUser? @relation("TicketCreditRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+  revokeReason String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, status, expiresAt])
+  @@index([holderPhone])
+  @@index([holderEmail])
+  @@index([originEventId])
+  @@index([redeemedEventId])
 }
 
 model CountrySettingsChange {

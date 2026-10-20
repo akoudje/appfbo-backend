@@ -66,10 +66,14 @@ function serializeEvent(event, counts = new Map()) {
     globalRemaining =
       event.capacity == null ? null : Math.max(0, event.capacity - globalCount);
   const ticketTypes = (event.ticketTypes || []).map((t) => {
+    // Places mises de côté pour l'échange des crédits (voir
+    // ticket-credit.service.js) : non comptées dans le "remaining" public.
+    const effectiveCapacity =
+      t.capacity == null ? null : Math.max(0, t.capacity - (t.creditReservedCapacity || 0));
     const local =
-      t.capacity == null
+      effectiveCapacity == null
         ? null
-        : Math.max(0, t.capacity - (counts.get("type:" + t.id) || 0));
+        : Math.max(0, effectiveCapacity - (counts.get("type:" + t.id) || 0));
     const remaining =
       local === null
         ? globalRemaining

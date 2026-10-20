@@ -79,6 +79,7 @@ async function upsertEvent(req, res) {
       capacity,
       salesOpenAt,
       salesCloseAt,
+      creditEligibilityMinQuantity,
     } = req.body || {};
 
     const normalizedTitle = String(title || "").trim();
@@ -118,6 +119,7 @@ async function upsertEvent(req, res) {
       capacity: parsePositiveInt(capacity),
       salesOpenAt: parseDate(salesOpenAt),
       salesCloseAt: parseDate(salesCloseAt),
+      creditEligibilityMinQuantity: Math.max(1, parsePositiveInt(creditEligibilityMinQuantity, 5) || 5),
       updatedById: req.user?.id || null,
     };
 
@@ -168,6 +170,7 @@ async function upsertTicketType(req, res) {
       maxPerOrder,
       active = true,
       sortOrder,
+      creditReservedCapacity,
     } = req.body || {};
 
     const normalizedLabel = String(label || "").trim();
@@ -184,6 +187,7 @@ async function upsertTicketType(req, res) {
       maxPerOrder: Math.max(1, parsePositiveInt(maxPerOrder, 10) || 10),
       active: Boolean(active),
       sortOrder: parsePositiveInt(sortOrder, 0) || 0,
+      creditReservedCapacity: parsePositiveInt(creditReservedCapacity, 0) || 0,
     };
 
     let ticketType;

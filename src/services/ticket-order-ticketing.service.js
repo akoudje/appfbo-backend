@@ -141,6 +141,8 @@ async function ensureTicketsActivatedForPaidOrder(tx, order) {
 }
 
 module.exports = {
+  ticketCode,
+  ticketQrToken,
   ticketOrderNumber,
   signTicketOrderAccessToken,
   verifyTicketOrderAccessToken,
