@@ -48,7 +48,7 @@ async function getBillingSettings(countryId) {
 }
 
 function billingAutoAssignPriority(role) {
-  if (role === "INVOICER") return 0;
+  if (role === "INVOICER" || role === "FACTURIER_CAISSIER") return 0;
   if (role === "SALES_DIRECTOR") return 1;
   if (role === "BILLING_MANAGER") return 2;
   if (role === "TECH_ADMIN") return 3;
@@ -235,7 +235,7 @@ async function autoAssignQueuedPreorder({
   }
 
   const primaryInvoicers = connectedInvoicers.filter((invoicer) =>
-    ["INVOICER", "SALES_DIRECTOR"].includes(invoicer.role),
+    ["INVOICER", "FACTURIER_CAISSIER", "SALES_DIRECTOR"].includes(invoicer.role),
   );
   const eligibleInvoicers = primaryInvoicers.length ? primaryInvoicers : connectedInvoicers;
 

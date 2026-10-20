@@ -15,6 +15,7 @@ const AdminRole = {
   COUNTER_MANAGER: "COUNTER_MANAGER",
   CAISSIERE: "CAISSIERE",
   INVOICER: "INVOICER",
+  FACTURIER_CAISSIER: "FACTURIER_CAISSIER",
   ORDER_PREPARER: "ORDER_PREPARER",
 };
 
@@ -161,6 +162,20 @@ const ROLE_PERMISSIONS = {
     Permission.COUNTRY_READ,
     Permission.PREORDER_READ,
     Permission.INVOICE_CREATE,
+    Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
+    Permission.SPONSORSHIP_REVIEW,
+  ],
+
+  // Évolution du rôle Facturier : facture, encaisse, certifie AS400 et lance
+  // la préparation, comme la caissière avant lui, en plus des parrainages.
+  // Coexiste avec INVOICER/CAISSIERE (certains pays gardent les rôles
+  // séparés) ; voir aussi billingQueue.service.js (priorité d'attribution
+  // automatique de la file de facturation).
+  [AdminRole.FACTURIER_CAISSIER]: [
+    Permission.COUNTRY_READ,
+    Permission.PREORDER_READ,
+    Permission.INVOICE_CREATE,
+    Permission.PAYMENT_VALIDATE,
     Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
     Permission.SPONSORSHIP_REVIEW,
   ],
