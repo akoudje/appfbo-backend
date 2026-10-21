@@ -29,10 +29,23 @@ function isAdminLikeOrigin(value = "") {
   }
 }
 
+// Adresses Vercel (*.vercel.app) : les déploiements de prévisualisation sont
+// protégés par une connexion Vercel. Un lien construit depuis l'une d'elles
+// (action faite sur une prévisualisation) demanderait au client de se
+// connecter à Vercel ; on retombe alors sur le domaine public.
+function isVercelOrigin(value = "") {
+  try {
+    return new URL(value).hostname.toLowerCase().endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
+}
+
 function isSafePublicFrontendOrigin(value = "") {
   const origin = normalizeHttpsBaseUrl(value);
   if (!origin) return false;
   if (isAdminLikeOrigin(origin)) return false;
+  if (isVercelOrigin(origin)) return false;
   return true;
 }
 
