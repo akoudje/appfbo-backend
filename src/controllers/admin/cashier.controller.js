@@ -1,6 +1,6 @@
 const { claimOrderSnapshot } = require("../../helpers/order-write-guard");
 const prisma = require("../../prisma");
-const { scopeWhere } = require("../../helpers/countryScope");
+const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const { AdminRole } = require("../../auth/permissions");
 const { generateParcelNumber } = require("../../helpers/parcel-number");
 const {
@@ -9,6 +9,8 @@ const {
 } = require("../../services/preorder-notifications.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 const billingQueueService = require("../../services/billingQueue.service");
+const { Prisma } = require("@prisma/client");
+const { resolveOrderSearchIds } = require("../../helpers/preorder-search");
 
 function normalizeDateStart(value) {
   if (!value) return null;
@@ -28,22 +30,6 @@ function normalizeDateEnd(value) {
 
 function normalizePaymentMode(value) {
   return String(value || "").trim().toUpperCase();
-}
-
-function digitsOnly(value) {
-  return String(value || "").replace(/\D/g, "");
-}
-
-function formatFboDigits(value) {
-  const digits = digitsOnly(value);
-  if (digits.length <= 3) return digits;
-  return digits.match(/.{1,3}/g).join("-");
-}
-
-function buildFboSearchTerms(value) {
-  const raw = String(value || "").trim();
-  const formatted = formatFboDigits(raw);
-  return Array.from(new Set([raw, formatted].filter(Boolean)));
 }
 
 function getPayerPhone(order) {
@@ -268,37 +254,14 @@ function sumAmount(rows, amountField = "amountExpectedFcfa") {
 async function getWorkspace(req, res) {
   try {
     const { q, paymentMode, dateFrom, dateTo, journalScope = "my" } = req.query;
-    const qs = String(q || "").trim();
-    const fboSearchTerms = buildFboSearchTerms(qs);
-    const searchConditions =
-      qs
-        ? [
-            ...fboSearchTerms.map((term) => ({
-              fboNumero: { contains: term, mode: "insensitive" },
-            })),
-            { fboNomComplet: { contains: qs, mode: "insensitive" } },
-            { factureReference: { contains: qs, mode: "insensitive" } },
-            { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
-            { preorderNumber: { contains: qs, mode: "insensitive" } },
-            { parcelNumber: { contains: qs, mode: "insensitive" } },
-            {
-              activePayment: {
-                attempts: {
-                  some: {
-                    providerPayerPhone: { contains: qs, mode: "insensitive" },
-                  },
-                },
-              },
-            },
-            {
-              cashierTransactions: {
-                some: {
-                  receiptNumber: { contains: qs, mode: "insensitive" },
-                },
-              },
-            },
-          ]
-        : null;
+    // Un seul OR sur 6 colonnes + 2 sous-requêtes force Postgres à
+    // abandonner ses index trigram pour un balayage complet (voir
+    // helpers/preorder-search.js) : on résout donc les ids correspondants
+    // via une UNION mono-colonne, réutilisée tel quel comme filtre id IN (...).
+    const matchedIds = await resolveOrderSearchIds({
+      q,
+      scopeSql: Prisma.sql`"countryId" = ${pickCountryId(req)}`,
+    });
 
     const toCollectWhere = scopeWhere(req, {
       OR: [
@@ -318,9 +281,9 @@ async function getWorkspace(req, res) {
       ],
     });
 
-    if (searchConditions) {
-      toCollectWhere.AND = [...(toCollectWhere.AND || []), { OR: searchConditions }];
-      toLaunchWhere.AND = [...(toLaunchWhere.AND || []), { OR: searchConditions }];
+    if (matchedIds) {
+      toCollectWhere.id = { in: matchedIds };
+      toLaunchWhere.id = { in: matchedIds };
     }
 
     if (paymentMode && String(paymentMode).trim()) {
@@ -346,8 +309,8 @@ async function getWorkspace(req, res) {
       ],
     });
 
-    if (searchConditions) {
-      journalWhere.AND = [...(journalWhere.AND || []), { OR: searchConditions }];
+    if (matchedIds) {
+      journalWhere.id = { in: matchedIds };
     }
 
     if (paymentMode && String(paymentMode).trim()) {
@@ -388,8 +351,8 @@ async function getWorkspace(req, res) {
       gte: validationFrom,
       lte: validationTo,
     };
-    if (searchConditions) {
-      baseValidationWhere.AND = [...(baseValidationWhere.AND || []), { OR: searchConditions }];
+    if (matchedIds) {
+      baseValidationWhere.id = { in: matchedIds };
     }
     if (paymentMode && String(paymentMode).trim()) {
       baseValidationWhere.preorderPaymentMode = String(paymentMode).trim().toUpperCase();

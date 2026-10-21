@@ -42,78 +42,16 @@ const {
   isBankProofPaymentMode,
   getEffectiveExpiryMinutes,
 } = require("../../services/preorder-expiration.service");
+const { Prisma } = require("@prisma/client");
+const { resolveOrderSearchIds: resolveOrderSearchIdsShared } = require("../../helpers/preorder-search");
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
   return Number.isFinite(n) ? n : fallback;
 }
 
-function digitsOnly(value) {
-  return String(value || "").replace(/\D/g, "");
-}
-
-function formatFboDigits(value) {
-  const digits = digitsOnly(value);
-  if (digits.length <= 3) return digits;
-  return digits.match(/.{1,3}/g).join("-");
-}
-
-function buildFboSearchTerms(value) {
-  const raw = String(value || "").trim();
-  const formatted = formatFboDigits(raw);
-  return Array.from(new Set([raw, formatted].filter(Boolean)));
-}
-
-// Recherche "q" de la liste commandes : un seul OR sur 6 colonnes + 2
-// sous-requêtes (comme le faisait buildOrdersListWhere avant) force Postgres
-// à abandonner les index trigram existants pour un balayage complet de la
-// table (mesuré : ~100ms en scan complet contre ~3ms par colonne avec son
-// index). On résout donc d'abord les ids correspondants via une UNION de
-// requêtes mono-colonne (chaque branche utilise son propre index), puis on
-// filtre juste sur ces ids dans la requête Prisma normale (pagination, tri,
-// autres filtres inchangés).
-async function resolveOrderSearchIds({ countryId, q }) {
-  const qs = String(q || "").trim();
-  if (!qs) return null;
-
-  const pattern = `%${qs}%`;
-  const fboTerms = buildFboSearchTerms(qs);
-  const fboPattern1 = `%${fboTerms[0]}%`;
-  const fboPattern2 = fboTerms[1] ? `%${fboTerms[1]}%` : fboPattern1;
-
-  const rows = await prisma.$queryRaw`
-    SELECT id FROM (
-      SELECT id FROM "Preorder"
-        WHERE "countryId" = ${countryId}
-          AND ("fboNumero" ILIKE ${fboPattern1} OR "fboNumero" ILIKE ${fboPattern2})
-      UNION
-      SELECT id FROM "Preorder"
-        WHERE "countryId" = ${countryId} AND "fboNomComplet" ILIKE ${pattern}
-      UNION
-      SELECT id FROM "Preorder"
-        WHERE "countryId" = ${countryId} AND "factureReference" ILIKE ${pattern}
-      UNION
-      SELECT id FROM "Preorder"
-        WHERE "countryId" = ${countryId} AND "paymentCollectionCode" ILIKE ${pattern}
-      UNION
-      SELECT id FROM "Preorder"
-        WHERE "countryId" = ${countryId} AND "preorderNumber" ILIKE ${pattern}
-      UNION
-      SELECT id FROM "Preorder"
-        WHERE "countryId" = ${countryId} AND "parcelNumber" ILIKE ${pattern}
-      UNION
-      SELECT pr.id FROM "Preorder" pr
-        JOIN "PaymentAttempt" pa ON pa."paymentId" = pr."activePaymentId"
-        WHERE pr."countryId" = ${countryId} AND pa."providerPayerPhone" ILIKE ${pattern}
-      UNION
-      SELECT pr.id FROM "Preorder" pr
-        JOIN "CashierTransaction" ct ON ct."preorderId" = pr.id
-        WHERE pr."countryId" = ${countryId} AND ct."receiptNumber" ILIKE ${pattern}
-    ) matched
-    LIMIT 300
-  `;
-
-  return rows.map((row) => row.id);
+function resolveOrderSearchIds({ countryId, q }) {
+  return resolveOrderSearchIdsShared({ q, scopeSql: Prisma.sql`"countryId" = ${countryId}` });
 }
 
 function getBillingQueueOrderStatusFilter(billingWorkStatus) {

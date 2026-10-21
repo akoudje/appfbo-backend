@@ -2,6 +2,8 @@ const crypto = require("crypto");
 const prisma = require("../../prisma");
 const { sendSms } = require("../../services/sms.service");
 const externalWavePaymentService = require("../../services/external-wave-payment.service");
+const { Prisma } = require("@prisma/client");
+const { resolveOrderSearchIds } = require("../../helpers/preorder-search");
 
 const ALLOWED_STATUSES = new Set(["DRAFT", "ACTIVE", "PAID", "CANCELLED", "EXPIRED"]);
 const ALLOWED_SOURCES = new Set(["ADMIN", "QR_FORM"]);
@@ -468,16 +470,24 @@ async function findAttachOrders(req, res) {
   try {
     const q = normalizeOptionalText(req.query.q);
     if (!q || q.length < 2) return res.json({ data: [] });
-    const orders = await prisma.preorder.findMany({
-      where: {
-        countryId: req.countryId,
-        status: { notIn: ["CANCELLED", "PAID", "READY", "FULFILLED"] },
-        paymentStatus: { not: "PAID" },
-        OR: ["preorderNumber", "factureReference", "fboNomComplet", "fboNumero"].map((field) => ({ [field]: { contains: q, mode: "insensitive" } })),
-      },
-      select: { id: true, preorderNumber: true, factureReference: true, fboNomComplet: true, fboNumero: true, totalFcfa: true },
-      take: 10, orderBy: { createdAt: "desc" },
+    // Voir helpers/preorder-search.js : un OR multi-colonnes fait perdre ses
+    // index trigram à Postgres, d'où la résolution des ids en amont.
+    const matchedIds = await resolveOrderSearchIds({
+      q,
+      scopeSql: Prisma.sql`"countryId" = ${req.countryId}`,
     });
+    const orders = matchedIds
+      ? await prisma.preorder.findMany({
+          where: {
+            countryId: req.countryId,
+            status: { notIn: ["CANCELLED", "PAID", "READY", "FULFILLED"] },
+            paymentStatus: { not: "PAID" },
+            id: { in: matchedIds },
+          },
+          select: { id: true, preorderNumber: true, factureReference: true, fboNomComplet: true, fboNumero: true, totalFcfa: true },
+          take: 10, orderBy: { createdAt: "desc" },
+        })
+      : [];
     return res.json({ data: orders });
   } catch (error) {
     console.error("externalPaymentLinks.findAttachOrders error:", error);
