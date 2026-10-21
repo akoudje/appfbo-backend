@@ -337,7 +337,14 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
     };
   }
 
-  await releaseExpiredAssignments({ countryId });
+  // Nettoyage des attributions expirées : utile mais pas indispensable pour
+  // cette prise en charge précise, et observé à plusieurs secondes sur cette
+  // base — on le lance en tâche de fond plutôt que de faire attendre
+  // l'utilisateur dessus (un dossier expiré pas encore libéré sera repris au
+  // prochain passage, sans bloquer celui-ci).
+  releaseExpiredAssignments({ countryId }).catch((error) => {
+    console.error("[billingQueue] releaseExpiredAssignments error:", error);
+  });
   const settings = await getBillingSettings(countryId);
   const maxActive = settings.maxActiveBillingPerInvoicer;
   const activeCount = await countActiveAssignments(prisma, { countryId, userId });
@@ -398,7 +405,7 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
       ok: false,
       reason: "NO_ORDER_AVAILABLE",
     };
-  });
+  }, { timeout: 15000, maxWait: 10000 });
 }
 
 // Prise en charge d'un dossier précis choisi dans la file (bouton "Traiter"),
@@ -415,7 +422,9 @@ async function claimSpecificPreorderForInvoicer({ preorderId, userId, countryId 
     };
   }
 
-  await releaseExpiredAssignments({ countryId });
+  releaseExpiredAssignments({ countryId }).catch((error) => {
+    console.error("[billingQueue] releaseExpiredAssignments error:", error);
+  });
   const settings = await getBillingSettings(countryId);
   const maxActive = settings.maxActiveBillingPerInvoicer;
   const activeCount = await countActiveAssignments(prisma, { countryId, userId });
@@ -440,6 +449,7 @@ async function claimSpecificPreorderForInvoicer({ preorderId, userId, countryId 
       note: "Précommande prise en charge depuis la file de facturation",
       maxActive,
     }),
+    { timeout: 15000, maxWait: 10000 },
   );
 }
 
