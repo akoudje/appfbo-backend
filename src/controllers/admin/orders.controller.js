@@ -106,7 +106,7 @@ function normalizeRelaunchPaymentWindowMinutes(body = {}, options = {}) {
     body.hours ??
     null;
 
-  const maxMinutes = isBankStyle ? 720 * 60 : 30; // jusqu'à 30 jours pour le virement
+  const maxMinutes = isBankStyle ? 720 * 60 : 60; // jusqu'à 30 jours pour le virement, 1h pour le reste
   const minMinutes = isBankStyle ? 60 : 10; // au moins 1h pour le virement
   const defaultMinutes = isBankStyle
     ? Math.min(maxMinutes, Math.max(minMinutes, Math.round(bankPaymentDueHours * 60)))
@@ -1826,6 +1826,12 @@ async function relaunchPayment(req, res) {
                 paymentProvider: "MANUAL",
               }
             : {}),
+          // Remis dans la file (QUEUED) : l'ancienne attribution (avant
+          // l'annulation auto) doit être effacée, sinon la garde atomique de
+          // invoiceAndSendPreorder refuse la relance dès que l'admin qui
+          // relance n'est pas le facturier d'origine (PREORDER_ALREADY_ASSIGNED).
+          assignedInvoicerId: null,
+          assignedAt: null,
           billingWorkStatus: "QUEUED",
           billingQueueEnteredAt: new Date(),
           billingCompletedAt: null,
