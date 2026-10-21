@@ -553,6 +553,72 @@ async function releaseBillingWork({ preorderId, userId, countryId, reason }) {
   return updated;
 }
 
+// Appelé par realtime-events.service.js quand un facturier n'a plus aucune
+// connexion temps réel depuis le délai de grâce configuré (déconnexion
+// probable, pas un simple refresh de page) : remet ses dossiers encore en
+// cours de saisie dans la file partagée, pour qu'un autre facturier
+// connecté puisse les reprendre. Les dossiers déjà facturés et en attente
+// de paiement (WAITING_PAYMENT) ne sont pas concernés : il n'y a plus de
+// saisie en cours dessus.
+async function releaseActiveBillingWorkForDisconnectedUser({ userId, countryId }) {
+  if (!userId || !countryId) return { releasedCount: 0, releasedIds: [] };
+
+  const active = await prisma.preorder.findMany({
+    where: {
+      countryId,
+      assignedInvoicerId: userId,
+      billingWorkStatus: { in: ["ASSIGNED", "IN_PROGRESS", "WAITING_CUSTOMER_DATA"] },
+      status: "SUBMITTED",
+    },
+    select: { id: true },
+  });
+
+  if (!active.length) return { releasedCount: 0, releasedIds: [] };
+
+  const now = new Date();
+  const releasedIds = [];
+
+  await prisma.$transaction(
+    async (tx) => {
+      for (const row of active) {
+        const released = await tx.preorder.updateMany({
+          where: {
+            id: row.id,
+            countryId,
+            assignedInvoicerId: userId,
+            billingWorkStatus: { in: ["ASSIGNED", "IN_PROGRESS", "WAITING_CUSTOMER_DATA"] },
+            status: "SUBMITTED",
+          },
+          data: {
+            assignedInvoicerId: null,
+            assignedAt: null,
+            billingWorkStatus: "RELEASED",
+            billingReleasedAt: now,
+            billingLastActivityAt: now,
+          },
+        });
+
+        if (released.count !== 1) continue;
+
+        await tx.preorderLog.create({
+          data: {
+            preorderId: row.id,
+            action: "RELEASE_INVOICER",
+            note: "Facturier déconnecté : dossier remis dans la file.",
+            actorAdminId: null,
+            meta: { previousAssignedInvoicerId: userId, mode: "AUTO_DISCONNECT_RELEASE" },
+          },
+        });
+
+        releasedIds.push(row.id);
+      }
+    },
+    { timeout: 15000, maxWait: 10000 },
+  );
+
+  return { releasedCount: releasedIds.length, releasedIds };
+}
+
 function normalizeAs400Amount(value) {
   if (value === undefined || value === null || String(value).trim() === "") return null;
   const parsed = Number(String(value).replace(/[^\d.-]/g, ""));
@@ -809,6 +875,7 @@ module.exports = {
   autoAssignQueuedPreorder,
   startBillingWork,
   releaseBillingWork,
+  releaseActiveBillingWorkForDisconnectedUser,
   escalateBillingWork,
   resolveAs400CertificationDispute,
   resolveBillingEscalation,

@@ -3,6 +3,84 @@ const { getEffectivePermissions, Permission } = require("../auth/permissions");
 const listeners = new Map();
 let nextListenerId = 1;
 
+// Déconnexion d'un facturier (plus aucune connexion temps réel) : ses
+// dossiers de facturation en cours de saisie sont remis dans la file
+// partagée après un délai de grâce, pour ne pas les bloquer indéfiniment
+// sans réagir à un simple rafraîchissement de page. Voir cleanup() et
+// subscribeRealtimeEvents() ci-dessous ; la libération elle-même vit dans
+// billingQueue.service.js (require tardif pour éviter une dépendance
+// circulaire : ce fichier-ci exporte déjà getConnectedRealtimeUserIds,
+// utilisé par billingQueue.service.js).
+const pendingDisconnectReleases = new Map();
+
+function isDisconnectReleaseEnabled() {
+  return String(process.env.BILLING_DISCONNECT_RELEASE_ENABLED ?? "true").toLowerCase() === "true";
+}
+
+function getDisconnectReleaseGraceMs() {
+  const minutes = Number.parseFloat(process.env.BILLING_DISCONNECT_RELEASE_GRACE_MINUTES ?? "3");
+  return (Number.isFinite(minutes) && minutes > 0 ? minutes : 3) * 60 * 1000;
+}
+
+function isUserStillConnected(userId) {
+  for (const listener of listeners.values()) {
+    if (listener.userId === userId) return true;
+  }
+  return false;
+}
+
+async function releaseBillingWorkForDisconnectedUser(userId, countryId) {
+  try {
+    const { releaseActiveBillingWorkForDisconnectedUser } = require("./billingQueue.service");
+    const result = await releaseActiveBillingWorkForDisconnectedUser({ userId, countryId });
+    if (result?.releasedCount) {
+      console.log("[realtime] billing work released after disconnect", {
+        userId,
+        countryId,
+        releasedCount: result.releasedCount,
+      });
+      for (const preorderId of result.releasedIds || []) {
+        publishRealtimeEvent({
+          countryId,
+          eventKey: "billing_queue_new",
+          orderId: preorderId,
+          meta: {
+            billingWorkStatus: "RELEASED",
+            assignedInvoicerId: null,
+            autoAssigned: false,
+            reason: "DISCONNECT",
+          },
+        });
+      }
+    }
+  } catch (error) {
+    console.error("[realtime] releaseBillingWorkForDisconnectedUser error:", error);
+  }
+}
+
+function scheduleDisconnectRelease(userId, countryId) {
+  if (!isDisconnectReleaseEnabled() || !userId) return;
+  if (isUserStillConnected(userId)) return; // autre onglet/appareil encore connecté
+  if (pendingDisconnectReleases.has(userId)) return; // déjà programmé
+
+  const timer = setTimeout(() => {
+    pendingDisconnectReleases.delete(userId);
+    if (!isUserStillConnected(userId)) {
+      void releaseBillingWorkForDisconnectedUser(userId, countryId);
+    }
+  }, getDisconnectReleaseGraceMs());
+
+  if (typeof timer.unref === "function") timer.unref();
+  pendingDisconnectReleases.set(userId, timer);
+}
+
+function cancelPendingDisconnectRelease(userId) {
+  const timer = pendingDisconnectReleases.get(userId);
+  if (!timer) return;
+  clearTimeout(timer);
+  pendingDisconnectReleases.delete(userId);
+}
+
 const stats = {
   connectedTotal: 0,
   disconnectedTotal: 0,
@@ -51,6 +129,7 @@ function subscribeRealtimeEvents({ req, res }) {
 
   listeners.set(listenerId, listener);
   stats.connectedTotal += 1;
+  if (listener.userId) cancelPendingDisconnectRelease(listener.userId);
 
   sendSse(
     res,
@@ -70,6 +149,7 @@ function subscribeRealtimeEvents({ req, res }) {
     stats.lastDisconnectAt = new Date().toISOString();
     const key = String(reason || "unknown").toLowerCase();
     stats.disconnectReasons[key] = (stats.disconnectReasons[key] || 0) + 1;
+    if (listener.userId) scheduleDisconnectRelease(listener.userId, listener.countryId);
   };
 
   listener.close = (reason) => {
@@ -100,13 +180,16 @@ function publishRealtimeEvent(event = {}) {
   stats.publishedTotal += 1;
   stats.lastPublishedAt = payload.at;
 
-  for (const [listenerId, listener] of listeners.entries()) {
+  for (const [, listener] of listeners.entries()) {
     if (
       !listener?.res ||
       listener.res.writableEnded ||
       listener.res.destroyed
     ) {
-      listeners.delete(listenerId);
+      // Route via close() plutôt qu'une suppression directe de la Map, pour
+      // que la libération des dossiers après déconnexion (cleanup()) se
+      // déclenche aussi quand c'est ici qu'on détecte la connexion morte.
+      listener.close?.("dead_on_publish");
       continue;
     }
 
@@ -120,7 +203,7 @@ function publishRealtimeEvent(event = {}) {
 
     const ok = sendSse(listener.res, payload, "alert");
     if (!ok) {
-      listeners.delete(listenerId);
+      listener.close?.("send_failed");
       stats.droppedTotal += 1;
     } else {
       stats.deliveredTotal += 1;
@@ -243,17 +326,17 @@ async function validateRealtimeSessions() {
 const heartbeatTimer = setInterval(() => {
   void validateRealtimeSessions();
   const pingPayload = { type: "PING", at: new Date().toISOString() };
-  for (const [listenerId, listener] of listeners.entries()) {
+  for (const [, listener] of listeners.entries()) {
     if (
       !listener?.res ||
       listener.res.writableEnded ||
       listener.res.destroyed
     ) {
-      listeners.delete(listenerId);
+      listener.close?.("heartbeat_dead");
       continue;
     }
     const ok = sendSse(listener.res, pingPayload, "ping");
-    if (!ok) listeners.delete(listenerId);
+    if (!ok) listener.close?.("heartbeat_send_failed");
   }
 }, 25000);
 
