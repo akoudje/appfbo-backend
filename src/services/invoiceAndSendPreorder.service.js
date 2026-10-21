@@ -538,6 +538,44 @@ async function invoiceAndSendPreorder({
 
   // 2) Facturer la commande
   const invoicedPreorder = await prisma.$transaction(async (tx) => {
+    // Garde atomique : deux facturiers qui ouvrent et soumettent le même
+    // dossier en même temps ne doivent pas pouvoir le facturer tous les
+    // deux. On ne se fie pas à existingPreorder (lu avant la transaction,
+    // potentiellement périmé) : le statut ET l'attribution sont revérifiés
+    // ici, et cette écriture attribue le dossier au premier qui valide s'il
+    // n'était encore à personne.
+    const claimed = await tx.preorder.updateMany({
+      where: {
+        id: existingPreorder.id,
+        status: "SUBMITTED",
+        OR: [{ assignedInvoicerId: null }, { assignedInvoicerId: actorAdminId }],
+      },
+      data: {
+        assignedInvoicerId: actorAdminId || existingPreorder.assignedInvoicerId || null,
+        assignedAt: existingPreorder.assignedAt || (actorAdminId ? now : existingPreorder.assignedAt),
+        billingLastActivityAt: now,
+      },
+    });
+
+    if (claimed.count !== 1) {
+      const current = await tx.preorder.findUnique({
+        where: { id: existingPreorder.id },
+        select: {
+          status: true,
+          assignedInvoicer: { select: { fullName: true, email: true } },
+        },
+      });
+
+      if (!current || current.status !== "SUBMITTED") {
+        throw new Error("PREORDER_NOT_INVOICEABLE");
+      }
+
+      const err = new Error("PREORDER_ALREADY_ASSIGNED");
+      err.code = "PREORDER_ALREADY_ASSIGNED";
+      err.assignedToName = current.assignedInvoicer?.fullName || current.assignedInvoicer?.email || null;
+      throw err;
+    }
+
     for (const it of pricingSummary.items) {
       await tx.preorderItem.update({
         where: {
@@ -589,12 +627,8 @@ async function invoiceAndSendPreorder({
         emballageFcfa: pricingSummary.totals.emballageFcfa || 0,
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
 
-        // file facturier
-        assignedInvoicerId:
-          existingPreorder.assignedInvoicerId || actorAdminId || null,
-        assignedAt:
-          existingPreorder.assignedAt ||
-          (actorAdminId ? now : existingPreorder.assignedAt),
+        // file facturier : assignedInvoicerId/assignedAt déjà posés par la
+        // garde atomique ci-dessus.
         billingStartedAt: existingPreorder.billingStartedAt || now,
         billingLastActivityAt: now,
         billingWorkStatus: "WAITING_PAYMENT",

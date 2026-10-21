@@ -1437,6 +1437,15 @@ async function invoiceOrder(req, res) {
       });
     }
 
+    if (e.code === "PREORDER_ALREADY_ASSIGNED") {
+      return res.status(409).json({
+        code: "PREORDER_ALREADY_ASSIGNED",
+        message: e.assignedToName
+          ? `Ce dossier est déjà pris en charge par ${e.assignedToName}.`
+          : "Ce dossier est déjà pris en charge par un autre facturier.",
+      });
+    }
+
     if (e.message === "PREORDER_EMPTY_ITEMS") {
       return res.status(400).json({
         message:
