@@ -11,8 +11,24 @@ const {
 } = require("../services/country-order-options.service");
 const { buildPublicBankProofContext } = require("./customerBankProof.controller");
 const { sendPreorderNotification } = require("../services/preorder-notifications.service");
+const { Prisma } = require("@prisma/client");
+const { resolveOrderSearchIds } = require("../helpers/preorder-search");
 
 const CIV_ZONE_COUNTRY_CODES = ["CIV", "BEN", "TGO", "NER", "BFA"];
+
+// Même périmètre que le where principal de listMyOrders (zone pays, hors
+// brouillons, identité du client) : à ne jamais en faire un sous-ensemble,
+// sinon la recherche risquerait d'exposer les commandes d'un autre client.
+function buildCustomerOrderSearchScopeSql({ fboId, numeroFbo }) {
+  const identitySql = numeroFbo
+    ? Prisma.sql`("fboId" = ${fboId} OR "placedByFboNumero" = ${numeroFbo})`
+    : Prisma.sql`"fboId" = ${fboId}`;
+  return Prisma.sql`
+    "countryId" IN (SELECT id FROM "Country" WHERE code = ANY(${CIV_ZONE_COUNTRY_CODES}))
+    AND status != 'DRAFT'
+    AND ${identitySql}
+  `;
+}
 const CUSTOMER_CANCELLABLE_STATUSES = ["SUBMITTED"];
 
 function canonicalFboNumber(raw = "") {
@@ -87,7 +103,17 @@ async function listMyOrders(req, res) {
     const status = String(req.query?.status || "").toUpperCase();
     const relation = String(req.query?.relation || "").toUpperCase();
     where.AND = [];
-    if (q) where.AND.push({ OR: ["preorderNumber", "factureReference", "fboNomComplet", "fboNumero"].map((field) => ({ [field]: { contains: q, mode: "insensitive" } })) });
+    if (q) {
+      // Voir helpers/preorder-search.js : un OR multi-colonnes fait perdre
+      // ses index trigram à Postgres. Le périmètre (zone pays, hors
+      // brouillons, identité du client) est reproduit à l'identique dans
+      // buildCustomerOrderSearchScopeSql, jamais relâché.
+      const matchedIds = await resolveOrderSearchIds({
+        q,
+        scopeSql: buildCustomerOrderSearchScopeSql({ fboId, numeroFbo }),
+      });
+      where.AND.push({ id: { in: matchedIds || [] } });
+    }
     if (["SUBMITTED", "INVOICED", "PAYMENT_PENDING", "PAID", "READY", "FULFILLED", "CANCELLED"].includes(status)) where.AND.push({ status });
     if (status === "ACTIVE") where.AND.push({ status: { notIn: ["CANCELLED", "FULFILLED"] } });
     if (status === "TO_PAY") where.AND.push({ OR: [

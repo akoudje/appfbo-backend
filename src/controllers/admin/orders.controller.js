@@ -42,26 +42,16 @@ const {
   isBankProofPaymentMode,
   getEffectiveExpiryMinutes,
 } = require("../../services/preorder-expiration.service");
+const { Prisma } = require("@prisma/client");
+const { resolveOrderSearchIds: resolveOrderSearchIdsShared } = require("../../helpers/preorder-search");
 
 function parseIntSafe(v, fallback) {
   const n = Number.parseInt(v, 10);
   return Number.isFinite(n) ? n : fallback;
 }
 
-function digitsOnly(value) {
-  return String(value || "").replace(/\D/g, "");
-}
-
-function formatFboDigits(value) {
-  const digits = digitsOnly(value);
-  if (digits.length <= 3) return digits;
-  return digits.match(/.{1,3}/g).join("-");
-}
-
-function buildFboSearchTerms(value) {
-  const raw = String(value || "").trim();
-  const formatted = formatFboDigits(raw);
-  return Array.from(new Set([raw, formatted].filter(Boolean)));
+function resolveOrderSearchIds({ countryId, q }) {
+  return resolveOrderSearchIdsShared({ q, scopeSql: Prisma.sql`"countryId" = ${countryId}` });
 }
 
 function getBillingQueueOrderStatusFilter(billingWorkStatus) {
@@ -392,7 +382,7 @@ function createSimplePdf(lines = []) {
   return Buffer.from(pdf, "utf8");
 }
 
-function buildOrdersListWhere(req, overrides = {}) {
+async function buildOrdersListWhere(req, overrides = {}) {
   validateOrdersQuery(req.query);
   const {
     status,
@@ -483,37 +473,8 @@ function buildOrdersListWhere(req, overrides = {}) {
   }
 
   if (q && String(q).trim()) {
-    const qs = String(q).trim();
-    const fboSearchTerms = buildFboSearchTerms(qs);
-    where.AND = where.AND || [];
-    where.AND.push({
-      OR: [
-        ...fboSearchTerms.map((term) => ({
-          fboNumero: { contains: term, mode: "insensitive" },
-        })),
-        { fboNomComplet: { contains: qs, mode: "insensitive" } },
-        { factureReference: { contains: qs, mode: "insensitive" } },
-        { paymentCollectionCode: { contains: qs, mode: "insensitive" } },
-        { preorderNumber: { contains: qs, mode: "insensitive" } },
-        { parcelNumber: { contains: qs, mode: "insensitive" } },
-        {
-          activePayment: {
-            attempts: {
-              some: {
-                providerPayerPhone: { contains: qs, mode: "insensitive" },
-              },
-            },
-          },
-        },
-        {
-          cashierTransactions: {
-            some: {
-              receiptNumber: { contains: qs, mode: "insensitive" },
-            },
-          },
-        },
-      ],
-    });
+    const matchedIds = await resolveOrderSearchIds({ countryId: where.countryId, q });
+    where.id = { in: matchedIds };
   }
 
   const from = dateFrom ? normalizeDateStart(String(dateFrom)) : null;
@@ -555,7 +516,7 @@ async function listOrders(req, res) {
     );
     const skip = (page - 1) * pageSize;
 
-    const where = buildOrdersListWhere(req);
+    const where = await buildOrdersListWhere(req);
 
     const orderBy = ordersSort(req.query);
 
@@ -670,7 +631,7 @@ const SUBMITTED_FIFO_ORDER = [
 
 async function exportOrders(req, res) {
   try {
-    const where = buildOrdersListWhere(req);
+    const where = await buildOrdersListWhere(req);
     const count = await prisma.preorder.count({ where });
     if (count > 10000) return res.status(400).json({ message: "L’export est limité à 10 000 commandes. Affinez les filtres." });
     const isSubmittedQueue = String(req.query.status || "").toUpperCase() === "SUBMITTED";
@@ -701,7 +662,7 @@ async function getSubmittedOrdersExport(req, res) {
 
     const where = preorderNumbers.length
       ? scopeWhere(req, { preorderNumber: { in: preorderNumbers } })
-      : buildOrdersListWhere(req, { status: "SUBMITTED" });
+      : await buildOrdersListWhere(req, { status: "SUBMITTED" });
 
     // Sans EXPORT_READ (ex. facturier via INVOICE_CREATE) : on ne laisse
     // jamais imprimer autre chose que sa propre file (non réclamé + ses
