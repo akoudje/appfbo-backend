@@ -25,6 +25,29 @@ async function claimNext(req, res) {
   }
 }
 
+async function claimSpecific(req, res) {
+  try {
+    const userId = req.user?.id;
+    const countryId = req.country?.id || req.countryId;
+    const { id } = req.params;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Utilisateur non authentifié" });
+    }
+
+    const result = await billingQueueService.claimSpecificPreorderForInvoicer({
+      preorderId: id,
+      userId,
+      countryId,
+    });
+
+    return res.json(result);
+  } catch (e) {
+    console.error("claimSpecific error:", e);
+    return res.status(500).json({ message: e.message || "Erreur claimSpecific" });
+  }
+}
+
 async function startWork(req, res) {
   try {
     const userId = req.user?.id;
@@ -210,6 +233,7 @@ async function resolveEscalation(req, res) {
 
 module.exports = {
   claimNext,
+  claimSpecific,
   startWork,
   releaseWork,
   escalateWork,
