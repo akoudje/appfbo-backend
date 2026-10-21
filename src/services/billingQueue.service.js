@@ -401,6 +401,48 @@ async function claimNextPreorderForInvoicer({ userId, countryId }) {
   });
 }
 
+// Prise en charge d'un dossier précis choisi dans la file (bouton "Traiter"),
+// par opposition à claimNextPreorderForInvoicer qui choisit lui-même le
+// prochain dossier prioritaire. Même garde atomique (assignQueuedPreorderToInvoicer
+// réaffecte seulement si le dossier est encore libre) : évite que deux
+// facturiers qui cliquent "Traiter" sur la même ligne au même moment se
+// retrouvent tous les deux à la travailler.
+async function claimSpecificPreorderForInvoicer({ preorderId, userId, countryId }) {
+  if (!userId) {
+    return {
+      ok: false,
+      reason: "UNAUTHENTICATED_USER",
+    };
+  }
+
+  await releaseExpiredAssignments({ countryId });
+  const settings = await getBillingSettings(countryId);
+  const maxActive = settings.maxActiveBillingPerInvoicer;
+  const activeCount = await countActiveAssignments(prisma, { countryId, userId });
+
+  if (activeCount >= maxActive) {
+    return {
+      ok: false,
+      reason: "MAX_ACTIVE_REACHED",
+      activeCount,
+      maxActive,
+    };
+  }
+
+  return prisma.$transaction((tx) =>
+    assignQueuedPreorderToInvoicer({
+      tx,
+      preorderId,
+      countryId,
+      userId,
+      actorAdminId: userId,
+      mode: "MANUAL_CLAIM",
+      note: "Précommande prise en charge depuis la file de facturation",
+      maxActive,
+    }),
+  );
+}
+
 async function startBillingWork({ preorderId, userId, countryId }) {
   const preorder = await prisma.preorder.findFirst({
     where: {
@@ -753,6 +795,7 @@ async function resolveBillingEscalation({ preorderId, userId, countryId, note })
 
 module.exports = {
   claimNextPreorderForInvoicer,
+  claimSpecificPreorderForInvoicer,
   autoAssignQueuedPreorder,
   startBillingWork,
   releaseBillingWork,

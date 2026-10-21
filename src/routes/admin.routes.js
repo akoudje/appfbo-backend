@@ -28,6 +28,7 @@ const {
 
 const {
   claimNext,
+  claimSpecific,
   startWork,
   releaseWork,
   escalateWork,
@@ -111,6 +112,12 @@ router.post(
   "/billing/claim-next",
   requirePermission(Permission.INVOICE_CREATE),
   claimNext,
+);
+
+router.post(
+  "/billing/:id/claim",
+  requirePermission(Permission.INVOICE_CREATE),
+  claimSpecific,
 );
 
 router.post(
