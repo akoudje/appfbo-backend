@@ -12,8 +12,11 @@ const session = require('../services/ticket-portal-session.service');
 const sms = require('./ticketSmsRecovery.controller');
 const recovery = require('../services/ticket-phone-recovery.service');
 const {
-  signTicketOrderAccessToken
+  signTicketOrderAccessToken,
+  paidOrderTicketInclude
 } = require('../services/ticket-order-ticketing.service');
+const ticketCredit = require('../services/ticket-credit.service');
+const { sendTicketOrderEmail } = require('../services/ticket-email-notifications.service');
 const OTP_ERROR = 'Code invalide ou expiré. Demandez un nouveau code si nécessaire.';
 function failure(res, error) {
   console.error('[ticket-portal] operation failed', {
@@ -281,10 +284,81 @@ async function listOrders(req, res) {
     return failure(res, error);
   }
 }
+async function listCredits(req, res) {
+  try {
+    const portal = await sms.currentScope(req.ticketPortal, req);
+    if (!portal) return res.status(401).json({
+      message: 'Reconnectez-vous pour retrouver vos tickets.'
+    });
+    if (portal.scope === 'PENDING_REFERENCE') return res.status(409).json({
+      code: 'ORDER_REFERENCE_REQUIRED',
+      ...sms.summary(portal),
+      message: 'Saisissez votre référence d’achat pour ouvrir vos tickets.'
+    });
+    const { credits, targetEvent } = await ticketCredit.listCreditsForHolder({
+      countryId: req.countryId,
+      channel: portal.channel,
+      phone: portal.phone,
+      countryCode: req.country?.code,
+      email: portal.email
+    });
+    return res.json({
+      ...sms.summary(portal),
+      data: credits,
+      targetEvent: targetEvent ? { id: targetEvent.id, title: targetEvent.title, startsAt: targetEvent.startsAt } : null
+    });
+  } catch (error) {
+    return failure(res, error);
+  }
+}
+
+async function redeemCredit(req, res) {
+  try {
+    const portal = await sms.currentScope(req.ticketPortal, req);
+    if (!portal) return res.status(401).json({
+      message: 'Reconnectez-vous pour retrouver vos tickets.'
+    });
+    if (portal.scope === 'PENDING_REFERENCE') return res.status(409).json({
+      code: 'ORDER_REFERENCE_REQUIRED',
+      message: 'Saisissez votre référence d’achat pour ouvrir vos tickets.'
+    });
+    const result = await ticketCredit.redeemTicketCredit({
+      creditId: String(req.params.id || ''),
+      countryId: req.countryId,
+      channel: portal.channel,
+      phone: portal.phone,
+      countryCode: req.country?.code,
+      email: portal.email
+    });
+
+    const order = await prisma.ticketOrder.findUnique({
+      where: { id: result.order.id },
+      include: paidOrderTicketInclude()
+    });
+    sendTicketOrderEmail({ order }).catch(error => {
+      console.error('[ticket-portal] credit redemption email error:', error);
+    });
+
+    return res.json({
+      ok: true,
+      orderNumber: order.orderNumber,
+      accessToken: signTicketOrderAccessToken(order.orderNumber)
+    });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({
+      message: error.message,
+      code: error.code || null
+    });
+    return failure(res, error);
+  }
+}
+
 module.exports = {
   requestOtp,
   verifyOtp,
   getSession,
   logout,
-  listOrders
+  listOrders,
+  listCredits,
+  redeemCredit
 };

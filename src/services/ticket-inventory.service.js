@@ -70,9 +70,14 @@ async function assertCapacity(tx, event, type, qty, excludeOrderId = null) {
     occupied(tx, { eventId: event.id }, excludeOrderId),
     occupied(tx, { eventId: event.id, ticketTypeId: type.id }, excludeOrderId),
   ]);
+  // La vente publique ne doit pas consommer les places mises de côté pour
+  // l'échange des crédits de billets non scannés (voir ticket-credit.service.js,
+  // qui vérifie lui-même son propre quota sur ce même champ).
+  const effectiveTypeCapacity =
+    type.capacity == null ? null : Math.max(0, type.capacity - (type.creditReservedCapacity || 0));
   if (
     (event.capacity != null && global + qty > event.capacity) ||
-    (type.capacity != null && local + qty > type.capacity)
+    (effectiveTypeCapacity != null && local + qty > effectiveTypeCapacity)
   )
     fail(
       "Les places disponibles ne suffisent plus. Choisissez une autre quantité ou contactez l’organisateur.",
@@ -139,7 +144,7 @@ function summarizeAvailability(event, counts) {
   if (!types.length) return { remaining: 0, globalRemaining, source: "NO_ACTIVE_TICKETS" };
   const unlimited = types.some((type) => type.capacity == null);
   const typeRemaining = types.reduce((sum, type) => sum + (
-    type.capacity == null ? 0 : Math.max(0, type.capacity - (counts.get("type:" + type.id) || 0))
+    type.capacity == null ? 0 : Math.max(0, type.capacity - (type.creditReservedCapacity || 0) - (counts.get("type:" + type.id) || 0))
   ), 0);
   return {
     remaining: globalRemaining == null

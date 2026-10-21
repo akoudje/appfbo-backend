@@ -180,7 +180,58 @@ async function sendTicketOrderAccessEmail({ order, publicUrl }) {
   return { sent: Boolean(result?.accepted) };
 }
 
+function formatDateOnly(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+}
+
+async function sendTicketCreditIssuedEmail({ credit, originEvent, publicUrl } = {}) {
+  const to = normalizeEmail(credit?.holderEmail || "");
+  if (!to) return { sent: false, skipped: true, reason: "NO_EMAIL" };
+
+  const base = isSafePublicFrontendOrigin(publicUrl)
+    ? String(publicUrl || "").replace(/\/+$/, "")
+    : publicFrontendBaseUrl();
+  const portalUrl = base ? `${base}/tickets` : "";
+  const eventTitle = originEvent?.title || "l'événement";
+  const expiresLabel = formatDateOnly(credit.expiresAt);
+
+  const body = [
+    `Bonjour ${credit.holderFullName || ""},`,
+    "",
+    `Votre billet pour ${eventTitle} n'a pas été scanné à l'entrée. Il est converti en crédit nominatif, valable jusqu'au ${expiresLabel}, à échanger contre un billet de la même catégorie pour la prochaine édition.`,
+    "",
+    portalUrl ? `Connectez-vous sur ${portalUrl} avec ce numéro ou cet email pour l'échanger dès qu'une prochaine édition sera ouverte à la vente.` : "",
+    "",
+    "FOREVER",
+  ].join("\n");
+
+  const bodyHtml = `
+    <p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;font-size:15px;">Bonjour <strong>${escapeHtml(credit.holderFullName || "")}</strong>,</p>
+    <p style="margin:0 0 14px;color:#2c2c2c;line-height:1.6;font-size:15px;">Votre billet pour <strong>${escapeHtml(eventTitle)}</strong> n'a pas été scanné à l'entrée. Il est converti en <strong>crédit nominatif</strong>, valable jusqu'au <strong>${escapeHtml(expiresLabel)}</strong>, à échanger contre un billet de la même catégorie pour la prochaine édition.</p>
+    ${portalUrl ? renderButton({ href: portalUrl, label: "Accéder à mes crédits" }) : ""}
+  `;
+  const html = renderLayout({
+    previewText: `Votre billet pour ${eventTitle} est converti en crédit.`,
+    eyebrow: "FOREVER EVENTS",
+    title: eventTitle,
+    bodyHtml,
+  });
+
+  const result = await sendEmail({
+    to,
+    subject: `Votre billet non scanné - ${eventTitle}`,
+    body,
+    html,
+    metadata: { ticketCreditId: credit.id, originEventId: originEvent?.id || null },
+  });
+  return { sent: Boolean(result?.accepted), skipped: false, to };
+}
+
 module.exports = {
   sendTicketOrderEmail,
   sendTicketOrderAccessEmail,
+  sendTicketCreditIssuedEmail,
 };

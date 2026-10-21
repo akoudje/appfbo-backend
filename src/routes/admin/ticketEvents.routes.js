@@ -77,6 +77,18 @@ router.post(
   ticketEventsController.uploadPoster,
 );
 
+router.get(
+  "/credits/active-counts",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.getActiveCreditCounts,
+);
+
+router.post(
+  "/credits/:creditId/revoke",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.revokeCredit,
+);
+
 router.post(
   "/check-in",
   requirePermission(Permission.TICKET_CHECKIN),
@@ -111,6 +123,18 @@ router.get(
   "/:id/summary",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.getEventSummary,
+);
+
+router.post(
+  "/:id/close",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.closeEvent,
+);
+
+router.get(
+  "/:id/credits",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.listEventCredits,
 );
 
 router.get(

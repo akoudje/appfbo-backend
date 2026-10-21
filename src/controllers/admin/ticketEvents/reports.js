@@ -53,7 +53,7 @@ async function buildEventSummaryData(req, eventId) {
     where: { id: eventId, countryId: req.countryId },
     select: {
       id: true, slug: true, title: true, startsAt: true, venueName: true, capacity: true,
-      ticketTypes: { select: { id: true, capacity: true, active: true } },
+      ticketTypes: { select: { id: true, capacity: true, active: true, creditReservedCapacity: true } },
     },
   });
   if (!event) return null;
@@ -69,7 +69,7 @@ async function buildEventSummaryData(req, eventId) {
   });
   const counts = Object.fromEntries(ticketCounts.map((row) => [row.status, row._count._all]));
 
-  const [orders, testOrdersCount] = await Promise.all([
+  const [orders, testOrdersCount, creditsIssued, creditsRedeemed] = await Promise.all([
     prisma.ticketOrder.findMany({
       where: { eventId, countryId: req.countryId, isTest: false },
       select: {
@@ -84,6 +84,8 @@ async function buildEventSummaryData(req, eventId) {
     prisma.ticketOrder.count({
       where: { eventId, countryId: req.countryId, isTest: true },
     }),
+    prisma.ticketCredit.count({ where: { originEventId: eventId } }),
+    prisma.ticketCredit.count({ where: { originEventId: eventId, status: "REDEEMED" } }),
   ]);
 
   const paidOrders = orders.filter((order) => order.status === "PAID");
@@ -116,11 +118,14 @@ async function buildEventSummaryData(req, eventId) {
       usedTickets: counts.USED || 0,
       activeTickets: counts.ACTIVE || 0,
       reservedTickets: counts.RESERVED || 0,
+      expiredUnscannedTickets: counts.EXPIRED || 0,
       remainingCapacity: availability.globalRemaining,
       allOrdersCount: orders.length,
       cancelledOrdersCount: orders.filter((o) => o.status === "CANCELLED").length,
       pendingOrdersCount: orders.filter((o) => o.status === "PENDING_PAYMENT" || o.status === "DRAFT").length,
       testOrdersExcludedCount: testOrdersCount,
+      creditsIssuedCount: creditsIssued,
+      creditsRedeemedCount: creditsRedeemed,
     },
     byPaymentMethod: [...byPaymentMethod.values()].sort((a, b) => b.totalFcfa - a.totalFcfa),
   };

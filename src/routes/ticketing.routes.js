@@ -67,6 +67,9 @@ router.post('/portal/otp/verify', portalSession.requireJson, createRateLimiter({
 router.get('/portal/session', portalSession.requireSession, portal.getSession);
 router.post('/portal/logout', portalSession.requireJson, portal.logout);
 router.get('/portal/orders', portalSession.requireSession, portal.listOrders);
+router.get('/portal/credits', portalSession.requireSession, portal.listCredits);
+router.post('/portal/credits/:id/redeem', portalSession.requireJson, portalSession.requireSession,
+  createRateLimiter({ keyPrefix: 'ticket-portal-credit-redeem', windowMs: 600000, max: 10 }), portal.redeemCredit);
 router.post('/portal/order-reference', portalSession.requireJson, portalSession.requireSession,
   createRateLimiter({ keyPrefix: 'ticket-sms-reference', windowMs: 600000, max: 10, keyFn: req => `${req.countryId}:${req.ticketPortal.phone || req.ip}` }), smsRecovery.selectReference);
 router.post('/orders/:orderNumber/phone/otp/request', portalSession.requireJson,
