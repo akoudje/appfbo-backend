@@ -4,7 +4,7 @@ const prisma = require("../../prisma");
 const fs = require("fs");
 const path = require("path");
 const { generateParcelNumber } = require("../../helpers/parcel-number");
-const { AdminRole } = require("../../auth/permissions");
+const { AdminRole, Permission } = require("../../auth/permissions");
 
 const {
   invoiceAndSendPreorder,
@@ -703,6 +703,16 @@ async function getSubmittedOrdersExport(req, res) {
       ? scopeWhere(req, { preorderNumber: { in: preorderNumbers } })
       : buildOrdersListWhere(req, { status: "SUBMITTED" });
 
+    // Sans EXPORT_READ (ex. facturier via INVOICE_CREATE) : on ne laisse
+    // jamais imprimer autre chose que sa propre file (non réclamé + ses
+    // dossiers), quels que soient les paramètres passés dans l'URL.
+    if (!req.user?.permissions?.includes(Permission.EXPORT_READ)) {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : []),
+        { OR: [{ assignedInvoicerId: null }, { assignedInvoicerId: req.user?.id || "__no_user__" }] },
+      ];
+    }
+
     // Feuille des soumises : FIFO. Sélection par numéros : ordre de la liste collée.
     const fetched = await prisma.preorder.findMany({
       where,
@@ -728,6 +738,8 @@ async function getSubmittedOrdersExport(req, res) {
             qty: true,
             productSkuSnapshot: true,
             productNameSnapshot: true,
+            prixUnitaireFcfa: true,
+            lineTotalFcfa: true,
             product: {
               select: {
                 sku: true,
@@ -772,6 +784,8 @@ async function getSubmittedOrdersExport(req, res) {
                 item.productNameSnapshot ||
                 item.product?.nom ||
                 "",
+              prixUnitaireFcfa: Number(item.prixUnitaireFcfa || 0),
+              lineTotalFcfa: Number(item.lineTotalFcfa || 0),
             }))
           : [],
       })),

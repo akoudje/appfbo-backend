@@ -1,6 +1,6 @@
 const express = require("express");
 const { Permission } = require("../../auth/permissions");
-const { requirePermission } = require("../../middlewares/rbac");
+const { requirePermission, requireAnyPermission } = require("../../middlewares/rbac");
 const { createRateLimiter } = require("../../middlewares/rateLimit");
 const ordersController = require("../../controllers/admin/orders.controller");
 const shippingController = require("../../controllers/admin/shipping.controller");
@@ -17,7 +17,10 @@ router.get('/:id/shipping-receipt', requirePermission(Permission.PREPARATION_UPD
 router.get("/export", requirePermission(Permission.EXPORT_READ), ordersController.exportOrders);
 router.get(
   "/submitted-export",
-  requirePermission(Permission.EXPORT_READ),
+  // EXPORT_READ : accès complet (export/reporting). INVOICE_CREATE sans
+  // EXPORT_READ (facturiers) : accès restreint à leur propre file par le
+  // contrôleur lui-même (getSubmittedOrdersExport), pas ici.
+  requireAnyPermission([Permission.EXPORT_READ, Permission.INVOICE_CREATE]),
   ordersController.getSubmittedOrdersExport,
 );
 router.get(
