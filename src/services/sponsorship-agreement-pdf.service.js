@@ -340,7 +340,39 @@ async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countr
 
   const pieceLabel = ID_DOCUMENT_SHORT[s.idDocumentType] || "Pièce";
   const pdfAttachments = [];
+
+  // Recto + verso ensemble sur une seule page (empilés), plutôt que chacun
+  // sur sa propre page : les deux faces d'une même pièce se consultent d'un
+  // coup d'œil. Les autres types (passeport, autre pièce) gardent leur
+  // propre page, comme avant.
+  const idFront = documents.find((d) => d.type === "ID_FRONT" && d.mimeType !== "application/pdf");
+  const idBack = documents.find((d) => d.type === "ID_BACK" && d.mimeType !== "application/pdf");
+  const combinedTypes = new Set();
+  if (idFront && idBack) {
+    combinedTypes.add("ID_FRONT");
+    combinedTypes.add("ID_BACK");
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(DARK).text(`Pièce d'identité — ${pieceLabel}`, 40, 40);
+    doc
+      .font("Helvetica")
+      .fontSize(8.5)
+      .fillColor(GREY)
+      .text(`${s.lastName} ${s.firstNames} · ${pieceLabel} n° ${s.idDocumentNumber} · dossier ${s.id}`, 40, 60);
+
+    const drawSide = (label, document, labelY, imageY) => {
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(GREY).text(label, 40, labelY);
+      try {
+        doc.image(document.buffer, 40, imageY, { fit: [515, 320], align: "center", valign: "top" });
+      } catch {
+        doc.font("Helvetica").fontSize(10).fillColor(RED).text("Image illisible : consultez la pièce dans l'application.", 40, imageY + 15);
+      }
+    };
+    drawSide("RECTO", idFront, 85, 100);
+    drawSide("VERSO", idBack, 435, 450);
+  }
+
   for (const document of documents) {
+    if (combinedTypes.has(document.type)) continue; // déjà rendu ci-dessus
     const title = `Pièce d'identité — ${pieceLabel} (${DOCUMENT_PAGE_LABELS[document.type] || "pièce"})`;
     if (document.mimeType === "application/pdf") {
       pdfAttachments.push({ title, buffer: document.buffer });
