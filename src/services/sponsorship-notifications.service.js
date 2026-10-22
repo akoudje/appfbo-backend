@@ -118,6 +118,7 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink }) 
     sponsorship: s,
     approverName: await approverName(s.approvedById),
     countryName: countryName || "Côte d'Ivoire",
+    countryCode,
   }).catch((error) => {
     console.error("[sponsorship] fiche PDF non générée", { id: s.id, error: error?.message });
     return null;

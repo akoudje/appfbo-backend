@@ -17,7 +17,7 @@ async function sendAgreementPdf(res, row) {
   }
   const [approver, country] = await Promise.all([
     row.approvedById ? prisma.adminUser.findUnique({ where: { id: row.approvedById }, select: { fullName: true, email: true } }) : null,
-    prisma.country.findUnique({ where: { id: row.countryId }, select: { name: true } }),
+    prisma.country.findUnique({ where: { id: row.countryId }, select: { name: true, code: true } }),
   ]);
   const fileName = `agrement-${row.recruitFboNumero}.pdf`;
   res.setHeader("Content-Type", "application/pdf");
@@ -27,6 +27,7 @@ async function sendAgreementPdf(res, row) {
     sponsorship: row,
     approverName: approver?.fullName || approver?.email || "",
     countryName: country?.name || "Côte d'Ivoire",
+    countryCode: country?.code,
   });
   return undefined;
 }
@@ -408,7 +409,7 @@ async function downloadSponsorshipDossier(req, res) {
 
     const [approver, country] = await Promise.all([
       row.approvedById ? prisma.adminUser.findUnique({ where: { id: row.approvedById }, select: { fullName: true, email: true } }) : null,
-      prisma.country.findUnique({ where: { id: row.countryId }, select: { name: true } }),
+      prisma.country.findUnique({ where: { id: row.countryId }, select: { name: true, code: true } }),
     ]);
     const documents = [];
     for (const document of row.documents) {
@@ -448,6 +449,7 @@ async function downloadSponsorshipDossier(req, res) {
       sponsorship: row,
       approverName: approver?.fullName || approver?.email || "",
       countryName: country?.name || "Côte d'Ivoire",
+      countryCode: country?.code,
       documents,
       purchase: { order, orderLines, qualifyingOrder },
     });
