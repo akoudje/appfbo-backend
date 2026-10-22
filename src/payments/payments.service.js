@@ -91,12 +91,28 @@ function buildWaveUrls(preorderId, countryCode = "CIV", req = null) {
   };
 }
 
+// Si la variable d'environnement est renseignée sans "https://" (ex.
+// "forevercivstore.com" au lieu de "https://forevercivstore.com"), isHttpsUrl
+// la rejette (new URL() lève sur une chaîne sans schéma) et on tombait tout
+// droit sur le dernier fallback, qui renvoyait cette valeur telle quelle, sans
+// schéma : les liens de paiement envoyés aux clients (SMS et email) étaient
+// alors du texte brut "forevercivstore.com/payment/w/..." au lieu d'une URL
+// absolue cliquable — un <a href="..."> sans schéma est résolu par le
+// navigateur/client mail comme un lien RELATIF, donc cassé. On normalise la
+// valeur configurée en amont pour qu'elle porte toujours un schéma.
+function normalizeBaseUrl(value) {
+  const trimmed = String(value || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 function buildPublicAppBaseUrl(req = null) {
-  const configuredBaseUrl =
+  const configuredBaseUrl = normalizeBaseUrl(
     process.env.APP_PUBLIC_BASE_URL ||
-    process.env.FRONTEND_PUBLIC_URL ||
-    process.env.ADMIN_APP_PUBLIC_URL ||
-    "";
+      process.env.FRONTEND_PUBLIC_URL ||
+      process.env.ADMIN_APP_PUBLIC_URL ||
+      "",
+  );
 
   if (isHttpsUrl(configuredBaseUrl)) return configuredBaseUrl;
 
