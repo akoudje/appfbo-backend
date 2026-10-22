@@ -158,6 +158,18 @@ router.post(
 );
 
 router.post(
+  "/:id/preparation/backorder-credits",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.createBackorderCredit,
+);
+
+router.post(
+  "/:id/preparation/backorder-credits/:creditId/cancel",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.cancelBackorderCredit,
+);
+
+router.post(
   "/:id/pickup-penalty",
   requirePermission(Permission.PREPARATION_UPDATE),
   ordersController.applyPickupPenaltyHandler,

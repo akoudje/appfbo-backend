@@ -150,6 +150,26 @@ router.post(
   resolveEscalation,
 );
 
+// Avoirs produits (rupture de stock découverte à la préparation) : hors du
+// cycle d'une commande précise, donc pas nichés sous /orders/:id.
+router.get(
+  "/backorder-credits",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.listBackorderCredits,
+);
+
+router.post(
+  "/backorder-credits/:id/prepare",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.prepareBackorderCredit,
+);
+
+router.post(
+  "/backorder-credits/:id/fulfill",
+  requirePermission(Permission.PREPARATION_UPDATE),
+  ordersController.fulfillBackorderCredit,
+);
+
 router.use("/stats", statsRoutes);
 router.use("/reports", reportsRoutes);
 router.use("/products", productsRoutes);

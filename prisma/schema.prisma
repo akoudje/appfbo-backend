@@ -366,6 +366,9 @@ enum PreorderLogAction {
   FULFILL
   CANCEL
 
+  BACKORDER_CREDIT_ISSUED
+  BACKORDER_CREDIT_CANCELLED
+
   STOCK_DEBIT
   STOCK_CREDIT
 
@@ -520,6 +523,7 @@ model Country {
   ticketCheckInSessions TicketCheckInSession[]
   ticketCheckInLogs TicketCheckInLog[]
   ticketCredits TicketCredit[]
+  backorderCredits PreorderBackorderCredit[]
   fboDocuments FboDocument[]
   sponsorships Sponsorship[]
   fboDocumentSignatories FboDocumentSignatory[]
@@ -683,6 +687,10 @@ model AdminUser {
   checkedPreparationItems PreparationChecklistItem[]
   createdPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyCreatedBy")
   resolvedPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyResolvedBy")
+  reportedBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditReportedBy")
+  preparedBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditPreparedBy")
+  fulfilledBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditFulfilledBy")
+  cancelledBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditCancelledBy")
   createdTicketEvents TicketEvent[] @relation("TicketEventCreatedBy")
   updatedTicketEvents TicketEvent[] @relation("TicketEventUpdatedBy")
   checkedInTickets Ticket[] @relation("TicketCheckedInBy")
@@ -900,6 +908,7 @@ model Product {
   stockMovements StockMovement[]
   countryProducts CountryProduct[]
   packagings ProductPackaging[]
+  backorderCredits PreorderBackorderCredit[]
 
   @@index([actif])
   @@index([nom])
@@ -1195,6 +1204,7 @@ model Preorder {
   as400InvoiceRequests As400InvoiceRequest[]
   preparationItems PreparationChecklistItem[]
   preparationAnomalies PreparationAnomaly[]
+  backorderCredits PreorderBackorderCredit[]
   paymentTransactionLogs PaymentTransactionLog[]
   stockMovements StockMovement[]
   bankPaymentProofs BankPaymentProof[]
@@ -1571,6 +1581,7 @@ model PreorderItem {
 
   preparationChecklistItems PreparationChecklistItem[]
   preparationAnomalies PreparationAnomaly[]
+  backorderCredits PreorderBackorderCredit[]
 
   @@unique([preorderId, productId])
   @@index([productId])
@@ -1630,6 +1641,69 @@ model PreparationAnomaly {
   @@index([preorderItemId])
   @@index([createdById])
   @@index([resolvedById])
+}
+
+enum BackorderCreditStatus {
+  ISSUED
+  READY_FOR_PICKUP
+  FULFILLED
+  CANCELLED
+}
+
+// Avoir produit : une ligne de commande payée découverte indisponible à la
+// préparation (stock système suffisant, mais pas physiquement) devient un
+// avoir suivi ici plutôt que de bloquer toute la commande. La commande
+// d'origine se clôture normalement pour le reste ; cet avoir vit son propre
+// cycle de vie (émis -> prêt pour retrait -> remis), avec son propre colis
+// et ses propres notifications, hors du cycle Preorder pour ne jamais être
+// balayé par les rapports/relances qui scannent la table Preorder.
+model PreorderBackorderCredit {
+  id String @id @default(cuid())
+
+  countryId String
+  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+
+  preorderId String
+  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Restrict)
+
+  preorderItemId String
+  preorderItem PreorderItem @relation(fields: [preorderItemId], references: [id], onDelete: Restrict)
+
+  productId String
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  productNameSnapshot String
+  qty Int
+  priceFcfaSnapshot Int
+
+  reason String @db.Text
+  reportedById String?
+  reportedBy AdminUser? @relation("BackorderCreditReportedBy", fields: [reportedById], references: [id], onDelete: SetNull)
+
+  status BackorderCreditStatus @default(ISSUED)
+
+  parcelNumber String? @unique
+  pickupSecretCode String?
+  preparedAt DateTime?
+  preparedById String?
+  preparedBy AdminUser? @relation("BackorderCreditPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
+
+  fulfilledAt DateTime?
+  fulfilledById String?
+  fulfilledBy AdminUser? @relation("BackorderCreditFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
+  pickupRecipientName String?
+
+  cancelledAt DateTime?
+  cancelledById String?
+  cancelledBy AdminUser? @relation("BackorderCreditCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  cancelReason String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([countryId, status])
+  @@index([preorderId])
+  @@index([productId, status])
 }
 
 model PreorderLog {
