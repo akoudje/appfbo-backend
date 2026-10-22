@@ -37,6 +37,18 @@ function signingCity(countryName) {
   return SIGNING_CITY_BY_COUNTRY[key] || "";
 }
 
+// Préfixe du numéro FBO = indicatif téléphonique international du pays
+// (même convention que step1form et le préremplissage admin-app).
+const FBO_PREFIX_BY_COUNTRY_CODE = { CIV: "225", BFA: "226", NER: "227", TGO: "228", BEN: "229" };
+
+// Tant que le parrainage n'est pas validé et qu'aucun n° FBO n'a encore été
+// attribué par le facturier, la case « N° Identification » du dossier affiche
+// par défaut le préfixe pays + 000, comme sur le formulaire de saisie.
+function defaultFboPrefix(countryCode) {
+  const prefix = FBO_PREFIX_BY_COUNTRY_CODE[String(countryCode || "").toUpperCase()] || "225";
+  return `${prefix} - 000 - `;
+}
+
 function formatDate(value) {
   if (!value) return "";
   return new Date(value).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" });
@@ -78,17 +90,18 @@ function drawStamp(doc, { x, y, date, agentName }) {
 // Écrit la fiche dans `stream` (réponse HTTP) ; `sponsorship` inclut les champs
 // du modèle ; `approverName` = nom de l'agent qui a approuvé.
 // Dessine la fiche sur la page courante de `doc`.
-function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "Côte d'Ivoire" }) {
+function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "Côte d'Ivoire", countryCode }) {
 
   // En-tête
   doc.font("Helvetica-Bold").fontSize(16).fillColor(DARK).text("FOREVER LIVING PRODUCTS", 40, 40);
   doc.font("Helvetica").fontSize(10).fillColor(GREY).text(countryName.toUpperCase(), 40, 60);
   doc.font("Helvetica-Bold").fontSize(15).fillColor(DARK).text("AGRÉMENT DE DISTRIBUTION - FLP-CI", 40, 92, { width: 515, align: "center" });
 
-  // N° d'identification (case remplie par le facturier sur papier)
+  // N° d'identification (case remplie par le facturier sur papier) ; tant
+  // qu'aucun n° FBO n'est encore attribué, préremplie du préfixe pays + 000.
   doc.font("Helvetica").fontSize(9).fillColor(GREY).text("N° Identification FLP-CI", 170, 126);
   doc.lineWidth(1).strokeColor(DARK).rect(285, 120, 160, 22).stroke();
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(DARK).text(s.recruitFboNumero || "", 285, 126, { width: 160, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(DARK).text(s.recruitFboNumero || defaultFboPrefix(countryCode), 285, 126, { width: 160, align: "center" });
 
   // Candidat
   let y = 160;
@@ -326,7 +339,7 @@ const DOCUMENT_PAGE_LABELS = {
 // la pièce d'identité, puis les pièces envoyées en PDF ajoutées telles quelles.
 // `documents` : [{ type, mimeType, originalFileName, buffer }] ; `purchase` :
 // voir drawPurchasePage. Renvoie un Buffer PDF.
-async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countryName, documents = [], purchase = {} }) {
+async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countryName, countryCode, documents = [], purchase = {} }) {
   const doc = newDocument(s);
   const chunks = [];
   doc.on("data", (chunk) => chunks.push(chunk));
@@ -335,12 +348,44 @@ async function buildSponsorshipDossierPdf({ sponsorship: s, approverName, countr
     doc.on("error", reject);
   });
 
-  drawAgreementPage(doc, { sponsorship: s, approverName, countryName });
+  drawAgreementPage(doc, { sponsorship: s, approverName, countryName, countryCode });
   drawPurchasePage(doc, { sponsorship: s, purchase });
 
   const pieceLabel = ID_DOCUMENT_SHORT[s.idDocumentType] || "Pièce";
   const pdfAttachments = [];
+
+  // Recto + verso ensemble sur une seule page (empilés), plutôt que chacun
+  // sur sa propre page : les deux faces d'une même pièce se consultent d'un
+  // coup d'œil. Les autres types (passeport, autre pièce) gardent leur
+  // propre page, comme avant.
+  const idFront = documents.find((d) => d.type === "ID_FRONT" && d.mimeType !== "application/pdf");
+  const idBack = documents.find((d) => d.type === "ID_BACK" && d.mimeType !== "application/pdf");
+  const combinedTypes = new Set();
+  if (idFront && idBack) {
+    combinedTypes.add("ID_FRONT");
+    combinedTypes.add("ID_BACK");
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(DARK).text(`Pièce d'identité — ${pieceLabel}`, 40, 40);
+    doc
+      .font("Helvetica")
+      .fontSize(8.5)
+      .fillColor(GREY)
+      .text(`${s.lastName} ${s.firstNames} · ${pieceLabel} n° ${s.idDocumentNumber} · dossier ${s.id}`, 40, 60);
+
+    const drawSide = (label, document, labelY, imageY) => {
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(GREY).text(label, 40, labelY);
+      try {
+        doc.image(document.buffer, 40, imageY, { fit: [515, 320], align: "center", valign: "top" });
+      } catch {
+        doc.font("Helvetica").fontSize(10).fillColor(RED).text("Image illisible : consultez la pièce dans l'application.", 40, imageY + 15);
+      }
+    };
+    drawSide("RECTO", idFront, 85, 100);
+    drawSide("VERSO", idBack, 435, 450);
+  }
+
   for (const document of documents) {
+    if (combinedTypes.has(document.type)) continue; // déjà rendu ci-dessus
     const title = `Pièce d'identité — ${pieceLabel} (${DOCUMENT_PAGE_LABELS[document.type] || "pièce"})`;
     if (document.mimeType === "application/pdf") {
       pdfAttachments.push({ title, buffer: document.buffer });
