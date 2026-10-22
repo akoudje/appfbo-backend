@@ -3,7 +3,7 @@ const { claimOrderSnapshot } = require("../../helpers/order-write-guard");
 const prisma = require("../../prisma");
 const fs = require("fs");
 const path = require("path");
-const { generateParcelNumber } = require("../../helpers/parcel-number");
+const { generateParcelNumber, generateBackorderParcelNumber } = require("../../helpers/parcel-number");
 const { AdminRole, Permission } = require("../../auth/permissions");
 
 const {
@@ -20,8 +20,8 @@ const {
   buildOrderFulfilledSmsMessage,
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
-const { normalizePhone } = require("../../services/sms.service");
-const { normalizeEmail } = require("../../services/email.service");
+const { normalizePhone, sendSms } = require("../../services/sms.service");
+const { normalizeEmail, sendEmail } = require("../../services/email.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 const {
   getOverduePickups,
@@ -979,6 +979,13 @@ async function getOrderById(req, res) {
               },
             },
           },
+          backorderCredits: {
+            orderBy: { createdAt: "desc" },
+            include: {
+              product: { select: { id: true, nom: true, sku: true } },
+              reportedBy: { select: { id: true, fullName: true, email: true, role: true } },
+            },
+          },
         },
       },
     );
@@ -1049,6 +1056,13 @@ async function getOrderById(req, res) {
                 preorderItem: { include: { product: true } },
                 createdBy: { select: { id: true, fullName: true, email: true, role: true } },
                 resolvedBy: { select: { id: true, fullName: true, email: true, role: true } },
+              },
+            },
+            backorderCredits: {
+              orderBy: { createdAt: "desc" },
+              include: {
+                product: { select: { id: true, nom: true, sku: true } },
+                reportedBy: { select: { id: true, fullName: true, email: true, role: true } },
               },
             },
           },
@@ -1210,12 +1224,20 @@ async function getDeliveryNotePdf(req, res) {
           },
           orderBy: { createdAt: "asc" },
         },
+        backorderCredits: {
+          where: { status: { not: "CANCELLED" } },
+          select: { preorderItemId: true },
+        },
       },
     });
 
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
+
+    const creditedItemIds = new Set(
+      (order.backorderCredits || []).map((c) => c.preorderItemId),
+    );
 
     const nowLabel = new Date().toLocaleString("fr-FR", {
       dateStyle: "short",
@@ -1246,7 +1268,8 @@ async function getDeliveryNotePdf(req, res) {
         const sku = item?.productSkuSnapshot || item?.product?.sku || "-";
         const nom = item?.productNameSnapshot || item?.product?.nom || "Produit";
         const qty = Number(item?.qty || 0);
-        return `${sku} | ${nom} | ${qty}`;
+        const label = creditedItemIds.has(item.id) ? `${nom} [NON LIVRE - AVOIR]` : nom;
+        return `${sku} | ${label} | ${qty}`;
       }),
       "-----------------------------------------------",
       `Lignes: ${itemCount} | Unites: ${unitCount}`,
@@ -3172,12 +3195,30 @@ async function prepareOrder(req, res) {
       await ensurePreparationChecklist(tx, order);
       const blocking = await tx.preparationAnomaly.count({ where: { preorderId: order.id, blocking: true, resolvedAt: null } });
       const checklist = await tx.preparationChecklistItem.findMany({ where: { preorderId: order.id } });
-      if (blocking || !checklist.length || !checklist.every(item => item.checked)) {
-        const error = new Error(blocking ? "Une anomalie bloquante doit être résolue avant de préparer le colis." : "Toutes les lignes doivent être cochées avant de préparer le colis.");
+      // Une ligne avec un avoir actif (produit indisponible déclaré par le
+      // préparateur, voir createBackorderCredit) compte comme traitée pour
+      // la finalisation : elle ne sera pas dans le colis, mais c'est
+      // volontaire et suivi séparément — ça ne doit pas bloquer tout le
+      // reste de la commande.
+      const creditedItemIds = new Set(
+        (
+          await tx.preorderBackorderCredit.findMany({
+            where: { preorderId: order.id, status: { not: "CANCELLED" } },
+            select: { preorderItemId: true },
+          })
+        ).map((c) => c.preorderItemId),
+      );
+      if (
+        blocking ||
+        !checklist.length ||
+        !checklist.every((item) => item.checked || creditedItemIds.has(item.preorderItemId))
+      ) {
+        const error = new Error(blocking ? "Une anomalie bloquante doit être résolue avant de préparer le colis." : "Toutes les lignes doivent être cochées (ou déclarées indisponibles) avant de préparer le colis.");
         error.statusCode = 409; throw error;
       }
       if (!stockAlreadyDeducted) {
         for (const item of order.items) {
+          if (creditedItemIds.has(item.id)) continue; // avoir : ne pas décompter ce qui ne part pas dans ce colis
           const updatedStock = await tx.countryProduct.updateMany({
             where: {
               countryId: order.countryId,
@@ -3521,6 +3562,278 @@ async function resolvePreparationAnomaly(req, res) {
     console.error("resolvePreparationAnomaly error:", e);
     return res.status(500).json({
       message: e.message || "Erreur serveur (resolvePreparationAnomaly)",
+    });
+  }
+}
+
+// Avoir produit : une ligne encore non cochée est déclarée indisponible par
+// le préparateur (n'importe lequel, sans validation préalable — voir
+// réflexion du 2026-10-21/22). Contrairement à PreparationAnomaly, ceci est
+// une entité dédiée avec son propre cycle de vie (ISSUED -> READY_FOR_PICKUP
+// -> FULFILLED), hors du cycle Preorder : elle ne sera donc jamais balayée
+// par les relances de retrait en retard ni les bilans qui scannent la table
+// Preorder — voir prisma/schema.prisma pour le détail.
+async function createBackorderCredit(req, res) {
+  try {
+    const { id } = req.params;
+    const { itemId, reason } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: { items: { include: { product: { select: { id: true, nom: true } } } } },
+    });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    const normalizedReason = String(reason || "").trim();
+    if (!normalizedReason) {
+      return res.status(400).json({ message: "Le motif est obligatoire pour déclarer un avoir." });
+    }
+
+    const item = order.items.find((it) => it.id === itemId);
+    if (!item) return res.status(404).json({ message: "Ligne de commande introuvable" });
+
+    if (order.status !== "PAID" || !order.preparationLaunchedAt) {
+      return res.status(409).json({ message: "Un avoir ne peut être déclaré que pendant la préparation." });
+    }
+
+    const existing = await prisma.preorderBackorderCredit.findFirst({
+      where: { preorderItemId: item.id, status: { not: "CANCELLED" } },
+    });
+    if (existing) {
+      return res.status(409).json({ message: "Un avoir est déjà en cours pour cette ligne." });
+    }
+
+    const saved = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
+      const credit = await tx.preorderBackorderCredit.create({
+        data: {
+          countryId: order.countryId,
+          preorderId: order.id,
+          preorderItemId: item.id,
+          productId: item.productId,
+          productNameSnapshot: item.productNameSnapshot || item.product?.nom || "",
+          qty: item.qty,
+          priceFcfaSnapshot: item.lineTotalFcfa,
+          reason: normalizedReason,
+          reportedById: req.user?.id || null,
+        },
+        include: {
+          product: { select: { id: true, nom: true, sku: true } },
+          reportedBy: { select: { id: true, fullName: true, email: true } },
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "BACKORDER_CREDIT_ISSUED",
+        normalizedReason,
+        { preorderItemId: item.id, productId: item.productId, qty: item.qty, creditId: credit.id },
+        req.user?.id || null,
+      );
+
+      return credit;
+    });
+
+    return res.status(201).json(saved);
+  } catch (e) {
+    console.error("createBackorderCredit error:", e);
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (createBackorderCredit)",
+    });
+  }
+}
+
+async function cancelBackorderCredit(req, res) {
+  try {
+    const { id, creditId } = req.params;
+    const { reason } = req.body || {};
+
+    const order = await prisma.preorder.findFirst({ where: scopeWhere(req, { id }), select: { id: true } });
+    if (!order) return res.status(404).json({ message: "Commande introuvable" });
+
+    const credit = await prisma.preorderBackorderCredit.findFirst({
+      where: { id: creditId, preorderId: order.id },
+    });
+    if (!credit) return res.status(404).json({ message: "Avoir introuvable" });
+    if (credit.status !== "ISSUED") {
+      return res.status(409).json({ message: `Cet avoir est déjà en statut ${credit.status}.` });
+    }
+
+    const saved = await prisma.$transaction(async (tx) => {
+      const updated = await tx.preorderBackorderCredit.update({
+        where: { id: credit.id },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date(),
+          cancelledById: req.user?.id || null,
+          cancelReason: reason ? String(reason).trim() : null,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "BACKORDER_CREDIT_CANCELLED",
+        reason || "Avoir annulé",
+        { creditId: credit.id, productId: credit.productId },
+        req.user?.id || null,
+      );
+
+      return updated;
+    });
+
+    return res.json(saved);
+  } catch (e) {
+    console.error("cancelBackorderCredit error:", e);
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (cancelBackorderCredit)",
+    });
+  }
+}
+
+async function listBackorderCredits(req, res) {
+  try {
+    const { status, productId } = req.query;
+    const where = { countryId: pickCountryId(req) };
+    if (status) where.status = String(status).trim().toUpperCase();
+    if (productId) where.productId = String(productId).trim();
+
+    const rows = await prisma.preorderBackorderCredit.findMany({
+      where,
+      orderBy: [{ createdAt: "asc" }],
+      include: {
+        preorder: {
+          select: {
+            id: true,
+            preorderNumber: true,
+            fboNomComplet: true,
+            fboNumero: true,
+            factureWhatsappTo: true,
+            fboEmail: true,
+          },
+        },
+        product: { select: { id: true, nom: true, sku: true } },
+        reportedBy: { select: { id: true, fullName: true, email: true } },
+        preparedBy: { select: { id: true, fullName: true, email: true } },
+        fulfilledBy: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    return res.json({ data: rows });
+  } catch (e) {
+    console.error("listBackorderCredits error:", e);
+    return res.status(500).json({ message: "Erreur serveur (listBackorderCredits)" });
+  }
+}
+
+async function prepareBackorderCredit(req, res) {
+  try {
+    const { id } = req.params;
+    const credit = await prisma.preorderBackorderCredit.findFirst({
+      where: { id, countryId: pickCountryId(req) },
+      include: {
+        preorder: {
+          select: {
+            id: true,
+            preorderNumber: true,
+            fboNomComplet: true,
+            factureWhatsappTo: true,
+            fboEmail: true,
+            country: { select: { code: true } },
+          },
+        },
+      },
+    });
+    if (!credit) return res.status(404).json({ message: "Avoir introuvable" });
+    if (credit.status !== "ISSUED") {
+      return res.status(409).json({ message: `Cet avoir est en statut ${credit.status}, impossible à préparer.` });
+    }
+
+    const now = new Date();
+    const parcelNumber = credit.parcelNumber || generateBackorderParcelNumber(credit);
+    const pickupSecretCode =
+      credit.pickupSecretCode || String(Math.floor(100000 + Math.random() * 900000));
+
+    const updated = await prisma.preorderBackorderCredit.update({
+      where: { id: credit.id },
+      data: {
+        status: "READY_FOR_PICKUP",
+        parcelNumber,
+        pickupSecretCode,
+        preparedAt: now,
+        preparedById: req.user?.id || null,
+      },
+    });
+
+    try {
+      const message = `FOREVER: votre produit ${credit.productNameSnapshot} en attente de la commande ${credit.preorder.preorderNumber} est disponible. Colis ${parcelNumber}, code retrait: ${pickupSecretCode}.`;
+      if (credit.preorder.factureWhatsappTo) {
+        await sendSms({
+          to: credit.preorder.factureWhatsappTo,
+          message,
+          countryCode: credit.preorder.country?.code,
+        });
+      }
+      const email = normalizeEmail(credit.preorder.fboEmail || "");
+      if (email) {
+        await sendEmail({
+          to: email,
+          subject: `Votre produit en attente est disponible - ${credit.preorder.preorderNumber}`,
+          body: message,
+        });
+      }
+    } catch (notifyError) {
+      console.error("prepareBackorderCredit notification error:", notifyError);
+    }
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("prepareBackorderCredit error:", e);
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (prepareBackorderCredit)",
+    });
+  }
+}
+
+async function fulfillBackorderCredit(req, res) {
+  try {
+    const { id } = req.params;
+    const { pickupCode, pickupRecipientName } = req.body || {};
+
+    const credit = await prisma.preorderBackorderCredit.findFirst({
+      where: { id, countryId: pickCountryId(req) },
+      include: { preorder: { select: { preorderNumber: true } } },
+    });
+    if (!credit) return res.status(404).json({ message: "Avoir introuvable" });
+    if (credit.status !== "READY_FOR_PICKUP") {
+      return res.status(409).json({ message: "Cet avoir n'est pas prêt pour le retrait." });
+    }
+
+    const normalizedCode = String(pickupCode || "").trim();
+    if (!normalizedCode || normalizedCode !== String(credit.pickupSecretCode || "").trim()) {
+      return res.status(400).json({ message: "Code de retrait incorrect." });
+    }
+    const normalizedRecipient = String(pickupRecipientName || "").trim();
+    if (!normalizedRecipient) {
+      return res.status(400).json({ message: "Le nom du destinataire est obligatoire." });
+    }
+
+    const updated = await prisma.preorderBackorderCredit.update({
+      where: { id: credit.id },
+      data: {
+        status: "FULFILLED",
+        fulfilledAt: new Date(),
+        fulfilledById: req.user?.id || null,
+        pickupRecipientName: normalizedRecipient,
+      },
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("fulfillBackorderCredit error:", e);
+    return res.status(e.statusCode || 500).json({
+      message: e.message || "Erreur serveur (fulfillBackorderCredit)",
     });
   }
 }
@@ -4123,6 +4436,11 @@ module.exports = {
   bulkUpdatePreparationChecklist,
   createPreparationAnomaly,
   resolvePreparationAnomaly,
+  createBackorderCredit,
+  cancelBackorderCredit,
+  listBackorderCredits,
+  prepareBackorderCredit,
+  fulfillBackorderCredit,
   prepareOrder,
   listOverduePickups,
   applyPickupPenaltyHandler,
