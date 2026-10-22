@@ -98,10 +98,16 @@ function drawAgreementPage(doc, { sponsorship: s, approverName, countryName = "C
   doc.font("Helvetica-Bold").fontSize(15).fillColor(DARK).text("AGRÉMENT DE DISTRIBUTION - FLP-CI", 40, 92, { width: 515, align: "center" });
 
   // N° d'identification (case remplie par le facturier sur papier) ; tant
-  // qu'aucun n° FBO n'est encore attribué, préremplie du préfixe pays + 000.
+  // qu'aucun n° FBO n'est encore attribué, préremplie du préfixe pays + 000,
+  // callé à gauche pour laisser la place d'écrire les 6 chiffres restants à
+  // la main. Le numéro complet, une fois attribué, reste centré.
   doc.font("Helvetica").fontSize(9).fillColor(GREY).text("N° Identification FLP-CI", 170, 126);
   doc.lineWidth(1).strokeColor(DARK).rect(285, 120, 160, 22).stroke();
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(DARK).text(s.recruitFboNumero || defaultFboPrefix(countryCode), 285, 126, { width: 160, align: "center" });
+  if (s.recruitFboNumero) {
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(DARK).text(s.recruitFboNumero, 285, 126, { width: 160, align: "center" });
+  } else {
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(DARK).text(defaultFboPrefix(countryCode), 293, 126, { width: 144, align: "left" });
+  }
 
   // Candidat
   let y = 160;
