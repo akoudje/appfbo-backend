@@ -4426,6 +4426,147 @@ async function cancelOrder(req, res) {
   }
 }
 
+// Réservé aux administrateurs globaux : réactive une précommande annulée
+// automatiquement par cash-register-closure.service.js (fermeture de la
+// caisse — personnelle pour un facturier caissier, globale pour le comptoir
+// classique). Volontairement limité à cette seule source d'annulation : une
+// annulation "métier" (client, fraude, rupture...) ne doit pas pouvoir être
+// relancée en masse par cette voie. `assignedInvoicerId` n'est jamais
+// modifié : la commande réapparaît donc directement dans l'espace caisse du
+// facturier caissier qui l'avait traitée (voir cashier.controller.js#getWorkspace).
+async function reactivateCancelledOrder(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!isGlobalAdminRole(req.user?.role)) {
+      return res.status(403).json({
+        message:
+          "Seuls les administrateurs globaux peuvent réactiver une commande annulée par fermeture de caisse.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: true,
+        logs: { orderBy: { createdAt: "desc" }, take: 20 },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    if (order.status !== "CANCELLED") {
+      return res.status(400).json({
+        message: "Seule une commande annulée peut être réactivée.",
+      });
+    }
+
+    const closureLog = order.logs.find(
+      (log) =>
+        String(log.action || "").toUpperCase() === "CANCEL" &&
+        String(log.meta?.source || "").toUpperCase() === "CASH_REGISTER_CLOSURE",
+    );
+
+    if (!closureLog) {
+      return res.status(400).json({
+        message:
+          "Cette réactivation est réservée aux commandes annulées automatiquement par une fermeture de caisse.",
+      });
+    }
+
+    const fromStatus = ["INVOICED", "PAYMENT_PENDING"].includes(
+      String(closureLog.meta?.fromStatus || "").toUpperCase(),
+    )
+      ? closureLog.meta.fromStatus
+      : "INVOICED";
+
+    const actorAdminId = req.user?.id || null;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      // Ne devrait jamais se produire à ce stade du cycle (le stock n'est
+      // réservé qu'au lancement de la préparation, bien après
+      // INVOICED/PAYMENT_PENDING) — gardé par cohérence défensive avec le
+      // rollback symétrique de cancelPendingInvoicedPreordersForCountry.
+      const mustRedeductStock =
+        Boolean(order.stockDeductedAt) &&
+        Boolean(order.stockRestoredAt) &&
+        Boolean(order.cancelledAt) &&
+        order.stockRestoredAt.getTime() === order.cancelledAt.getTime();
+
+      if (mustRedeductStock) {
+        for (const item of order.items) {
+          await tx.countryProduct.update({
+            where: {
+              countryId_productId: {
+                countryId: order.countryId,
+                productId: item.productId,
+              },
+            },
+            data: { stockQty: { decrement: item.qty } },
+          });
+
+          await tx.stockMovement.create({
+            data: {
+              productId: item.productId,
+              countryId: order.countryId,
+              preorderId: order.id,
+              type: "DEBIT",
+              reason: "REACTIVATE_ORDER",
+              qty: item.qty,
+              note: "Nouveau débit stock suite réactivation (annulation par fermeture de caisse)",
+              meta: { preorderId: order.id, productId: item.productId, qty: item.qty },
+              createdById: actorAdminId,
+            },
+          });
+        }
+      }
+
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: fromStatus,
+          cancelledAt: null,
+          cancelReason: null,
+          cancelledById: null,
+          stockRestoredAt: mustRedeductStock ? null : order.stockRestoredAt,
+        },
+      });
+
+      await addLogTx(
+        tx,
+        order.id,
+        "REACTIVATE",
+        "Réactivation après annulation par fermeture de caisse.",
+        {
+          fromStatus: "CANCELLED",
+          toStatus: fromStatus,
+          source: "CASH_REGISTER_CLOSURE_REACTIVATION",
+          originalCancelLogId: closureLog.id,
+        },
+        actorAdminId,
+      );
+
+      return saved;
+    });
+
+    publishRealtimeEvent({
+      countryId: updated.countryId,
+      eventKey: "cashier_collect_new",
+      orderId: updated.id,
+      meta: { status: updated.status, reactivated: true },
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("reactivateCancelledOrder error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (reactivateCancelledOrder)" });
+  }
+}
+
 module.exports = {
   resendShippingPaymentNotification,
   updateShippingQuote,
@@ -4465,4 +4606,5 @@ module.exports = {
   fulfillOrder,
   regularizeFulfillmentNoNotification,
   cancelOrder,
+  reactivateCancelledOrder,
 };
