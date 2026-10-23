@@ -422,10 +422,10 @@ model OrderMessage {
   errorCode    String?
   errorMessage String? @db.Text
 
-  attempts          Int       @default(0)
-  maxAttempts       Int       @default(4)
-  nextAttemptAt     DateTime?
-  lastAttemptAt     DateTime?
+  attempts            Int       @default(0)
+  maxAttempts         Int       @default(4)
+  nextAttemptAt       DateTime?
+  lastAttemptAt       DateTime?
   processingStartedAt DateTime?
 
   createdBy String?
@@ -455,8 +455,8 @@ model OrderMessageEvent {
 }
 
 model Fbo {
-  id           String @id @default(cuid())
-  numeroFbo    String @unique
+  id           String  @id @default(cuid())
+  numeroFbo    String  @unique
   nomComplet   String
   email        String?
   grade        Grade
@@ -465,19 +465,19 @@ model Fbo {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  preorders    Preorder[]
-  fboCountries FboCountry[]
-  customerOtpChallenges CustomerOtpChallenge[]
-  bankPaymentProofs BankPaymentProof[]
-  mobilePushTokens MobilePushToken[]
+  preorders                 Preorder[]
+  fboCountries              FboCountry[]
+  customerOtpChallenges     CustomerOtpChallenge[]
+  bankPaymentProofs         BankPaymentProof[]
+  mobilePushTokens          MobilePushToken[]
   customerNotificationReads CustomerNotificationRead[]
-  documents FboDocument[]
+  documents                 FboDocument[]
 
   // Parrainage : lien officiel parrain -> filleul, posé quand le parrainage est validé.
-  sponsorFboId    String?
-  sponsor         Fbo?         @relation("FboSponsor", fields: [sponsorFboId], references: [id], onDelete: SetNull)
-  sponsoredFbos   Fbo[]        @relation("FboSponsor")
-  sponsorLinkedAt DateTime?
+  sponsorFboId          String?
+  sponsor               Fbo?          @relation("FboSponsor", fields: [sponsorFboId], references: [id], onDelete: SetNull)
+  sponsoredFbos         Fbo[]         @relation("FboSponsor")
+  sponsorLinkedAt       DateTime?
   sponsorshipsAsSponsor Sponsorship[] @relation("SponsorshipSponsor")
   sponsorshipsAsRecruit Sponsorship[] @relation("SponsorshipRecruit")
 
@@ -494,61 +494,61 @@ model Country {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  settings                CountrySettings?
-  settingsChanges         CountrySettingsChange[]
-  marketingContent        CountryMarketingContent?
-  products                Product[]
-  countryProducts         CountryProduct[]
-  gradePrices             ProductGradePrice[]
-  preorders               Preorder[]
-  gradeDiscounts          GradeDiscount[]
-  adminUsers              AdminUser[]
-  fboCountries            FboCountry[]
-  payments                Payment[]
-  paymentProviderAccounts PaymentProviderAccount[]
-  paymentProviderRules    PaymentProviderRule[]
-  as400GatewayConfig      As400GatewayConfig?
-  as400Requests           As400InvoiceRequest[]
-  cashClosures            CashClosure[]
-  customerOtpChallenges   CustomerOtpChallenge[]
+  settings                  CountrySettings?
+  settingsChanges           CountrySettingsChange[]
+  marketingContent          CountryMarketingContent?
+  products                  Product[]
+  countryProducts           CountryProduct[]
+  gradePrices               ProductGradePrice[]
+  preorders                 Preorder[]
+  gradeDiscounts            GradeDiscount[]
+  adminUsers                AdminUser[]
+  fboCountries              FboCountry[]
+  payments                  Payment[]
+  paymentProviderAccounts   PaymentProviderAccount[]
+  paymentProviderRules      PaymentProviderRule[]
+  as400GatewayConfig        As400GatewayConfig?
+  as400Requests             As400InvoiceRequest[]
+  cashClosures              CashClosure[]
+  customerOtpChallenges     CustomerOtpChallenge[]
   ticketPortalOtpChallenges TicketPortalOtpChallenge[]
-  bankPaymentProofs       BankPaymentProof[]
-  stockMovements          StockMovement[]
+  bankPaymentProofs         BankPaymentProof[]
+  stockMovements            StockMovement[]
   paymentLinkResendRequests PaymentLinkResendRequest[]
-  pickupCodeResendRequests PickupCodeResendRequest[]
-  mobilePushTokens MobilePushToken[]
-  ticketEvents TicketEvent[]
-  ticketOrders TicketOrder[]
-  tickets Ticket[]
-  ticketCheckInSessions TicketCheckInSession[]
-  ticketCheckInLogs TicketCheckInLog[]
-  ticketCredits TicketCredit[]
-  backorderCredits PreorderBackorderCredit[]
-  fboDocuments FboDocument[]
-  sponsorships Sponsorship[]
-  fboDocumentSignatories FboDocumentSignatory[]
-  externalPaymentLinks ExternalPaymentLink[]
-  memorials Memorial[]
-  memorialTributes MemorialTribute[]
-  cashRegisterStatus CashRegisterStatus?
+  pickupCodeResendRequests  PickupCodeResendRequest[]
+  mobilePushTokens          MobilePushToken[]
+  ticketEvents              TicketEvent[]
+  ticketOrders              TicketOrder[]
+  tickets                   Ticket[]
+  ticketCheckInSessions     TicketCheckInSession[]
+  ticketCheckInLogs         TicketCheckInLog[]
+  ticketCredits             TicketCredit[]
+  backorderCredits          PreorderBackorderCredit[]
+  fboDocuments              FboDocument[]
+  sponsorships              Sponsorship[]
+  fboDocumentSignatories    FboDocumentSignatory[]
+  externalPaymentLinks      ExternalPaymentLink[]
+  memorials                 Memorial[]
+  memorialTributes          MemorialTribute[]
+  cashRegisterStatuses      CashRegisterStatus[]
 }
 
 model MobilePushToken {
   id String @id @default(cuid())
 
-  token String @unique
+  token    String  @unique
   platform String?
-  enabled Boolean @default(true)
+  enabled  Boolean @default(true)
 
   fboId String?
-  fbo Fbo? @relation(fields: [fboId], references: [id], onDelete: Cascade)
+  fbo   Fbo?    @relation(fields: [fboId], references: [id], onDelete: Cascade)
 
   countryId String?
-  country Country? @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  country   Country? @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
   lastSeenAt DateTime @default(now())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([fboId, enabled])
   @@index([countryId, enabled])
@@ -561,66 +561,66 @@ model CountrySettings {
   countryId String  @unique
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
-  minCartFcfa Int @default(0)
+  minCartFcfa      Int @default(0)
   maxQtyPerProduct Int @default(10)
   packagingFeeFcfa Int @default(100)
 
   // Parrainage (désactivé par défaut ; activé pour la CIV par migration).
-  sponsorshipEnabled            Boolean @default(false)
-  sponsorshipMinPurchaseFcfa    Int     @default(53000)
-  sponsorshipPurchaseWindowHours Int    @default(48)
-  fboNumberPrefix               String?
-  preorderSubmissionEnabled Boolean @default(true)
+  sponsorshipEnabled                Boolean @default(false)
+  sponsorshipMinPurchaseFcfa        Int     @default(53000)
+  sponsorshipPurchaseWindowHours    Int     @default(48)
+  fboNumberPrefix                   String?
+  preorderSubmissionEnabled         Boolean @default(true)
   preorderSubmissionDisabledMessage String? @db.Text
-  publicAnnouncementEnabled Boolean @default(false)
-  publicAnnouncementMessage String? @db.Text
-  closedOnSaturday Boolean @default(false)
-  supportPhone String?
-  pickupAddress String? @db.Text
-  defaultPointDeVente String?
-  enableWave Boolean @default(true)
-  enableOrangeMoney Boolean @default(true)
-  enableCash Boolean @default(true)
-  enableBankTransfer Boolean @default(true)
-  enableEcobankPay Boolean @default(false)
-  ecobankPayMerchantName String?
-  ecobankPayMerchantId String?
-  ecobankPayTerminalName String?
-  ecobankPayTerminalId String?
-  ecobankPayQrImageUrl String?
-  ecobankPayInstructions String? @db.Text
-  enablePiSpi Boolean @default(false)
-  piSpiAlias String?
-  piSpiMerchantName String?
-  piSpiQrImageUrl String?
-  piSpiInstructions String? @db.Text
-  enableDelivery Boolean @default(true)
-  enablePickup Boolean @default(true)
-  bankAccountLabel String?
-  bankName String?
-  bankAccountNumber String?
-  bankIban String?
-  bankSwift String?
-  bankAccountHolder String?
-  bankPaymentDueHours Int @default(72)
-  bankProofMaxFileSizeMb Int @default(8)
-  currencyLabel String? @default("FCFA")
-  pricingDisclaimer String? @db.Text
-  themePrimaryColor String?
-  themeSecondaryColor String?
-  themeDarkColor String?
-  themeLogoPath String?
-  themeSliderEnabled Boolean @default(true)
-  themeSidePanelsEnabled Boolean @default(true)
-  notificationTemplates Json?
-  fboHelpTopics Json?
+  publicAnnouncementEnabled         Boolean @default(false)
+  publicAnnouncementMessage         String? @db.Text
+  closedOnSaturday                  Boolean @default(false)
+  supportPhone                      String?
+  pickupAddress                     String? @db.Text
+  defaultPointDeVente               String?
+  enableWave                        Boolean @default(true)
+  enableOrangeMoney                 Boolean @default(true)
+  enableCash                        Boolean @default(true)
+  enableBankTransfer                Boolean @default(true)
+  enableEcobankPay                  Boolean @default(false)
+  ecobankPayMerchantName            String?
+  ecobankPayMerchantId              String?
+  ecobankPayTerminalName            String?
+  ecobankPayTerminalId              String?
+  ecobankPayQrImageUrl              String?
+  ecobankPayInstructions            String? @db.Text
+  enablePiSpi                       Boolean @default(false)
+  piSpiAlias                        String?
+  piSpiMerchantName                 String?
+  piSpiQrImageUrl                   String?
+  piSpiInstructions                 String? @db.Text
+  enableDelivery                    Boolean @default(true)
+  enablePickup                      Boolean @default(true)
+  bankAccountLabel                  String?
+  bankName                          String?
+  bankAccountNumber                 String?
+  bankIban                          String?
+  bankSwift                         String?
+  bankAccountHolder                 String?
+  bankPaymentDueHours               Int     @default(72)
+  bankProofMaxFileSizeMb            Int     @default(8)
+  currencyLabel                     String? @default("FCFA")
+  pricingDisclaimer                 String? @db.Text
+  themePrimaryColor                 String?
+  themeSecondaryColor               String?
+  themeDarkColor                    String?
+  themeLogoPath                     String?
+  themeSliderEnabled                Boolean @default(true)
+  themeSidePanelsEnabled            Boolean @default(true)
+  notificationTemplates             Json?
+  fboHelpTopics                     Json?
 
   // Paramètres opérationnels facturation
-  maxActiveBillingPerInvoicer Int @default(10)
-  billingClaimTimeoutMin      Int @default(30)
-  preinvoicedAutoCancelAfterHours Int @default(2)
-  preinvoicedAutoReminderAfterHours Int @default(1)
-  preinvoicedAutoCancelAfterMinutes Int @default(120)
+  maxActiveBillingPerInvoicer         Int @default(10)
+  billingClaimTimeoutMin              Int @default(30)
+  preinvoicedAutoCancelAfterHours     Int @default(2)
+  preinvoicedAutoReminderAfterHours   Int @default(1)
+  preinvoicedAutoCancelAfterMinutes   Int @default(120)
   preinvoicedAutoReminderAfterMinutes Int @default(60)
 
   createdAt DateTime @default(now())
@@ -630,12 +630,12 @@ model CountrySettings {
 model CountryMarketingContent {
   id String @id @default(cuid())
 
-  countryId String @unique
-  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  countryId String  @unique
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
-  slidesJson Json?
-  sidePanelsJson Json?
-  publishingJson Json?
+  slidesJson       Json?
+  sidePanelsJson   Json?
+  publishingJson   Json?
   // Accueil > « Sélection produits » : { enabled, productIds } (ordre affiché).
   homeFeaturedJson Json?
 
@@ -644,19 +644,19 @@ model CountryMarketingContent {
 }
 
 model AdminUser {
-  id       String    @id @default(cuid())
-  email    String    @unique
-  password String
-  fullName String?
-  role     AdminRole
-  actif    Boolean   @default(true)
-  lastLoginAt DateTime?
+  id                String    @id @default(cuid())
+  email             String    @unique
+  password          String
+  fullName          String?
+  role              AdminRole
+  actif             Boolean   @default(true)
+  lastLoginAt       DateTime?
   passwordChangedAt DateTime?
-  sessionVersion Int @default(0)
-  failedLoginCount Int @default(0)
-  lockedUntil DateTime?
-  permissionAllow Json?
-  permissionDeny Json?
+  sessionVersion    Int       @default(0)
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?
+  permissionAllow   Json?
+  permissionDeny    Json?
 
   countryId String?
   country   Country? @relation(fields: [countryId], references: [id], onDelete: Restrict)
@@ -673,39 +673,40 @@ model AdminUser {
   cancelledPreorders              Preorder[] @relation("PreorderCancelledBy")
   pickupPenaltyAppliedPreorders   Preorder[] @relation("PreorderPickupPenaltyAppliedBy")
 
-  stockMovements StockMovement[]
-  preorderLogs   PreorderLog[]
-  paymentTransactionLogs PaymentTransactionLog[]
-  reviewedBankPaymentProofs BankPaymentProof[]
-  cashierTransactions CashierTransaction[] @relation("CashierTransactionCashier")
-  createdAs400Requests As400InvoiceRequest[] @relation("As400RequestCreatedBy")
-  updatedAs400Requests As400InvoiceRequest[] @relation("As400RequestUpdatedBy")
-  as400RequestLogs     As400InvoiceRequestLog[] @relation("As400RequestLogActor")
-  cashClosuresAsCashier CashClosure[] @relation("CashClosureCashier")
-  cashClosuresSubmitted CashClosure[] @relation("CashClosureSubmittedBy")
-  cashClosuresReviewed CashClosure[] @relation("CashClosureReviewedBy")
-  checkedPreparationItems PreparationChecklistItem[]
-  createdPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyCreatedBy")
-  resolvedPreparationAnomalies PreparationAnomaly[] @relation("PreparationAnomalyResolvedBy")
-  reportedBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditReportedBy")
-  preparedBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditPreparedBy")
-  fulfilledBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditFulfilledBy")
-  cancelledBackorderCredits PreorderBackorderCredit[] @relation("BackorderCreditCancelledBy")
-  createdTicketEvents TicketEvent[] @relation("TicketEventCreatedBy")
-  updatedTicketEvents TicketEvent[] @relation("TicketEventUpdatedBy")
-  checkedInTickets Ticket[] @relation("TicketCheckedInBy")
-  ticketCheckInSessions TicketCheckInSession[] @relation("TicketCheckInSessionAgent")
-  ticketCheckInLogs TicketCheckInLog[] @relation("TicketCheckInLogAgent")
-  revokedTicketCredits TicketCredit[] @relation("TicketCreditRevokedBy")
-  issuedFboDocuments FboDocument[] @relation("FboDocumentIssuedBy")
-  cancelledFboDocuments FboDocument[] @relation("FboDocumentCancelledBy")
-  createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
-  updatedExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkUpdatedBy")
-  closedCashRegisterStatuses CashRegisterStatus[] @relation("CashRegisterStatusClosedBy")
-  reopenedCashRegisterStatuses CashRegisterStatus[] @relation("CashRegisterStatusReopenedBy")
-  reviewedMemorialTributes MemorialTribute[] @relation("MemorialTributeReviewedBy")
-  auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
-  auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
+  stockMovements               StockMovement[]
+  preorderLogs                 PreorderLog[]
+  paymentTransactionLogs       PaymentTransactionLog[]
+  reviewedBankPaymentProofs    BankPaymentProof[]
+  cashierTransactions          CashierTransaction[]       @relation("CashierTransactionCashier")
+  createdAs400Requests         As400InvoiceRequest[]      @relation("As400RequestCreatedBy")
+  updatedAs400Requests         As400InvoiceRequest[]      @relation("As400RequestUpdatedBy")
+  as400RequestLogs             As400InvoiceRequestLog[]   @relation("As400RequestLogActor")
+  cashClosuresAsCashier        CashClosure[]              @relation("CashClosureCashier")
+  cashClosuresSubmitted        CashClosure[]              @relation("CashClosureSubmittedBy")
+  cashClosuresReviewed         CashClosure[]              @relation("CashClosureReviewedBy")
+  checkedPreparationItems      PreparationChecklistItem[]
+  createdPreparationAnomalies  PreparationAnomaly[]       @relation("PreparationAnomalyCreatedBy")
+  resolvedPreparationAnomalies PreparationAnomaly[]       @relation("PreparationAnomalyResolvedBy")
+  reportedBackorderCredits     PreorderBackorderCredit[]  @relation("BackorderCreditReportedBy")
+  preparedBackorderCredits     PreorderBackorderCredit[]  @relation("BackorderCreditPreparedBy")
+  fulfilledBackorderCredits    PreorderBackorderCredit[]  @relation("BackorderCreditFulfilledBy")
+  cancelledBackorderCredits    PreorderBackorderCredit[]  @relation("BackorderCreditCancelledBy")
+  createdTicketEvents          TicketEvent[]              @relation("TicketEventCreatedBy")
+  updatedTicketEvents          TicketEvent[]              @relation("TicketEventUpdatedBy")
+  checkedInTickets             Ticket[]                   @relation("TicketCheckedInBy")
+  ticketCheckInSessions        TicketCheckInSession[]     @relation("TicketCheckInSessionAgent")
+  ticketCheckInLogs            TicketCheckInLog[]         @relation("TicketCheckInLogAgent")
+  revokedTicketCredits         TicketCredit[]             @relation("TicketCreditRevokedBy")
+  issuedFboDocuments           FboDocument[]              @relation("FboDocumentIssuedBy")
+  cancelledFboDocuments        FboDocument[]              @relation("FboDocumentCancelledBy")
+  createdExternalPaymentLinks  ExternalPaymentLink[]      @relation("ExternalPaymentLinkCreatedBy")
+  updatedExternalPaymentLinks  ExternalPaymentLink[]      @relation("ExternalPaymentLinkUpdatedBy")
+  closedCashRegisterStatuses   CashRegisterStatus[]       @relation("CashRegisterStatusClosedBy")
+  reopenedCashRegisterStatuses CashRegisterStatus[]       @relation("CashRegisterStatusReopenedBy")
+  ownedCashRegisterStatuses    CashRegisterStatus[]       @relation("CashRegisterStatusUser")
+  reviewedMemorialTributes     MemorialTribute[]          @relation("MemorialTributeReviewedBy")
+  auditLogsAuthored            AdminUserAuditLog[]        @relation("AdminUserAuditActor")
+  auditLogsTargeted            AdminUserAuditLog[]        @relation("AdminUserAuditTarget")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -756,36 +757,36 @@ model FboDocument {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   fboId String
-  fbo Fbo @relation(fields: [fboId], references: [id], onDelete: Restrict)
+  fbo   Fbo    @relation(fields: [fboId], references: [id], onDelete: Restrict)
 
-  documentNumber String @unique
-  verificationToken String @unique
-  type FboDocumentType @default(ACTIVITY_CERTIFICATE)
-  status FboDocumentStatus @default(ISSUED)
+  documentNumber    String            @unique
+  verificationToken String            @unique
+  type              FboDocumentType   @default(ACTIVITY_CERTIFICATE)
+  status            FboDocumentStatus @default(ISSUED)
 
-  fboNumber String
-  fboFullName String
-  fboEmail String?
-  fboGrade Grade?
+  fboNumber       String
+  fboFullName     String
+  fboEmail        String?
+  fboGrade        Grade?
   fboPointDeVente String?
 
-  city String
-  purpose String? @db.Text
-  signatoryName String
-  signatoryTitle String
+  city              String
+  purpose           String?           @db.Text
+  signatoryName     String
+  signatoryTitle    String
   signatoryCivility SignatoryCivility @default(MME)
-  issuedAt DateTime @default(now())
+  issuedAt          DateTime          @default(now())
 
   issuedById String?
-  issuedBy AdminUser? @relation("FboDocumentIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+  issuedBy   AdminUser? @relation("FboDocumentIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
 
-  cancelledAt DateTime?
-  cancelReason String? @db.Text
+  cancelledAt   DateTime?
+  cancelReason  String?    @db.Text
   cancelledById String?
-  cancelledBy AdminUser? @relation("FboDocumentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  cancelledBy   AdminUser? @relation("FboDocumentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
 
   metadata Json?
 
@@ -811,11 +812,11 @@ model FboDocumentSignatory {
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
-  name     String
-  title    String
-  civility SignatoryCivility @default(MME)
-  active   Boolean           @default(true)
-  sortOrder Int              @default(0)
+  name      String
+  title     String
+  civility  SignatoryCivility @default(MME)
+  active    Boolean           @default(true)
+  sortOrder Int               @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -828,18 +829,18 @@ model Memorial {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
-  slug String
-  title String
-  personName String
-  subtitle String?
-  birthDate DateTime?
-  deathDate DateTime?
-  coverImageUrl String? @db.Text
-  biography String? @db.Text
-  thankYouMessage String? @db.Text
-  published Boolean @default(true)
+  slug            String
+  title           String
+  personName      String
+  subtitle        String?
+  birthDate       DateTime?
+  deathDate       DateTime?
+  coverImageUrl   String?   @db.Text
+  biography       String?   @db.Text
+  thankYouMessage String?   @db.Text
+  published       Boolean   @default(true)
 
   tributes MemorialTribute[]
 
@@ -854,23 +855,23 @@ model MemorialTribute {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   memorialId String
-  memorial Memorial @relation(fields: [memorialId], references: [id], onDelete: Cascade)
+  memorial   Memorial @relation(fields: [memorialId], references: [id], onDelete: Cascade)
 
-  authorName String
+  authorName   String
   relationship String?
-  authorEmail String?
-  authorPhone String?
-  message String @db.Text
-  photoUrl String? @db.Text
-  candleLit Boolean @default(false)
-  status MemorialTributeStatus @default(PENDING)
+  authorEmail  String?
+  authorPhone  String?
+  message      String                @db.Text
+  photoUrl     String?               @db.Text
+  candleLit    Boolean               @default(false)
+  status       MemorialTributeStatus @default(PENDING)
 
-  reviewedAt DateTime?
+  reviewedAt   DateTime?
   reviewedById String?
-  reviewedBy AdminUser? @relation("MemorialTributeReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedBy   AdminUser? @relation("MemorialTributeReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -889,11 +890,11 @@ model Product {
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
-  category ProductCategory @default(NON_CLASSE)
-  details  String?         @db.Text
-  stockQty Int             @default(0)
+  category       ProductCategory     @default(NON_CLASSE)
+  details        String?             @db.Text
+  stockQty       Int                 @default(0)
   maxQtyPerOrder Int?
-  gradePrices ProductGradePrice[]
+  gradePrices    ProductGradePrice[]
 
   prixBaseFcfa Int
   cc           Decimal @db.Decimal(10, 3)
@@ -904,10 +905,10 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  preorderItems  PreorderItem[]
-  stockMovements StockMovement[]
-  countryProducts CountryProduct[]
-  packagings ProductPackaging[]
+  preorderItems    PreorderItem[]
+  stockMovements   StockMovement[]
+  countryProducts  CountryProduct[]
+  packagings       ProductPackaging[]
   backorderCredits PreorderBackorderCredit[]
 
   @@index([actif])
@@ -926,7 +927,7 @@ model ProductPackaging {
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   label           String // ex: "Unité", "Pack de 6", "Carton de 12", "Carton de 36"
-  unitsPerPackage Int    // nombre d'unités de base contenues dans ce conditionnement
+  unitsPerPackage Int // nombre d'unités de base contenues dans ce conditionnement
 
   // Code-barres propre à ce conditionnement (EAN-13 unité / EAN-14 carton...), distinct du SKU produit
   barcode String? @unique
@@ -954,9 +955,9 @@ model CountryProduct {
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
-  prixBaseFcfa Int
-  stockQty Int @default(0)
-  actif Boolean @default(true)
+  prixBaseFcfa   Int
+  stockQty       Int     @default(0)
+  actif          Boolean @default(true)
   maxQtyPerOrder Int?
 
   createdAt DateTime @default(now())
@@ -977,7 +978,7 @@ model ProductGradePrice {
   countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
-  grade Grade
+  grade    Grade
   prixFcfa Decimal @db.Decimal(12, 4)
 
   createdAt DateTime @default(now())
@@ -1009,10 +1010,10 @@ model Preorder {
   id String @id @default(cuid())
 
   // Numéro de precommande 
-  preorderNumber  String? @unique
-  preorderSeq     Int?
-  preorderDateKey String?
-  clientDraftKey String?
+  preorderNumber      String? @unique
+  preorderSeq         Int?
+  preorderDateKey     String?
+  clientDraftKey      String?
   clientSubmissionKey String?
 
   // mode de paiement
@@ -1037,77 +1038,76 @@ model Preorder {
   pointDeVente  String
 
   // FBO qui a passé la commande lorsqu'il agit pour un autre FBO.
-  placedByFboNumero      String?
-  placedByFboName        String?
-  placedByFboPhone       String?
-  placedByFboEmail       String?
+  placedByFboNumero       String?
+  placedByFboName         String?
+  placedByFboPhone        String?
+  placedByFboEmail        String?
   placedByHomeCountryCode String?
 
   // Livraison
-  deliveryMode DeliveryMode?
-  shippingRecipientName String?
-  shippingRecipientPhone String?
+  deliveryMode            DeliveryMode?
+  shippingRecipientName   String?
+  shippingRecipientPhone  String?
   shippingDestinationCity String?
-  shippingFeeFcfa Int?
-  shippingWeightKg Decimal? @db.Decimal(12,3)
-  shippingParcelCount Int?
-  shippingQuotedAt DateTime?
-  shippingQuotedById String?
-  shippingHandedOverAt DateTime?
-  shippingReceiptFileUrl String?
+  shippingFeeFcfa         Int?
+  shippingWeightKg        Decimal?             @db.Decimal(12, 3)
+  shippingParcelCount     Int?
+  shippingQuotedAt        DateTime?
+  shippingQuotedById      String?
+  shippingHandedOverAt    DateTime?
+  shippingReceiptFileUrl  String?
   shippingReceiptMimeType String?
-  shippingPaymentLinkId String? @unique
-  shippingPaymentLink ExternalPaymentLink? @relation("ShippingPayment", fields: [shippingPaymentLinkId], references: [id], onDelete: Restrict)
-  @@index([countryId, deliveryMode, status])
+  shippingPaymentLinkId   String?              @unique
+  shippingPaymentLink     ExternalPaymentLink? @relation("ShippingPayment", fields: [shippingPaymentLinkId], references: [id], onDelete: Restrict)
 
   // Protection des données personnelles
-  personalDataConsentAccepted  Boolean   @default(false)
+  personalDataConsentAccepted   Boolean   @default(false)
   personalDataConsentAcceptedAt DateTime?
-  personalDataConsentVersion   String?
+  personalDataConsentVersion    String?
 
   // Totaux
-  totalCc            Decimal @default(0.000) @db.Decimal(12, 3)
-  totalPoidsKg       Decimal @default(0.000) @db.Decimal(12, 3)
-  totalProduitsFcfa  Int     @default(0)
-  fraisLivraisonFcfa Int     @default(0)
-  emballageFcfa      Int     @default(0)
-  totalFcfa          Int     @default(0)
-  indicativeTotalFcfa Int?
+  totalCc                Decimal @default(0.000) @db.Decimal(12, 3)
+  totalPoidsKg           Decimal @default(0.000) @db.Decimal(12, 3)
+  totalProduitsFcfa      Int     @default(0)
+  fraisLivraisonFcfa     Int     @default(0)
+  emballageFcfa          Int     @default(0)
+  totalFcfa              Int     @default(0)
+  indicativeTotalFcfa    Int?
   computedGradeTotalFcfa Int?
-  as400InvoiceTotalFcfa Int?
+  as400InvoiceTotalFcfa  Int?
 
   // File / répartition facturiers
-  billingWorkStatus     BillingWorkStatus @default(NONE)
-  billingPriority       BillingPriority   @default(NORMAL)
-  billingQueueEnteredAt DateTime?
-  assignedAt            DateTime?
-  billingStartedAt      DateTime?
-  billingLastActivityAt DateTime?
-  billingCompletedAt    DateTime?
-  billingReleasedAt     DateTime?
-  billingEscalatedAt    DateTime?
-  billingSlaDeadlineAt  DateTime?
-  billingEscalationType String?
-  as400CertificationStatus String?
-  as400CertificationReportedAt DateTime?
+  billingWorkStatus              BillingWorkStatus @default(NONE)
+  billingPriority                BillingPriority   @default(NORMAL)
+  billingQueueEnteredAt          DateTime?
+  assignedAt                     DateTime?
+  billingStartedAt               DateTime?
+  billingLastActivityAt          DateTime?
+  billingCompletedAt             DateTime?
+  billingReleasedAt              DateTime?
+  billingEscalatedAt             DateTime?
+  billingSlaDeadlineAt           DateTime?
+  billingEscalationType          String?
+  as400CertificationStatus       String?
+  as400CertificationReportedAt   DateTime?
   as400CertificationReportedById String?
-  as400CertificationResolvedAt DateTime?
+  as400CertificationResolvedAt   DateTime?
   as400CertificationResolvedById String?
-  as400CertificationNote String? @db.Text
+  as400CertificationNote         String?           @db.Text
 
   assignedInvoicerId String?
   assignedInvoicer   AdminUser? @relation("PreorderAssignedInvoicer", fields: [assignedInvoicerId], references: [id], onDelete: SetNull)
 
   // Facturation
-  factureReference  String?
-  paymentCollectionCode String?
-  factureWhatsappTo String?
-  billingAdjustmentReason String? @db.Text
-  parcelNumber      String? @unique
-  invoicedAt        DateTime?
-  paymentExpiresAt  DateTime?
-  invoicedById      String?
-  invoicedByAdmin   AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
+  factureReference        String?
+  paymentCollectionCode   String?
+  factureWhatsappTo       String?
+  billingAdjustmentReason String?    @db.Text
+  parcelNumber            String?    @unique
+  invoicedAt              DateTime?
+  paymentExpiresAt        DateTime?
+  invoicedById            String?
+  invoicedByAdmin         AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
 
   // Paiement manuel (cas spécifique)
   manualPaymentReference     String?
@@ -1119,13 +1119,13 @@ model Preorder {
   manualPaymentValidatedBy   AdminUser? @relation("PreorderManualPaymentValidatedBy", fields: [manualPaymentValidatedById], references: [id], onDelete: SetNull)
 
   // Paiement global
-  paymentProvider PaymentProvider?
-  paidAt          DateTime?
-  bankPaymentStatus BankPaymentStatus @default(NOT_REQUIRED)
-  bankPaymentDueAt DateTime?
-  bankPaymentValidatedAt DateTime?
+  paymentProvider          PaymentProvider?
+  paidAt                   DateTime?
+  bankPaymentStatus        BankPaymentStatus @default(NOT_REQUIRED)
+  bankPaymentDueAt         DateTime?
+  bankPaymentValidatedAt   DateTime?
   bankPaymentValidatedById String?
-  bankPaymentValidatedBy AdminUser? @relation("PreorderBankPaymentValidatedBy", fields: [bankPaymentValidatedById], references: [id], onDelete: SetNull)
+  bankPaymentValidatedBy   AdminUser?        @relation("PreorderBankPaymentValidatedBy", fields: [bankPaymentValidatedById], references: [id], onDelete: SetNull)
 
   // Paiement actif (facilite les écrans)
   activePaymentId String?
@@ -1133,21 +1133,21 @@ model Preorder {
 
   // Préparation / fulfillment
   preparationLaunchedAt DateTime?
-  preparedAt  DateTime?
-  fulfilledAt DateTime?
-  cancelledAt DateTime?
+  preparedAt            DateTime?
+  fulfilledAt           DateTime?
+  cancelledAt           DateTime?
 
   preparationLaunchedById String?
   pickupCodeVerifiedById  String?
-  preparedById  String?
-  fulfilledById String?
-  cancelledById String?
+  preparedById            String?
+  fulfilledById           String?
+  cancelledById           String?
 
   preparationLaunchedBy AdminUser? @relation("PreorderPreparationLaunchedBy", fields: [preparationLaunchedById], references: [id], onDelete: SetNull)
-  pickupCodeVerifiedBy AdminUser? @relation("PreorderPickupCodeVerifiedBy", fields: [pickupCodeVerifiedById], references: [id], onDelete: SetNull)
-  preparedByAdmin  AdminUser? @relation("PreorderPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
-  fulfilledByAdmin AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
-  cancelledByAdmin AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  pickupCodeVerifiedBy  AdminUser? @relation("PreorderPickupCodeVerifiedBy", fields: [pickupCodeVerifiedById], references: [id], onDelete: SetNull)
+  preparedByAdmin       AdminUser? @relation("PreorderPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
+  fulfilledByAdmin      AdminUser? @relation("PreorderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
+  cancelledByAdmin      AdminUser? @relation("PreorderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
 
   // Divers
   whatsappMessage       String?   @db.Text
@@ -1160,28 +1160,28 @@ model Preorder {
 
   internalNote String? @db.Text
 
-  deliveryTracking String?
-  fulfillmentMode String?
-  pickupPointLabel String?
-  deliveryCarrier String?
-  packingNote      String? @db.Text
-  pickupSecretCode String?
-  pickupCodeVerifiedAt DateTime?
-  pickupRecipientType String?
-  pickupRecipientName String?
-  pickupRecipientPhone String?
-  pickupConfirmationNote String? @db.Text
-  cancelReason     String? @db.Text
+  deliveryTracking       String?
+  fulfillmentMode        String?
+  pickupPointLabel       String?
+  deliveryCarrier        String?
+  packingNote            String?   @db.Text
+  pickupSecretCode       String?
+  pickupCodeVerifiedAt   DateTime?
+  pickupRecipientType    String?
+  pickupRecipientName    String?
+  pickupRecipientPhone   String?
+  pickupConfirmationNote String?   @db.Text
+  cancelReason           String?   @db.Text
 
   // Pénalité de non-retrait : appliquée manuellement par un admin depuis la
   // liste des colis en retard (pickup-overdue.service.js signale, un humain
   // valide le montant — pas de prélèvement automatique). Le montant n'est
   // pour l'instant qu'enregistré ici, pas répercuté automatiquement sur
   // totalFcfa/la facturation.
-  pickupPenaltyFcfa        Int?
-  pickupPenaltyNote        String?   @db.Text
-  pickupPenaltyAppliedAt   DateTime?
-  pickupPenaltyAppliedById String?
+  pickupPenaltyFcfa           Int?
+  pickupPenaltyNote           String?    @db.Text
+  pickupPenaltyAppliedAt      DateTime?
+  pickupPenaltyAppliedById    String?
   pickupPenaltyAppliedByAdmin AdminUser? @relation("PreorderPickupPenaltyAppliedBy", fields: [pickupPenaltyAppliedById], references: [id], onDelete: SetNull)
 
   stockDeductedAt DateTime?
@@ -1196,27 +1196,28 @@ model Preorder {
   updatedAt   DateTime  @updatedAt
   submittedAt DateTime?
 
-  items          PreorderItem[]
-  logs           PreorderLog[]
-  messages       OrderMessage[]
-  payments       Payment[]       @relation("PreorderPayments")
-  cashierTransactions CashierTransaction[]
-  as400InvoiceRequests As400InvoiceRequest[]
-  preparationItems PreparationChecklistItem[]
-  preparationAnomalies PreparationAnomaly[]
-  backorderCredits PreorderBackorderCredit[]
-  paymentTransactionLogs PaymentTransactionLog[]
-  stockMovements StockMovement[]
-  bankPaymentProofs BankPaymentProof[]
+  items                     PreorderItem[]
+  logs                      PreorderLog[]
+  messages                  OrderMessage[]
+  payments                  Payment[]                  @relation("PreorderPayments")
+  cashierTransactions       CashierTransaction[]
+  as400InvoiceRequests      As400InvoiceRequest[]
+  preparationItems          PreparationChecklistItem[]
+  preparationAnomalies      PreparationAnomaly[]
+  backorderCredits          PreorderBackorderCredit[]
+  paymentTransactionLogs    PaymentTransactionLog[]
+  stockMovements            StockMovement[]
+  bankPaymentProofs         BankPaymentProof[]
   paymentLinkResendRequests PaymentLinkResendRequest[]
-  pickupCodeResendRequests PickupCodeResendRequest[]
+  pickupCodeResendRequests  PickupCodeResendRequest[]
 
+  @@unique([countryId, clientDraftKey])
+  @@unique([countryId, clientSubmissionKey])
+  @@index([countryId, deliveryMode, status])
   @@index([status, createdAt])
   @@index([preorderPaymentMode])
   @@index([countryId, status, createdAt])
   @@index([countryId, isTest])
-  @@unique([countryId, clientDraftKey])
-  @@unique([countryId, clientSubmissionKey])
   @@index([paymentStatus, createdAt])
   @@index([fboId])
   @@index([placedByFboNumero])
@@ -1259,20 +1260,20 @@ model CustomerOtpChallenge {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
   fboId String
-  fbo Fbo @relation(fields: [fboId], references: [id], onDelete: Cascade)
+  fbo   Fbo    @relation(fields: [fboId], references: [id], onDelete: Cascade)
 
-  purpose String @default("CUSTOMER_PORTAL_LOGIN")
-  channel String
+  purpose           String  @default("CUSTOMER_PORTAL_LOGIN")
+  channel           String
   destinationMasked String?
 
-  codeHash String
-  expiresAt DateTime
+  codeHash   String
+  expiresAt  DateTime
   consumedAt DateTime?
 
-  attempts Int @default(0)
+  attempts    Int @default(0)
   maxAttempts Int @default(5)
 
   meta Json?
@@ -1304,30 +1305,30 @@ model BankPaymentProof {
   id String @id @default(cuid())
 
   preorderId String
-  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   fboId String
-  fbo Fbo @relation(fields: [fboId], references: [id], onDelete: Restrict)
+  fbo   Fbo    @relation(fields: [fboId], references: [id], onDelete: Restrict)
 
   status BankPaymentProofStatus @default(SUBMITTED)
 
   declaredAmountFcfa Int?
-  reference String?
-  note String? @db.Text
+  reference          String?
+  note               String? @db.Text
 
-  fileUrl String
-  fileMimeType String
-  fileSizeBytes Int
+  fileUrl          String
+  fileMimeType     String
+  fileSizeBytes    Int
   originalFileName String?
 
-  submittedAt DateTime @default(now())
-  reviewedAt DateTime?
+  submittedAt       DateTime   @default(now())
+  reviewedAt        DateTime?
   reviewedByAdminId String?
-  reviewedByAdmin AdminUser? @relation(fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
-  rejectionReason String? @db.Text
+  reviewedByAdmin   AdminUser? @relation(fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  rejectionReason   String?    @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1342,19 +1343,19 @@ model CashierTransaction {
   id String @id @default(cuid())
 
   preorderId String
-  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
   cashierId String?
-  cashier AdminUser? @relation("CashierTransactionCashier", fields: [cashierId], references: [id], onDelete: SetNull)
+  cashier   AdminUser? @relation("CashierTransactionCashier", fields: [cashierId], references: [id], onDelete: SetNull)
 
-  paymentMode String
-  amountExpectedFcfa Int
-  amountReceivedFcfa Int?
-  providerReference String?
-  payerPhone String?
-  receiptNumber String?
-  cashDeskLabel String?
-  receiptPrintedAt DateTime?
+  paymentMode           String
+  amountExpectedFcfa    Int
+  amountReceivedFcfa    Int?
+  providerReference     String?
+  payerPhone            String?
+  receiptNumber         String?
+  cashDeskLabel         String?
+  receiptPrintedAt      DateTime?
   preparationLaunchedAt DateTime?
 
   createdAt DateTime @default(now())
@@ -1370,51 +1371,51 @@ model As400InvoiceRequest {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   preorderId String
-  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
-  action As400RequestAction @default(CREATE_AND_VALIDATE_INVOICE)
-  mode As400AutomationMode @default(OBSERVATION)
-  status As400RequestStatus @default(PENDING)
+  action As400RequestAction  @default(CREATE_AND_VALIDATE_INVOICE)
+  mode   As400AutomationMode @default(OBSERVATION)
+  status As400RequestStatus  @default(PENDING)
 
   idempotencyKey String @unique
-  priority Int @default(100)
-  attempts Int @default(0)
-  maxAttempts Int @default(1)
+  priority       Int    @default(100)
+  attempts       Int    @default(0)
+  maxAttempts    Int    @default(1)
 
   requestedInvoiceReference String?
-  requestedAmountFcfa Int?
-  requestedPayload Json?
+  requestedAmountFcfa       Int?
+  requestedPayload          Json?
 
   as400InvoiceReference String?
-  as400OrderReference String?
-  as400AmountFcfa Int?
-  as400Validated Boolean @default(false)
-  as400ValidatedAt DateTime?
+  as400OrderReference   String?
+  as400AmountFcfa       Int?
+  as400Validated        Boolean   @default(false)
+  as400ValidatedAt      DateTime?
 
-  spoolFilePath String? @db.Text
+  spoolFilePath      String? @db.Text
   screenSnapshotPath String? @db.Text
-  resultPayload Json?
+  resultPayload      Json?
 
-  errorCode String?
+  errorCode    String?
   errorMessage String? @db.Text
-  humanReason String? @db.Text
+  humanReason  String? @db.Text
 
-  availableForProcessingAt DateTime @default(now())
-  lockedAt DateTime?
-  lockedBy String?
-  startedAt DateTime?
-  completedAt DateTime?
-  failedAt DateTime?
-  cancelledAt DateTime?
+  availableForProcessingAt DateTime  @default(now())
+  lockedAt                 DateTime?
+  lockedBy                 String?
+  startedAt                DateTime?
+  completedAt              DateTime?
+  failedAt                 DateTime?
+  cancelledAt              DateTime?
 
   createdById String?
-  createdBy AdminUser? @relation("As400RequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   AdminUser? @relation("As400RequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   updatedById String?
-  updatedBy AdminUser? @relation("As400RequestUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   AdminUser? @relation("As400RequestUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   logs As400InvoiceRequestLog[]
 
@@ -1433,15 +1434,15 @@ model As400InvoiceRequestLog {
   id String @id @default(cuid())
 
   requestId String
-  request As400InvoiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  request   As400InvoiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
-  level As400RequestLogLevel @default(INFO)
-  event String
-  message String? @db.Text
+  level   As400RequestLogLevel @default(INFO)
+  event   String
+  message String?              @db.Text
   payload Json?
 
   actorAdminId String?
-  actorAdmin AdminUser? @relation("As400RequestLogActor", fields: [actorAdminId], references: [id], onDelete: SetNull)
+  actorAdmin   AdminUser? @relation("As400RequestLogActor", fields: [actorAdminId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
@@ -1453,26 +1454,26 @@ model As400InvoiceRequestLog {
 model As400GatewayConfig {
   id String @id @default(cuid())
 
-  countryId String @unique
-  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  countryId String  @unique
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
 
-  enabled Boolean @default(false)
-  defaultMode As400AutomationMode @default(OBSERVATION)
-  allowObservation Boolean @default(true)
-  allowAssisted Boolean @default(false)
-  allowAutomatic Boolean @default(false)
+  enabled          Boolean             @default(false)
+  defaultMode      As400AutomationMode @default(OBSERVATION)
+  allowObservation Boolean             @default(true)
+  allowAssisted    Boolean             @default(false)
+  allowAutomatic   Boolean             @default(false)
 
-  workerId String?
+  workerId          String?
   hllapiProfileName String?
-  sessionName String?
-  environmentLabel String?
+  sessionName       String?
+  environmentLabel  String?
 
-  maxAttempts Int @default(1)
-  lockTimeoutSeconds Int @default(900)
+  maxAttempts         Int @default(1)
+  lockTimeoutSeconds  Int @default(900)
   pollIntervalSeconds Int @default(30)
-  claimBatchSize Int @default(1)
+  claimBatchSize      Int @default(1)
 
-  settingsJson Json?
+  settingsJson    Json?
   lastHeartbeatAt DateTime?
 
   createdAt DateTime @default(now())
@@ -1486,29 +1487,29 @@ model CashClosure {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   cashierId String
-  cashier AdminUser @relation("CashClosureCashier", fields: [cashierId], references: [id], onDelete: Restrict)
+  cashier   AdminUser @relation("CashClosureCashier", fields: [cashierId], references: [id], onDelete: Restrict)
 
   submittedById String?
-  submittedBy AdminUser? @relation("CashClosureSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  submittedBy   AdminUser? @relation("CashClosureSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
 
   reviewedById String?
-  reviewedBy AdminUser? @relation("CashClosureReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedBy   AdminUser? @relation("CashClosureReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
 
   dateKey String
-  status CashClosureStatus @default(DRAFT)
+  status  CashClosureStatus @default(DRAFT)
 
   totalExpectedFcfa Int @default(0)
   totalDeclaredFcfa Int @default(0)
-  discrepancyFcfa Int @default(0)
-  transactionCount Int @default(0)
+  discrepancyFcfa   Int @default(0)
+  transactionCount  Int @default(0)
 
-  note String? @db.Text
-  reviewNote String? @db.Text
+  note        String?   @db.Text
+  reviewNote  String?   @db.Text
   submittedAt DateTime?
-  reviewedAt DateTime?
+  reviewedAt  DateTime?
 
   lines CashClosureLine[]
 
@@ -1525,15 +1526,15 @@ model CashClosureLine {
   id String @id @default(cuid())
 
   closureId String
-  closure CashClosure @relation(fields: [closureId], references: [id], onDelete: Cascade)
+  closure   CashClosure @relation(fields: [closureId], references: [id], onDelete: Cascade)
 
-  paymentMode String
-  label String
-  expectedFcfa Int @default(0)
-  declaredFcfa Int @default(0)
-  discrepancyFcfa Int @default(0)
-  transactionCount Int @default(0)
-  note String? @db.Text
+  paymentMode      String
+  label            String
+  expectedFcfa     Int     @default(0)
+  declaredFcfa     Int     @default(0)
+  discrepancyFcfa  Int     @default(0)
+  transactionCount Int     @default(0)
+  note             String? @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1580,8 +1581,8 @@ model PreorderItem {
   updatedAt DateTime @updatedAt
 
   preparationChecklistItems PreparationChecklistItem[]
-  preparationAnomalies PreparationAnomaly[]
-  backorderCredits PreorderBackorderCredit[]
+  preparationAnomalies      PreparationAnomaly[]
+  backorderCredits          PreorderBackorderCredit[]
 
   @@unique([preorderId, productId])
   @@index([productId])
@@ -1592,15 +1593,15 @@ model PreparationChecklistItem {
   id String @id @default(cuid())
 
   preorderId String
-  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
   preorderItemId String
-  preorderItem PreorderItem @relation(fields: [preorderItemId], references: [id], onDelete: Cascade)
+  preorderItem   PreorderItem @relation(fields: [preorderItemId], references: [id], onDelete: Cascade)
 
-  checked Boolean @default(false)
-  checkedAt DateTime?
+  checked     Boolean    @default(false)
+  checkedAt   DateTime?
   checkedById String?
-  checkedBy AdminUser? @relation(fields: [checkedById], references: [id], onDelete: SetNull)
+  checkedBy   AdminUser? @relation(fields: [checkedById], references: [id], onDelete: SetNull)
 
   note String? @db.Text
 
@@ -1616,22 +1617,22 @@ model PreparationAnomaly {
   id String @id @default(cuid())
 
   preorderId String
-  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
   preorderItemId String?
-  preorderItem PreorderItem? @relation(fields: [preorderItemId], references: [id], onDelete: SetNull)
+  preorderItem   PreorderItem? @relation(fields: [preorderItemId], references: [id], onDelete: SetNull)
 
-  kind String
-  note String @db.Text
+  kind     String
+  note     String  @db.Text
   blocking Boolean @default(true)
 
-  resolvedAt DateTime?
-  resolvedById String?
-  resolvedBy AdminUser? @relation("PreparationAnomalyResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
-  resolutionNote String? @db.Text
+  resolvedAt     DateTime?
+  resolvedById   String?
+  resolvedBy     AdminUser? @relation("PreparationAnomalyResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolutionNote String?    @db.Text
 
   createdById String?
-  createdBy AdminUser? @relation("PreparationAnomalyCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   AdminUser? @relation("PreparationAnomalyCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1661,42 +1662,42 @@ model PreorderBackorderCredit {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   preorderId String
-  preorder Preorder @relation(fields: [preorderId], references: [id], onDelete: Restrict)
+  preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Restrict)
 
   preorderItemId String
-  preorderItem PreorderItem @relation(fields: [preorderItemId], references: [id], onDelete: Restrict)
+  preorderItem   PreorderItem @relation(fields: [preorderItemId], references: [id], onDelete: Restrict)
 
   productId String
-  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
   productNameSnapshot String
-  qty Int
-  priceFcfaSnapshot Int
+  qty                 Int
+  priceFcfaSnapshot   Int
 
-  reason String @db.Text
+  reason       String     @db.Text
   reportedById String?
-  reportedBy AdminUser? @relation("BackorderCreditReportedBy", fields: [reportedById], references: [id], onDelete: SetNull)
+  reportedBy   AdminUser? @relation("BackorderCreditReportedBy", fields: [reportedById], references: [id], onDelete: SetNull)
 
   status BackorderCreditStatus @default(ISSUED)
 
-  parcelNumber String? @unique
+  parcelNumber     String?    @unique
   pickupSecretCode String?
-  preparedAt DateTime?
-  preparedById String?
-  preparedBy AdminUser? @relation("BackorderCreditPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
+  preparedAt       DateTime?
+  preparedById     String?
+  preparedBy       AdminUser? @relation("BackorderCreditPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
 
-  fulfilledAt DateTime?
-  fulfilledById String?
-  fulfilledBy AdminUser? @relation("BackorderCreditFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
+  fulfilledAt         DateTime?
+  fulfilledById       String?
+  fulfilledBy         AdminUser? @relation("BackorderCreditFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
   pickupRecipientName String?
 
-  cancelledAt DateTime?
+  cancelledAt   DateTime?
   cancelledById String?
-  cancelledBy AdminUser? @relation("BackorderCreditCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
-  cancelReason String? @db.Text
+  cancelledBy   AdminUser? @relation("BackorderCreditCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  cancelReason  String?    @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1766,16 +1767,16 @@ model PaymentLinkResendRequest {
   preorderId String
   preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
-  preorderNumber String?
-  fboNumero String
-  originalPhone String
+  preorderNumber         String?
+  fboNumero              String
+  originalPhone          String
   requestedWhatsappPhone String?
-  note String? @db.Text
-  status String @default("PENDING")
+  note                   String? @db.Text
+  status                 String  @default("PENDING")
 
   reviewedByAdminId String?
-  reviewedAt DateTime?
-  reviewNote String? @db.Text
+  reviewedAt        DateTime?
+  reviewNote        String?   @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1787,61 +1788,61 @@ model PaymentLinkResendRequest {
 
 model ExternalPaymentLink {
   shippingOrder Preorder? @relation("ShippingPayment")
-  id String @id @default(cuid())
+  id            String    @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
-  token String @unique
-  reference String
+  token             String  @unique
+  reference         String
   externalReference String?
-  invoiceReference String?
-  source String @default("ADMIN")
+  invoiceReference  String?
+  source            String  @default("ADMIN")
 
-  customerName String
-  customerPhone String?
-  customerEmail String?
+  customerName      String
+  customerPhone     String?
+  customerEmail     String?
   customerFboNumber String?
 
-  baseAmountFcfa Int?
-  serviceFeeFcfa Int @default(0)
-  amountFcfa Int
-  currencyCode String @default("XOF") @db.VarChar(3)
-  paymentMethod PreorderPaymentMode?
-  status ExternalPaymentLinkStatus @default(ACTIVE)
-  provider PaymentProvider @default(WAVE)
-  providerStatus PaymentStatus @default(INITIATED)
-  providerSessionId String?
+  baseAmountFcfa        Int?
+  serviceFeeFcfa        Int                       @default(0)
+  amountFcfa            Int
+  currencyCode          String                    @default("XOF") @db.VarChar(3)
+  paymentMethod         PreorderPaymentMode?
+  status                ExternalPaymentLinkStatus @default(ACTIVE)
+  provider              PaymentProvider           @default(WAVE)
+  providerStatus        PaymentStatus             @default(INITIATED)
+  providerSessionId     String?
   providerTransactionId String?
-  providerCheckoutUrl String? @db.Text
-  providerLaunchUrl String? @db.Text
-  providerPayerPhone String?
-  providerStatusLabel String?
-  providerPayloadJson Json?
+  providerCheckoutUrl   String?                   @db.Text
+  providerLaunchUrl     String?                   @db.Text
+  providerPayerPhone    String?
+  providerStatusLabel   String?
+  providerPayloadJson   Json?
 
-  title String?
-  description String? @db.Text
+  title        String?
+  description  String? @db.Text
   instructions String? @db.Text
 
-  paidAt DateTime?
+  paidAt      DateTime?
   cancelledAt DateTime?
-  expiresAt DateTime?
-  clickedAt DateTime?
-  clickCount Int @default(0)
+  expiresAt   DateTime?
+  clickedAt   DateTime?
+  clickCount  Int       @default(0)
 
-  smsTo String?
-  smsStatus String?
-  smsProvider String?
-  smsProviderMessageId String? @db.Text
-  smsLastError String? @db.Text
-  smsLastSentAt DateTime?
-  smsSendCount Int @default(0)
+  smsTo                String?
+  smsStatus            String?
+  smsProvider          String?
+  smsProviderMessageId String?   @db.Text
+  smsLastError         String?   @db.Text
+  smsLastSentAt        DateTime?
+  smsSendCount         Int       @default(0)
 
   createdById String?
-  createdBy AdminUser? @relation("ExternalPaymentLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   AdminUser? @relation("ExternalPaymentLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   updatedById String?
-  updatedBy AdminUser? @relation("ExternalPaymentLinkUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   AdminUser? @relation("ExternalPaymentLinkUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1866,8 +1867,19 @@ model ExternalPaymentLink {
 model CashRegisterStatus {
   id String @id @default(cuid())
 
-  countryId String @unique
+  countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  // null = caisse globale du comptoir (responsables, CAISSIERE/INVOICER du
+  // modèle classique séparé, et repli pour une commande pas encore attribuée
+  // à un facturier caissier). Non-null = caisse personnelle d'un facturier
+  // caissier (rôle combiné) : fermer la sienne n'affecte aucune autre caisse.
+  // Pas de contrainte unique ici (volontaire) : Postgres autorise plusieurs
+  // NULL sur un couple UNIQUE, donc une unicité DB protégerait mal la ligne
+  // globale — le find-puis-create de getCashRegisterStatus garantit déjà
+  // l'unicité applicative, même logique que l'existant getOrCreateStatus.
+  userId String?
+  user   AdminUser? @relation("CashRegisterStatusUser", fields: [userId], references: [id], onDelete: Cascade)
 
   isOpen        Boolean @default(true)
   closedMessage String? @db.Text
@@ -1882,6 +1894,8 @@ model CashRegisterStatus {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([countryId, userId])
 }
 
 model PickupCodeResendRequest {
@@ -1893,16 +1907,16 @@ model PickupCodeResendRequest {
   preorderId String
   preorder   Preorder @relation(fields: [preorderId], references: [id], onDelete: Cascade)
 
-  preorderNumber String?
-  fboNumero String
-  originalPhone String
+  preorderNumber         String?
+  fboNumero              String
+  originalPhone          String
   requestedWhatsappPhone String?
-  note String? @db.Text
-  status String @default("PENDING")
+  note                   String? @db.Text
+  status                 String  @default("PENDING")
 
   reviewedByAdminId String?
-  reviewedAt DateTime?
-  reviewNote String? @db.Text
+  reviewedAt        DateTime?
+  reviewNote        String?   @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1957,7 +1971,7 @@ model Payment {
   attempts           PaymentAttempt[]
   refunds            PaymentRefund[]
   transactionLogs    PaymentTransactionLog[]
-  activeForPreorders Preorder[]       @relation("ActivePayment")
+  activeForPreorders Preorder[]              @relation("ActivePayment")
 
   @@unique([provider, providerTxnId])
   @@unique([provider, clientReference])
@@ -2094,18 +2108,18 @@ model PaymentTransactionLog {
   eventType PaymentTransactionEventType
   source    PaymentTransactionSource
 
-  status       PaymentStatus?
-  attemptStatus PaymentAttemptStatus?
+  status         PaymentStatus?
+  attemptStatus  PaymentAttemptStatus?
   providerStatus String?
 
   providerSessionId     String?
   providerTransactionId String?
   providerPayerPhone    String?
 
-  amountFcfa    Int?
-  currencyCode  String? @db.VarChar(3)
+  amountFcfa   Int?
+  currencyCode String? @db.VarChar(3)
 
-  note       String? @db.Text
+  note        String? @db.Text
   payloadJson Json?
 
   actorAdminId String?
@@ -2147,21 +2161,21 @@ model TicketEvent {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
-  slug String
-  title String
-  subtitle String?
-  description String? @db.Text
-  venueName String?
-  venueAddress String? @db.Text
-  startsAt DateTime
-  endsAt DateTime?
-  posterUrl String?
-  videoUrl String?
-  status TicketEventStatus @default(DRAFT)
-  capacity Int?
-  salesOpenAt DateTime?
+  slug         String
+  title        String
+  subtitle     String?
+  description  String?           @db.Text
+  venueName    String?
+  venueAddress String?           @db.Text
+  startsAt     DateTime
+  endsAt       DateTime?
+  posterUrl    String?
+  videoUrl     String?
+  status       TicketEventStatus @default(DRAFT)
+  capacity     Int?
+  salesOpenAt  DateTime?
   salesCloseAt DateTime?
 
   // Nombre minimum de billets achetés dans une même commande pour que ses
@@ -2169,18 +2183,18 @@ model TicketEvent {
   creditEligibilityMinQuantity Int @default(5)
 
   createdById String?
-  createdBy AdminUser? @relation("TicketEventCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   AdminUser? @relation("TicketEventCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   updatedById String?
-  updatedBy AdminUser? @relation("TicketEventUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   AdminUser? @relation("TicketEventUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
-  ticketTypes TicketType[]
-  ticketOrders TicketOrder[]
-  tickets Ticket[]
-  checkInSessions TicketCheckInSession[]
-  checkInLogs TicketCheckInLog[]
-  ticketCreditsOrigin TicketCredit[] @relation("TicketCreditOriginEvent")
-  ticketCreditsRedeemed TicketCredit[] @relation("TicketCreditRedeemedEvent")
+  ticketTypes           TicketType[]
+  ticketOrders          TicketOrder[]
+  tickets               Ticket[]
+  checkInSessions       TicketCheckInSession[]
+  checkInLogs           TicketCheckInLog[]
+  ticketCreditsOrigin   TicketCredit[]         @relation("TicketCreditOriginEvent")
+  ticketCreditsRedeemed TicketCredit[]         @relation("TicketCreditRedeemedEvent")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2194,23 +2208,23 @@ model TicketType {
   id String @id @default(cuid())
 
   eventId String
-  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event   TicketEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
-  label String
+  label       String
   description String? @db.Text
-  priceFcfa Int
-  capacity Int?
-  maxPerOrder Int @default(10)
-  active Boolean @default(true)
-  sortOrder Int @default(0)
+  priceFcfa   Int
+  capacity    Int?
+  maxPerOrder Int     @default(10)
+  active      Boolean @default(true)
+  sortOrder   Int     @default(0)
 
   // Places retirées de `capacity` pour la vente publique, mises de côté pour
   // l'échange des crédits de billets non scannés (saisie manuelle par
   // l'admin, informée par le nombre de crédits actifs sur cette catégorie).
   creditReservedCapacity Int @default(0)
 
-  tickets Ticket[]
-  checkInLogs TicketCheckInLog[]
+  tickets      Ticket[]
+  checkInLogs  TicketCheckInLog[]
   ticketOrders TicketOrder[]
 
   createdAt DateTime @default(now())
@@ -2223,66 +2237,66 @@ model TicketOrder {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   eventId String
-  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  event   TicketEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
 
   ticketTypeId String?
-  ticketType TicketType? @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  ticketType   TicketType? @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
 
-  orderNumber String @unique
-  status TicketOrderStatus @default(DRAFT)
+  orderNumber String            @unique
+  status      TicketOrderStatus @default(DRAFT)
 
-  buyerFullName String
-  buyerPhone String
-  buyerEmail String?
-  buyerPhoneVerified String?
+  buyerFullName        String
+  buyerPhone           String
+  buyerEmail           String?
+  buyerPhoneVerified   String?
   buyerPhoneVerifiedAt DateTime?
-  buyerFboNumber String?
-  buyerFboName String?
-  quantity Int @default(1)
-  holderFullName String?
-  holderPhone String?
-  holderEmail String?
+  buyerFboNumber       String?
+  buyerFboName         String?
+  quantity             Int       @default(1)
+  holderFullName       String?
+  holderPhone          String?
+  holderEmail          String?
 
-  totalFcfa Int @default(0)
+  totalFcfa             Int     @default(0)
   paymentServiceFeeFcfa Int?
-  amountToPayFcfa Int?
-  clientRequestId String?
-  ticketIssueCode String?
+  amountToPayFcfa       Int?
+  clientRequestId       String?
+  ticketIssueCode       String?
 
-  paymentMethod String?
-  paymentProvider String?
-  paymentReference String?
-  paymentStatus PaymentStatus @default(INITIATED)
-  providerSessionId String?
+  paymentMethod         String?
+  paymentProvider       String?
+  paymentReference      String?
+  paymentStatus         PaymentStatus @default(INITIATED)
+  providerSessionId     String?
   providerTransactionId String?
-  providerCheckoutUrl String?
-  providerLaunchUrl String?
-  providerPayerPhone String?
-  providerStatusLabel String?
-  providerPayloadJson Json?
-  paidAt DateTime?
-  expiresAt DateTime?
-  note String? @db.Text
+  providerCheckoutUrl   String?
+  providerLaunchUrl     String?
+  providerPayerPhone    String?
+  providerStatusLabel   String?
+  providerPayloadJson   Json?
+  paidAt                DateTime?
+  expiresAt             DateTime?
+  note                  String?       @db.Text
 
   // Commande créée uniquement pour tester le flux (vente guichet, QR, scan
   // check-in) : exclue des agrégats du bilan événement mais fonctionnellement
   // identique à une vraie commande (billet scannable, compte dans la capacité).
   isTest Boolean @default(false)
 
-  tickets Ticket[]
-  checkInLogs TicketCheckInLog[]
-  ticketCreditsOrigin TicketCredit[] @relation("TicketCreditOriginOrder")
-  ticketCreditsRedeemed TicketCredit[] @relation("TicketCreditRedeemedOrder")
+  tickets               Ticket[]
+  checkInLogs           TicketCheckInLog[]
+  ticketCreditsOrigin   TicketCredit[]     @relation("TicketCreditOriginOrder")
+  ticketCreditsRedeemed TicketCredit[]     @relation("TicketCreditRedeemedOrder")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([countryId, clientRequestId])
   @@index([countryId, status, createdAt])
   @@index([eventId, status, createdAt])
-  @@unique([countryId, clientRequestId])
   @@index([ticketTypeId])
   @@index([paymentProvider, providerSessionId])
   @@index([buyerPhone])
@@ -2296,32 +2310,32 @@ model Ticket {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   eventId String
-  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  event   TicketEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
 
   ticketTypeId String
-  ticketType TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  ticketType   TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
 
   orderId String
-  order TicketOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order   TicketOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
-  ticketCode String @unique
-  qrToken String @unique
-  holderFullName String
-  holderPhone String?
-  holderEmail String?
-  status TicketStatus @default(RESERVED)
-  assignedGuestName String?
-  guestAssignedAt DateTime?
-  shareEvents TicketShareEvent[]
-  checkedInAt DateTime?
-  checkedInById String?
-  checkedInBy AdminUser? @relation("TicketCheckedInBy", fields: [checkedInById], references: [id], onDelete: SetNull)
-  checkInLogs TicketCheckInLog[]
-  ticketCreditOrigin TicketCredit? @relation("TicketCreditOriginTicket")
-  ticketCreditRedeemed TicketCredit? @relation("TicketCreditRedeemedTicket")
+  ticketCode           String             @unique
+  qrToken              String             @unique
+  holderFullName       String
+  holderPhone          String?
+  holderEmail          String?
+  status               TicketStatus       @default(RESERVED)
+  assignedGuestName    String?
+  guestAssignedAt      DateTime?
+  shareEvents          TicketShareEvent[]
+  checkedInAt          DateTime?
+  checkedInById        String?
+  checkedInBy          AdminUser?         @relation("TicketCheckedInBy", fields: [checkedInById], references: [id], onDelete: SetNull)
+  checkInLogs          TicketCheckInLog[]
+  ticketCreditOrigin   TicketCredit?      @relation("TicketCreditOriginTicket")
+  ticketCreditRedeemed TicketCredit?      @relation("TicketCreditRedeemedTicket")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2333,11 +2347,11 @@ model Ticket {
 }
 
 model TicketShareEvent {
-  id String @id @default(cuid())
-  ticketId String
-  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   requestId String
-  channel String
+  channel   String
   guestName String?
   createdAt DateTime @default(now())
 
@@ -2346,19 +2360,19 @@ model TicketShareEvent {
 }
 
 model TicketPortalOtpChallenge {
-  id String @id
-  countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
-  email String?
-  channel String @default("EMAIL")
-  phone String?
-  purpose String @default("LOGIN")
-  orderId String?
-  codeHash String
-  attempts Int @default(0)
-  expiresAt DateTime
+  id         String    @id
+  countryId  String
+  country    Country   @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  email      String?
+  channel    String    @default("EMAIL")
+  phone      String?
+  purpose    String    @default("LOGIN")
+  orderId    String?
+  codeHash   String
+  attempts   Int       @default(0)
+  expiresAt  DateTime
   consumedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
   @@index([countryId, email, createdAt])
   @@index([countryId, phone, purpose, createdAt])
@@ -2369,18 +2383,18 @@ model TicketCheckInSession {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   eventId String
-  event TicketEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event   TicketEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   agentId String?
-  agent AdminUser? @relation("TicketCheckInSessionAgent", fields: [agentId], references: [id], onDelete: SetNull)
+  agent   AdminUser? @relation("TicketCheckInSessionAgent", fields: [agentId], references: [id], onDelete: SetNull)
 
   entryPoint String
   deviceName String?
-  openedAt DateTime @default(now())
-  closedAt DateTime?
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
 
   logs TicketCheckInLog[]
 
@@ -2396,35 +2410,35 @@ model TicketCheckInLog {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   eventId String?
-  event TicketEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  event   TicketEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
 
   ticketTypeId String?
-  ticketType TicketType? @relation(fields: [ticketTypeId], references: [id], onDelete: SetNull)
+  ticketType   TicketType? @relation(fields: [ticketTypeId], references: [id], onDelete: SetNull)
 
   ticketId String?
-  ticket Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
 
   orderId String?
-  order TicketOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  order   TicketOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
   sessionId String?
-  session TicketCheckInSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  session   TicketCheckInSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   checkedById String?
-  checkedBy AdminUser? @relation("TicketCheckInLogAgent", fields: [checkedById], references: [id], onDelete: SetNull)
+  checkedBy   AdminUser? @relation("TicketCheckInLogAgent", fields: [checkedById], references: [id], onDelete: SetNull)
 
-  entryPoint String?
-  scannedValue String?
-  ticketCode String?
-  result TicketCheckInResult
-  reason String?
+  entryPoint         String?
+  scannedValue       String?
+  ticketCode         String?
+  result             TicketCheckInResult
+  reason             String?
   ticketStatusBefore TicketStatus?
-  ticketStatusAfter TicketStatus?
-  scannedAt DateTime @default(now())
-  metadata Json?
+  ticketStatusAfter  TicketStatus?
+  scannedAt          DateTime            @default(now())
+  metadata           Json?
 
   // Identifiant généré côté client (app de contrôle des tickets) pour chaque
   // tentative de scan. Permet de rejouer une requête dont la réponse a été
@@ -2450,44 +2464,44 @@ model TicketCredit {
   id String @id @default(cuid())
 
   countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Restrict)
 
   originEventId String
-  originEvent TicketEvent @relation("TicketCreditOriginEvent", fields: [originEventId], references: [id], onDelete: Restrict)
+  originEvent   TicketEvent @relation("TicketCreditOriginEvent", fields: [originEventId], references: [id], onDelete: Restrict)
 
   originOrderId String
-  originOrder TicketOrder @relation("TicketCreditOriginOrder", fields: [originOrderId], references: [id], onDelete: Restrict)
+  originOrder   TicketOrder @relation("TicketCreditOriginOrder", fields: [originOrderId], references: [id], onDelete: Restrict)
 
   originTicketId String @unique
-  originTicket Ticket @relation("TicketCreditOriginTicket", fields: [originTicketId], references: [id], onDelete: Restrict)
+  originTicket   Ticket @relation("TicketCreditOriginTicket", fields: [originTicketId], references: [id], onDelete: Restrict)
 
   originTicketTypeId String?
   // Libellé de la catégorie au moment de l'émission, utilisé pour retrouver
   // la catégorie équivalente sur l'événement suivant (les TicketType sont
   // propres à chaque événement, il n'y a pas de FK stable entre éditions).
-  ticketTypeLabel String
-  priceFcfaSnapshot Int
+  ticketTypeLabel    String
+  priceFcfaSnapshot  Int
 
   holderFullName String
-  holderPhone String?
-  holderEmail String?
+  holderPhone    String?
+  holderEmail    String?
 
-  status TicketCreditStatus @default(ISSUED)
-  issuedAt DateTime @default(now())
+  status    TicketCreditStatus @default(ISSUED)
+  issuedAt  DateTime           @default(now())
   expiresAt DateTime
 
-  redeemedAt DateTime?
-  redeemedEventId String?
-  redeemedEvent TicketEvent? @relation("TicketCreditRedeemedEvent", fields: [redeemedEventId], references: [id], onDelete: SetNull)
-  redeemedOrderId String?
-  redeemedOrder TicketOrder? @relation("TicketCreditRedeemedOrder", fields: [redeemedOrderId], references: [id], onDelete: SetNull)
-  redeemedTicketId String? @unique
-  redeemedTicket Ticket? @relation("TicketCreditRedeemedTicket", fields: [redeemedTicketId], references: [id], onDelete: SetNull)
+  redeemedAt       DateTime?
+  redeemedEventId  String?
+  redeemedEvent    TicketEvent? @relation("TicketCreditRedeemedEvent", fields: [redeemedEventId], references: [id], onDelete: SetNull)
+  redeemedOrderId  String?
+  redeemedOrder    TicketOrder? @relation("TicketCreditRedeemedOrder", fields: [redeemedOrderId], references: [id], onDelete: SetNull)
+  redeemedTicketId String?      @unique
+  redeemedTicket   Ticket?      @relation("TicketCreditRedeemedTicket", fields: [redeemedTicketId], references: [id], onDelete: SetNull)
 
-  revokedAt DateTime?
-  revokedById String?
-  revokedBy AdminUser? @relation("TicketCreditRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
-  revokeReason String? @db.Text
+  revokedAt    DateTime?
+  revokedById  String?
+  revokedBy    AdminUser? @relation("TicketCreditRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+  revokeReason String?    @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2500,29 +2514,30 @@ model TicketCredit {
 }
 
 model CountrySettingsChange {
-  id String @id @default(cuid())
-  countryId String
-  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
-  actorId String?
+  id         String   @id @default(cuid())
+  countryId  String
+  country    Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  actorId    String?
   actorLabel String
-  changes Json
-  createdAt DateTime @default(now())
+  changes    Json
+  createdAt  DateTime @default(now())
+
   @@index([countryId, createdAt])
 }
 
 model ProductAuditLog {
-  id String @id @default(cuid())
+  id        String   @id @default(cuid())
   productId String
   countryId String
-  actorId String?
+  actorId   String?
   actorName String?
-  action String
-  changes Json
+  action    String
+  changes   Json
   createdAt DateTime @default(now())
+
   @@index([productId, countryId, createdAt])
   @@index([countryId, createdAt])
 }
-
 
 // -----------------------------------------------------------------------------
 // PARRAINAGE : un FBO (Animateur adjoint et plus) inscrit un filleul majeur.
@@ -2569,7 +2584,7 @@ model Sponsorship {
 
   // Parrain (instantané au moment du parrainage)
   sponsorFboId    String
-  sponsorFbo      Fbo    @relation("SponsorshipSponsor", fields: [sponsorFboId], references: [id], onDelete: Restrict)
+  sponsorFbo      Fbo     @relation("SponsorshipSponsor", fields: [sponsorFboId], references: [id], onDelete: Restrict)
   sponsorNumero   String
   sponsorNom      String
   sponsorGrade    Grade
@@ -2584,23 +2599,23 @@ model Sponsorship {
   sponsorVerified Boolean @default(true)
 
   // Filleul
-  lastName          String
-  firstNames        String
-  birthDate         DateTime @db.Date
-  birthPlace        String
-  idDocumentType    SponsorshipIdDocumentType @default(CNI)
-  idDocumentNumber  String
-  passportNumber    String?
-  mobile            String
-  email             String?
-  addressArea       String?
-  city              String
-  postalBox         String?
-  zoneCode          String?
-  homeCountry       String  @default("CI")
-  maritalStatus     String?
-  childrenCount     Int?
-  bankRib           String?
+  lastName         String
+  firstNames       String
+  birthDate        DateTime                  @db.Date
+  birthPlace       String
+  idDocumentType   SponsorshipIdDocumentType @default(CNI)
+  idDocumentNumber String
+  passportNumber   String?
+  mobile           String
+  email            String?
+  addressArea      String?
+  city             String
+  postalBox        String?
+  zoneCode         String?
+  homeCountry      String                    @default("CI")
+  maritalStatus    String?
+  childrenCount    Int?
+  bankRib          String?
 
   // Conjoint (optionnel)
   spouseLastName   String?
@@ -2618,23 +2633,23 @@ model Sponsorship {
   asdiSubject         Boolean?
 
   // Consentement : le parrain atteste disposer de l'accord et de la procuration du filleul.
-  consentText      String?   @db.Text
-  consentVersion   String?
+  consentText       String?   @db.Text
+  consentVersion    String?
   consentAcceptedAt DateTime?
 
   // Vérification Forever
-  submittedAt         DateTime?
-  reviewedAt          DateTime?
-  reviewedById        String?
-  reviewNote          String?   @db.Text
-  rejectionReason     String?   @db.Text
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  reviewedById    String?
+  reviewNote      String?   @db.Text
+  rejectionReason String?   @db.Text
 
   // Approbation : n° FBO saisi depuis AS400, filleul créé en Client privilégié
-  recruitFboNumero    String?
-  recruitFboId        String?
-  recruitFbo          Fbo?      @relation("SponsorshipRecruit", fields: [recruitFboId], references: [id], onDelete: SetNull)
-  approvedAt          DateTime?
-  approvedById        String?
+  recruitFboNumero String?
+  recruitFboId     String?
+  recruitFbo       Fbo?      @relation("SponsorshipRecruit", fields: [recruitFboId], references: [id], onDelete: SetNull)
+  approvedAt       DateTime?
+  approvedById     String?
 
   // Achat de validation (règles figées à l'approbation)
   minPurchaseFcfa      Int?
@@ -2644,15 +2659,15 @@ model Sponsorship {
   // Panier de l'achat de parrainage (obligatoire), saisi par le parrain : [{ productId, qty }],
   // avec le paiement et la livraison choisis. À l'approbation, il devient la commande
   // préfacturée du filleul.
-  purchasePaymentMode        String?
-  purchaseDeliveryMode       String?
-  cancelledAt                DateTime?
-  cancellationReason         String?
-  purchaseItems              Json?
+  purchasePaymentMode         String?
+  purchaseDeliveryMode        String?
+  cancelledAt                 DateTime?
+  cancellationReason          String?
+  purchaseItems               Json?
   purchaseIndicativeTotalFcfa Int?
-  purchasePreorderId         String?
-  validatedAt          DateTime?
-  expiredAt            DateTime?
+  purchasePreorderId          String?
+  validatedAt                 DateTime?
+  expiredAt                   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2672,7 +2687,7 @@ model SponsorshipDocument {
   sponsorshipId String
   sponsorship   Sponsorship @relation(fields: [sponsorshipId], references: [id], onDelete: Cascade)
 
-  type SponsorshipDocumentType
+  type                SponsorshipDocumentType
   // Stockage PRIVÉ (jamais d'URL publique) : identifiant Cloudinary + type de ressource.
   storagePublicId     String
   storageResourceType String

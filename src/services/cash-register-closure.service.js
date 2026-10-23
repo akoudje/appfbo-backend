@@ -4,7 +4,9 @@ const prisma = require("../prisma");
 // à la fermeture de caisse — voir cashRegisterStatus.controller.js. Ce sont
 // des commandes qu'un client peut encore payer à distance via
 // POST /api/payments/wave/public/initiate à toute heure, même une fois le
-// comptoir physique fermé.
+// comptoir physique fermé. Ne concerne que les précommandes : les liens de
+// paiement hors app (QR) et les billets d'événement ne sont pas affectés par
+// cet interrupteur.
 //
 // La transaction ci-dessous est un mirroir volontairement minimal de celle
 // de cancelOrder (admin/orders.controller.js) : même mise à jour de statut,
@@ -18,19 +20,60 @@ const CANCELLABLE_STATUSES = ["INVOICED", "PAYMENT_PENDING"];
 const DEFAULT_CLOSED_MESSAGE =
   "Le comptoir est actuellement fermé. Merci de réessayer pendant nos heures d'ouverture.";
 
-async function getCashRegisterStatus(countryId) {
-  const status = await prisma.cashRegisterStatus.findUnique({ where: { countryId } });
+// Un facturier caissier (rôle combiné : facture, encaisse et prépare la même
+// commande de bout en bout) a sa propre caisse personnelle — la fermer
+// n'affecte ni la vue ni le comportement de la caisse d'un collègue. Les
+// autres rôles (responsables, CAISSIERE/INVOICER du modèle classique séparé)
+// partagent la caisse globale du comptoir (userId null), comme avant —
+// même périmètre que la restriction facturation/préparation posée
+// précédemment (voir cashier.controller.js#isOwnershipScopedCashier).
+function resolveRegisterUserId({ role, userId }) {
+  return String(role || "").trim().toUpperCase() === "FACTURIER_CAISSIER" ? userId || null : null;
+}
+
+// Find-puis-create plutôt qu'upsert : Postgres autorise plusieurs NULL sur un
+// couple UNIQUE, un upsert sur (countryId, userId: null) ne protégerait donc
+// pas correctement l'unicité de la ligne globale.
+async function getCashRegisterStatus(countryId, userId = null) {
+  const status = await prisma.cashRegisterStatus.findFirst({ where: { countryId, userId } });
   return status || { isOpen: true, closedMessage: null };
 }
 
+async function getOrCreateCashRegisterStatus(countryId, userId = null) {
+  const existing = await prisma.cashRegisterStatus.findFirst({
+    where: { countryId, userId },
+    include: {
+      closedBy: { select: { id: true, fullName: true, email: true, role: true } },
+      reopenedBy: { select: { id: true, fullName: true, email: true, role: true } },
+    },
+  });
+  if (existing) return existing;
+  return prisma.cashRegisterStatus.create({
+    data: { countryId, userId },
+    include: {
+      closedBy: { select: { id: true, fullName: true, email: true, role: true } },
+      reopenedBy: { select: { id: true, fullName: true, email: true, role: true } },
+    },
+  });
+}
+
+// `assignedInvoicerId` : fourni pour une fermeture personnelle (caisse d'un
+// facturier caissier), n'annule alors que SES précommandes assignées. Omis
+// (undefined/null) pour une fermeture globale du comptoir : comportement
+// inchangé, tout le pays.
 async function cancelPendingInvoicedPreordersForCountry({
   tx,
   countryId,
   reason,
   actorAdminId = null,
+  assignedInvoicerId = null,
 }) {
   const orders = await tx.preorder.findMany({
-    where: { countryId, status: { in: CANCELLABLE_STATUSES } },
+    where: {
+      countryId,
+      status: { in: CANCELLABLE_STATUSES },
+      ...(assignedInvoicerId ? { assignedInvoicerId } : {}),
+    },
     include: { items: true },
   });
 
@@ -102,6 +145,8 @@ async function cancelPendingInvoicedPreordersForCountry({
 module.exports = {
   CANCELLABLE_STATUSES,
   DEFAULT_CLOSED_MESSAGE,
+  resolveRegisterUserId,
   getCashRegisterStatus,
+  getOrCreateCashRegisterStatus,
   cancelPendingInvoicedPreordersForCountry,
 };

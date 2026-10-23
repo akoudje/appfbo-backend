@@ -1,10 +1,6 @@
 const prisma = require("../prisma");
 const crypto = require("crypto");
 const externalWavePaymentService = require("../services/external-wave-payment.service");
-const {
-  DEFAULT_CLOSED_MESSAGE,
-  getCashRegisterStatus,
-} = require("../services/cash-register-closure.service");
 
 function generateToken() {
   return crypto.randomBytes(24).toString("base64url");
@@ -74,16 +70,15 @@ function isExpired(link) {
   return link?.expiresAt && new Date(link.expiresAt).getTime() < Date.now();
 }
 
+// Les liens de paiement hors précommande (kiosque QR) ne sont plus concernés
+// par l'interrupteur "caisse" (voir cash-register-closure.service.js) :
+// toujours ouvert de ce point de vue.
 async function getQrStatus(req, res) {
   try {
     if (!hasQrAccess(req)) {
       return res.status(403).json({ message: "Accès non autorisé." });
     }
-    const status = await getCashRegisterStatus(req.countryId);
-    return res.json({
-      isOpen: status.isOpen,
-      closedMessage: status.isOpen ? null : status.closedMessage || DEFAULT_CLOSED_MESSAGE,
-    });
+    return res.json({ isOpen: true, closedMessage: null });
   } catch (error) {
     console.error("externalPaymentLinks.getQrStatus error:", error);
     return res.status(500).json({ message: "Erreur serveur (getQrStatus)" });
@@ -94,17 +89,6 @@ async function createQrLink(req, res) {
   try {
     if (!hasQrAccess(req)) {
       return res.status(403).json({ message: "Accès non autorisé." });
-    }
-
-    // Interrupteur temporaire "caisse fermée" : le comptoir physique a
-    // annulé les liens en attente et ne veut plus en accepter de nouveaux
-    // tant qu'il n'a pas rouvert (voir cashRegisterStatus.controller.js).
-    const registerStatus = await getCashRegisterStatus(req.countryId);
-    if (!registerStatus.isOpen) {
-      return res.status(503).json({
-        message: registerStatus.closedMessage || DEFAULT_CLOSED_MESSAGE,
-        code: "CASH_REGISTER_CLOSED",
-      });
     }
 
     const invoiceReference = normalizeOptionalText(req.body?.invoiceReference);
