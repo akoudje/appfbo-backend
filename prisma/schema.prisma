@@ -2576,6 +2576,12 @@ model Sponsorship {
   sponsorCity     String?
   sponsorPhone    String?
   sponsorEmail    String? // pour les notifications (jamais pour la connexion)
+  // false : numéro non reconnu par l'annuaire FBO au moment de la soumission
+  // (fiche publique auto-déclarée, ou saisie au comptoir sans fiche locale) ;
+  // nom et grade sont alors déclarés par le filleul/facturier, à vérifier
+  // avant approbation. Défaut true pour ne pas marquer rétroactivement les
+  // parrainages existants comme suspects.
+  sponsorVerified Boolean @default(true)
 
   // Filleul
   lastName          String

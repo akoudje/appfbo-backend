@@ -619,6 +619,7 @@ async function counterSubmitSponsorship(req, res) {
         sponsorNumero: sponsorFbo.numeroFbo,
         sponsorNom: sponsorFbo.nomComplet,
         sponsorGrade: sponsorFbo.grade,
+        sponsorVerified: Boolean(existingSponsorFbo),
         consentText: sponsorship.buildConsentText({ recruitName, countryName: settings.countryName }),
         consentVersion: sponsorship.CONSENT_VERSION,
         consentAcceptedAt: now,

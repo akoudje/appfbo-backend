@@ -95,10 +95,15 @@ async function submitPublicSponsorship(req, res) {
     const body = req.body || {};
     const settings = await sponsorship.getSponsorshipSettings(req.countryId);
     if (!settings.enabled) throw sponsorship.httpError(403, "Le parrainage n'est pas encore ouvert dans ce pays.", "SPONSORSHIP_DISABLED");
-    const profile = await verifyPublicSponsor({ numeroFbo: body.sponsorNumeroFbo, nomComplet: body.sponsorNomComplet });
+    const profile = await verifyPublicSponsor({
+      numeroFbo: body.sponsorNumeroFbo,
+      nomComplet: body.sponsorNomComplet,
+      sponsorGrade: body.sponsorGrade,
+    });
     const sponsorFbo = await upsertSponsorFbo(profile);
     const created = await createSubmittedSponsorship({
       sponsorFbo,
+      sponsorVerified: profile.verified !== false,
       settings,
       countryId: req.countryId,
       body,
