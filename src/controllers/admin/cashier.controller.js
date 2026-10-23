@@ -121,6 +121,17 @@ function buildOrderSummary(order) {
           role: order.preparationLaunchedBy.role,
         }
       : null,
+    // Qui a facturé cette commande : affiché dans "À encaisser / confirmer"
+    // et "À lancer en préparation" pour que l'équipe caisse sache qui la
+    // traite (exclusivement, pour un facturier caissier — voir launchPreparation).
+    assignedInvoicer: order.assignedInvoicer
+      ? {
+          id: order.assignedInvoicer.id,
+          fullName: order.assignedInvoicer.fullName,
+          email: order.assignedInvoicer.email,
+          role: order.assignedInvoicer.role,
+        }
+      : null,
     payerPhone: getPayerPhone(order),
     cashierTransaction: latestCashierTx
       ? {
@@ -412,6 +423,9 @@ async function getWorkspace(req, res) {
       preparationLaunchedBy: {
         select: { id: true, fullName: true, role: true },
       },
+      assignedInvoicer: {
+        select: { id: true, fullName: true, email: true, role: true },
+      },
     };
 
     const [
@@ -644,11 +658,30 @@ async function launchPreparation(req, res) {
           orderBy: { createdAt: "desc" },
           take: 5,
         },
+        assignedInvoicer: {
+          select: { id: true, fullName: true, email: true, role: true },
+        },
       },
     });
 
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    // Un facturier caissier (rôle combiné) facture, encaisse ET lance la
+    // préparation de la même commande de bout en bout : seul lui peut
+    // lancer sa préparation, sauf un responsable (canViewConsolidated) en
+    // cas d'absence. Ne s'applique pas aux commandes facturées par un
+    // INVOICER classique : la file caissière reste partagée pour ce
+    // modèle (voir isOwnershipScopedCashier ci-dessus).
+    if (
+      order.assignedInvoicer?.role === AdminRole.FACTURIER_CAISSIER &&
+      order.assignedInvoicerId !== (req.user?.id || null) &&
+      !canViewConsolidated(req.user?.role)
+    ) {
+      return res.status(403).json({
+        message: `Cette commande est réservée à ${order.assignedInvoicer.fullName || order.assignedInvoicer.email}, qui l'a facturée. Un responsable peut la débloquer en cas d'absence.`,
+      });
     }
 
     if (

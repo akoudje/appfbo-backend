@@ -1513,11 +1513,29 @@ async function correctAs400Invoice(req, res) {
             cancelledAt: true,
           },
         },
+        assignedInvoicer: {
+          select: { id: true, fullName: true, email: true, role: true },
+        },
       },
     });
 
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    // Un facturier caissier (rôle combiné) facture, encaisse et lance la
+    // préparation de la même commande de bout en bout : seul lui peut
+    // corriger sa propre facture, sauf un responsable (EXPORT_READ — même
+    // repère que la feuille de préparation imprimée) en cas d'absence. Ne
+    // s'applique pas aux commandes facturées par un INVOICER classique.
+    if (
+      order.assignedInvoicer?.role === AdminRole.FACTURIER_CAISSIER &&
+      order.assignedInvoicerId !== actorAdminId &&
+      !req.user?.permissions?.includes(Permission.EXPORT_READ)
+    ) {
+      return res.status(403).json({
+        message: `Cette facture est réservée à ${order.assignedInvoicer.fullName || order.assignedInvoicer.email}, qui l'a émise. Un responsable peut la corriger en cas d'absence.`,
+      });
     }
 
     if (!order.factureReference && !order.invoicedAt) {
