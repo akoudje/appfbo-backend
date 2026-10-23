@@ -530,7 +530,7 @@ model Country {
   externalPaymentLinks ExternalPaymentLink[]
   memorials Memorial[]
   memorialTributes MemorialTribute[]
-  cashRegisterStatus CashRegisterStatus?
+  cashRegisterStatuses CashRegisterStatus[]
 }
 
 model MobilePushToken {
@@ -703,6 +703,7 @@ model AdminUser {
   updatedExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkUpdatedBy")
   closedCashRegisterStatuses CashRegisterStatus[] @relation("CashRegisterStatusClosedBy")
   reopenedCashRegisterStatuses CashRegisterStatus[] @relation("CashRegisterStatusReopenedBy")
+  ownedCashRegisterStatuses CashRegisterStatus[] @relation("CashRegisterStatusUser")
   reviewedMemorialTributes MemorialTribute[] @relation("MemorialTributeReviewedBy")
   auditLogsAuthored AdminUserAuditLog[] @relation("AdminUserAuditActor")
   auditLogsTargeted AdminUserAuditLog[] @relation("AdminUserAuditTarget")
@@ -1866,8 +1867,19 @@ model ExternalPaymentLink {
 model CashRegisterStatus {
   id String @id @default(cuid())
 
-  countryId String @unique
+  countryId String
   country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  // null = caisse globale du comptoir (responsables, CAISSIERE/INVOICER du
+  // modele classique separe, et repli pour une commande pas encore attribuee
+  // a un facturier caissier). Non-null = caisse personnelle d'un facturier
+  // caissier (role combine) : fermer la sienne n'affecte aucune autre caisse.
+  // Pas de contrainte unique ici (volontaire) : Postgres autorise plusieurs
+  // NULL sur un couple UNIQUE, donc une unicite DB protegerait mal la ligne
+  // globale -- le find-puis-create de getCashRegisterStatus garantit deja
+  // l'unicite applicative, meme logique que l'existant getOrCreateStatus.
+  userId String?
+  user   AdminUser? @relation("CashRegisterStatusUser", fields: [userId], references: [id], onDelete: Cascade)
 
   isOpen        Boolean @default(true)
   closedMessage String? @db.Text
@@ -1882,6 +1894,8 @@ model CashRegisterStatus {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([countryId, userId])
 }
 
 model PickupCodeResendRequest {

@@ -23,6 +23,7 @@ const {
 } = require("../services/ticket-wave-payment.service");
 const {
   getCashRegisterStatus,
+  resolveRegisterUserId,
 } = require("../services/cash-register-closure.service");
 
 function isWaveSimulationEnabled() {
@@ -1546,6 +1547,9 @@ async function initiateWavePayment({
           code: true,
         },
       },
+      assignedInvoicer: {
+        select: { id: true, role: true },
+      },
     },
   });
 
@@ -1576,10 +1580,17 @@ async function initiateWavePayment({
   // Interrupteur temporaire "caisse fermée" : ne s'applique qu'à
   // l'initiation publique (client, sans session admin) — un membre du
   // personnel qui initie manuellement un paiement le fait sciemment, ce
-  // n'est pas le cas non supervisé que ce garde-fou vise à bloquer. Voir
+  // n'est pas le cas non supervisé que ce garde-fou vise à bloquer. La
+  // caisse consultée est celle du facturier caissier assigné à CETTE
+  // commande (caisse personnelle), ou la caisse globale du comptoir si elle
+  // n'a pas encore été assignée à un facturier caissier. Voir
   // cashRegisterStatus.controller.js.
   if (!req.user) {
-    const registerStatus = await getCashRegisterStatus(countryId);
+    const registerUserId = resolveRegisterUserId({
+      role: preorder.assignedInvoicer?.role,
+      userId: preorder.assignedInvoicerId,
+    });
+    const registerStatus = await getCashRegisterStatus(countryId, registerUserId);
     if (!registerStatus.isOpen) {
       const err = new Error(
         registerStatus.closedMessage ||
