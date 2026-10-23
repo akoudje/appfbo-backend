@@ -193,4 +193,13 @@ router.post(
   ordersController.cancelOrder,
 );
 
+router.post(
+  "/:id/reactivate",
+  // Restriction supplémentaire aux administrateurs globaux (SUPER_ADMIN /
+  // TECH_ADMIN) faite dans le contrôleur lui-même, PREORDER_UPDATE_STATUS
+  // étant aussi accordé à des rôles responsables plus larges.
+  requirePermission(Permission.PREORDER_UPDATE_STATUS),
+  ordersController.reactivateCancelledOrder,
+);
+
 module.exports = router;
