@@ -120,6 +120,12 @@ router.get(
 );
 
 router.get(
+  "/check-in/search",
+  requirePermission(Permission.TICKET_CHECKIN),
+  ticketEventsController.searchTickets,
+);
+
+router.get(
   "/:id/summary",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.getEventSummary,

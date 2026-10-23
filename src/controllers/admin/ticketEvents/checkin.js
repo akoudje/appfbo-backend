@@ -491,10 +491,66 @@ async function getCheckInSummary(req, res) {
   }
 }
 
+// Filet de sécurité à l'entrée : un visiteur sans QR ni code en main (email
+// jamais reçu, téléphone mort...) peut être retrouvé par nom ou téléphone
+// (acheteur ou titulaire du billet). Renvoie le ticketCode, que l'agent
+// valide ensuite via le flux de scan/saisie manuelle existant (checkInTicket)
+// — aucune logique de contrôle d'accès dupliquée ici.
+async function searchTickets(req, res) {
+  try {
+    const eventId = String(req.query?.eventId || "").trim();
+    const q = String(req.query?.q || "").trim();
+
+    if (!eventId) return res.status(400).json({ message: "Événement requis." });
+    if (q.length < 2) {
+      return res.status(400).json({ message: "Saisissez au moins 2 caractères." });
+    }
+
+    const tickets = await prisma.ticket.findMany({
+      where: {
+        countryId: req.countryId,
+        eventId,
+        OR: [
+          { holderFullName: { contains: q, mode: "insensitive" } },
+          { holderPhone: { contains: q } },
+          { ticketCode: { contains: q.toUpperCase() } },
+          { order: { buyerFullName: { contains: q, mode: "insensitive" } } },
+          { order: { buyerPhone: { contains: q } } },
+          { order: { orderNumber: { contains: q.toUpperCase() } } },
+        ],
+      },
+      select: {
+        id: true,
+        ticketCode: true,
+        holderFullName: true,
+        holderPhone: true,
+        status: true,
+        checkedInAt: true,
+        ticketType: { select: { label: true } },
+        order: {
+          select: {
+            orderNumber: true,
+            buyerFullName: true,
+            buyerPhone: true,
+          },
+        },
+      },
+      orderBy: { holderFullName: "asc" },
+      take: 20,
+    });
+
+    return res.json({ tickets });
+  } catch (error) {
+    console.error("ticketEvents.searchTickets error:", error);
+    return res.status(500).json({ message: "Erreur serveur (searchTickets)" });
+  }
+}
+
 module.exports = {
   checkInTicket,
   openCheckInSession,
   closeCheckInSession,
   listCheckInLogs,
   getCheckInSummary,
+  searchTickets,
 };
