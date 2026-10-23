@@ -48,19 +48,36 @@ async function lookupPublicSponsor({ numeroFbo }) {
   if (!sponsorship.isSponsorGradeAllowed(profile.grade)) {
     throw sponsorship.httpError(403, "Ce FBO ne peut pas parrainer : le parrainage est réservé aux grades Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
   }
-  return { numeroFbo: canonical, nomComplet: profile.fullName.toUpperCase(), grade: profile.grade };
+  return { numeroFbo: canonical, nomComplet: profile.fullName.toUpperCase(), grade: profile.grade, verified: true };
 }
 
 // Contrôle à l'envoi : profil de l'annuaire + nom transmis par le formulaire
-// (celui affiché après la recherche du numéro).
-async function verifyPublicSponsor({ numeroFbo, nomComplet }) {
+// (celui affiché après la recherche du numéro). Si le numéro n'est reconnu
+// par aucune source (annuaire ni fiche locale) et qu'un grade auto-déclaré
+// est fourni, on l'accepte quand même — même repli que la saisie au comptoir
+// (counterSubmitSponsorship) : le filleul renseigne lui-même nom et grade de
+// son parrain, à vérifier ensuite par la facturation avant approbation.
+// Toute autre erreur (format invalide, grade refusé par l'annuaire, profil
+// incomplet, annuaire indisponible) continue de bloquer : on ne permet
+// jamais de contourner un refus déjà connu, seulement un vrai "non trouvé".
+async function verifyPublicSponsor({ numeroFbo, nomComplet, sponsorGrade }) {
   const name = String(nomComplet || "").trim();
   if (!name) throw sponsorship.httpError(400, "Vérifiez le numéro FBO du parrain.", "SPONSOR_NAME_REQUIRED");
-  const profile = await lookupPublicSponsor({ numeroFbo });
-  if (!matchingFboNames(name, profile.nomComplet)) {
-    throw sponsorship.httpError(400, "Le parrain indiqué ne correspond pas à ce numéro FBO. Vérifiez de nouveau le numéro.", "FBO_IDENTITY_MISMATCH");
+  try {
+    const profile = await lookupPublicSponsor({ numeroFbo });
+    if (!matchingFboNames(name, profile.nomComplet)) {
+      throw sponsorship.httpError(400, "Le parrain indiqué ne correspond pas à ce numéro FBO. Vérifiez de nouveau le numéro.", "FBO_IDENTITY_MISMATCH");
+    }
+    return profile;
+  } catch (error) {
+    if (error.code !== "SPONSOR_FBO_NOT_FOUND" || !sponsorGrade) throw error;
+    const canonical = canonicalFboNumber(numeroFbo);
+    const grade = normalizeGrade(sponsorGrade);
+    if (!sponsorship.isSponsorGradeAllowed(grade)) {
+      throw sponsorship.httpError(403, "Le parrainage est réservé aux FBO de grade Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
+    }
+    return { numeroFbo: canonical, nomComplet: name.toUpperCase(), grade, verified: false };
   }
-  return profile;
 }
 
 // Fiche FBO locale du parrain (créée au besoin) : c'est elle qui relie le
@@ -77,7 +94,7 @@ async function upsertSponsorFbo(profile) {
 
 // Crée le parrainage au statut « Soumis » avec ses pièces. Le panier d'achat
 // de validation est obligatoire.
-async function createSubmittedSponsorship({ sponsorFbo, settings, countryId, body = {}, files = [], channel = "CUSTOMER_PORTAL" }) {
+async function createSubmittedSponsorship({ sponsorFbo, sponsorVerified = true, settings, countryId, body = {}, files = [], channel = "CUSTOMER_PORTAL" }) {
   if (!settings.enabled) throw sponsorship.httpError(403, "Le parrainage n'est pas encore ouvert dans ce pays.", "SPONSORSHIP_DISABLED");
   if (!sponsorship.isSponsorGradeAllowed(sponsorFbo.grade)) {
     throw sponsorship.httpError(403, "Le parrainage est réservé aux FBO de grade Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
@@ -133,6 +150,7 @@ async function createSubmittedSponsorship({ sponsorFbo, settings, countryId, bod
       sponsorNumero: sponsorFbo.numeroFbo,
       sponsorNom: sponsorFbo.nomComplet,
       sponsorGrade: sponsorFbo.grade,
+      sponsorVerified,
       // Parcours public : c'est le filleul qui remplit et atteste.
       consentText:
         channel === "PUBLIC"
@@ -159,7 +177,7 @@ async function createSubmittedSponsorship({ sponsorFbo, settings, countryId, bod
     action: "SUBMITTED",
     note:
       channel === "PUBLIC"
-        ? `Fiche envoyée en ligne par le filleul ${recruitName}, parrain ${sponsorFbo.nomComplet} (${sponsorFbo.numeroFbo}).`
+        ? `Fiche envoyée en ligne par le filleul ${recruitName}, parrain ${sponsorFbo.nomComplet} (${sponsorFbo.numeroFbo})${sponsorVerified ? "" : ", numéro non reconnu par l'annuaire : nom et grade déclarés par le filleul"}.`
         : `Parrainage soumis par ${sponsorFbo.nomComplet} (${sponsorFbo.numeroFbo}).`,
     meta: { documents: documents.map((d) => d.type), consentVersion: channel === "PUBLIC" ? sponsorship.RECRUIT_CONSENT_VERSION : sponsorship.CONSENT_VERSION, channel },
     actorFboId: sponsorFbo.id,
