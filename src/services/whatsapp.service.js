@@ -180,6 +180,250 @@ function buildInvoiceWhatsAppMessage({
 }
 
 /**
+ * Intégration réelle MailerSend WhatsApp.
+ * https://developers.mailersend.com/api/v1/whatsapp
+ *
+ * Contrainte Meta/WhatsApp: un message initié par l'entreprise doit utiliser
+ * un modèle ("template") pré-approuvé par Meta (texte fixe + variables
+ * positionnelles {{1}}, {{2}}...) — impossible d'envoyer du texte libre comme
+ * pour SMS/email. Chaque "purpose" ci-dessous correspond donc à un modèle à
+ * créer et faire approuver manuellement dans le dashboard MailerSend
+ * (aucune API pour ça). Tant que MAILERSEND_WHATSAPP_API_KEY/_SENDER ou le
+ * template d'un purpose donné ne sont pas configurés, on retombe sur
+ * sendTextMessage() (simulé) pour ne rien casser.
+ */
+
+function getMailerSendWhatsAppConfig() {
+  const apiKey = String(
+    process.env.MAILERSEND_WHATSAPP_API_KEY || process.env.MAILERSEND_API_KEY || "",
+  ).trim();
+  const apiUrl = String(
+    process.env.MAILERSEND_WHATSAPP_API_URL || "https://api.mailersend.com/v1/whatsapp/send",
+  ).trim();
+  const sender = String(process.env.MAILERSEND_WHATSAPP_SENDER || "").trim();
+
+  return { apiKey, apiUrl, sender };
+}
+
+function mailerSendWhatsAppConfigured() {
+  const cfg = getMailerSendWhatsAppConfig();
+  return Boolean(cfg.apiKey && cfg.sender);
+}
+
+// Un modèle approuvé par purpose (variables http://developers.mailersend.com/api/v1/whatsapp#template-variables).
+// Clés alignées sur OrderMessagePurpose (PAYMENT_LINK -> même modèle qu'INVOICE)
+// + 2 purposes dédiés au rappel billet (hors OrderMessage, cf ticket-sms-reminder.service.js).
+const WHATSAPP_TEMPLATE_ENV_BY_PURPOSE = {
+  INVOICE: "MAILERSEND_WHATSAPP_TEMPLATE_INVOICE",
+  PAYMENT_LINK: "MAILERSEND_WHATSAPP_TEMPLATE_INVOICE",
+  REMINDER: "MAILERSEND_WHATSAPP_TEMPLATE_REMINDER",
+  PAYMENT_CONFIRMED: "MAILERSEND_WHATSAPP_TEMPLATE_PAYMENT_CONFIRMED",
+  PREPARATION_STARTED: "MAILERSEND_WHATSAPP_TEMPLATE_PREPARATION_STARTED",
+  ORDER_READY: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_READY",
+  ORDER_FULFILLED: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_FULFILLED",
+  TICKET_REMINDER: "MAILERSEND_WHATSAPP_TEMPLATE_TICKET_REMINDER",
+  TICKET_PORTAL_HINT: "MAILERSEND_WHATSAPP_TEMPLATE_TICKET_PORTAL_HINT",
+};
+
+function getWhatsAppTemplateId(purposeKey) {
+  const envName = WHATSAPP_TEMPLATE_ENV_BY_PURPOSE[String(purposeKey || "").toUpperCase()];
+  if (!envName) return null;
+  return String(process.env[envName] || "").trim() || null;
+}
+
+/**
+ * Appel direct de l'API MailerSend (POST /v1/whatsapp/send).
+ * header/body/buttons: tableaux positionnels (voir doc) pour un seul
+ * destinataire — on envoie toujours un message par destinataire ici, jamais
+ * les envois groupés (max 10) permis par l'API, pour rester simple à tracer
+ * dans OrderMessage (1 ligne = 1 destinataire).
+ */
+async function sendMailerSendWhatsAppTemplate({
+  to,
+  templateId,
+  header = [],
+  body = [],
+  buttons = [],
+  metadata = {},
+}) {
+  const cfg = getMailerSendWhatsAppConfig();
+  const normalizedTo = normalizePhone(to);
+
+  if (!cfg.apiKey || !cfg.sender) {
+    return {
+      accepted: false,
+      provider: "MAILERSEND_WHATSAPP",
+      providerMessageId: null,
+      rawPayload: null,
+      errorCode: "MAILERSEND_WHATSAPP_NOT_CONFIGURED",
+      errorMessage: "MAILERSEND_WHATSAPP_API_KEY et MAILERSEND_WHATSAPP_SENDER sont requis.",
+    };
+  }
+  if (!normalizedTo) {
+    return {
+      accepted: false,
+      provider: "MAILERSEND_WHATSAPP",
+      providerMessageId: null,
+      rawPayload: null,
+      errorCode: "NO_DESTINATION",
+      errorMessage: "Numéro WhatsApp manquant ou invalide.",
+    };
+  }
+  if (!templateId) {
+    return {
+      accepted: false,
+      provider: "MAILERSEND_WHATSAPP",
+      providerMessageId: null,
+      rawPayload: null,
+      errorCode: "MAILERSEND_WHATSAPP_TEMPLATE_MISSING",
+      errorMessage: "Aucun modèle WhatsApp approuvé configuré pour ce type de message.",
+    };
+  }
+
+  try {
+    const payload = {
+      from: cfg.sender,
+      to: [normalizedTo],
+      template_id: templateId,
+      personalization: [
+        {
+          to: normalizedTo,
+          data: {
+            ...(header.length ? { header } : {}),
+            ...(body.length ? { body } : {}),
+            ...(buttons.length ? { buttons } : {}),
+          },
+        },
+      ],
+    };
+
+    const response = await fetch(cfg.apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const responseText = await response.text();
+    let responseJson = null;
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseJson = null;
+    }
+    const providerMessageId =
+      response.headers.get("x-message-id") || responseJson?.data?.id || null;
+
+    if (!response.ok) {
+      return {
+        accepted: false,
+        provider: "MAILERSEND_WHATSAPP",
+        providerMessageId,
+        rawPayload: { status: response.status, body: responseJson || responseText || null, metadata },
+        errorCode: `MAILERSEND_WHATSAPP_${response.status}`,
+        errorMessage:
+          responseJson?.message ||
+          (responseJson?.errors ? JSON.stringify(responseJson.errors) : null) ||
+          responseText ||
+          "Échec d'envoi WhatsApp MailerSend.",
+      };
+    }
+
+    return {
+      accepted: true,
+      provider: "MAILERSEND_WHATSAPP",
+      providerMessageId,
+      rawPayload: { status: response.status, body: responseJson || null, metadata },
+      errorCode: null,
+      errorMessage: null,
+    };
+  } catch (error) {
+    return {
+      accepted: false,
+      provider: "MAILERSEND_WHATSAPP",
+      providerMessageId: null,
+      rawPayload: { name: error?.name || null, cause: error?.cause?.message || null, metadata },
+      errorCode: error?.code || "MAILERSEND_WHATSAPP_SEND_FAILED",
+      errorMessage: error?.message || "Échec d'envoi WhatsApp MailerSend.",
+    };
+  }
+}
+
+/**
+ * Construit les variables positionnelles pour un purpose de précommande, à
+ * partir du même `context` déjà construit pour SMS/email
+ * (preorder-notifications.service.js#buildTemplateContext). Doit rester en
+ * phase avec le texte réellement soumis à Meta pour chaque modèle — voir
+ * commentaire en tête de section pour la correspondance attendue.
+ */
+function buildPreorderTemplateVariables(purposeKey, context = {}) {
+  const key = String(purposeKey || "").toUpperCase();
+  const customerName = context.customerName || "Client";
+  const paymentInstructionLine = context.paymentLink
+    ? `Lien de paiement sécurisé : ${context.paymentLink}`
+    : "Présentez ce code au comptoir pour régler.";
+
+  if (key === "INVOICE" || key === "PAYMENT_LINK") {
+    return {
+      body: [customerName, context.paymentCollectionCode || "-", context.totalFcfaLabel || "-", paymentInstructionLine],
+    };
+  }
+  if (key === "REMINDER") {
+    return {
+      body: [customerName, context.paymentCollectionCode || "-", context.totalFcfaLabel || "-", paymentInstructionLine],
+    };
+  }
+  if (key === "PAYMENT_CONFIRMED") {
+    return {
+      body: [customerName, context.preorderNumber || "-", context.totalFcfaLabel || "-"],
+    };
+  }
+  if (key === "PREPARATION_STARTED") {
+    return {
+      body: [customerName, context.parcelNumber || "-"],
+    };
+  }
+  if (key === "ORDER_READY") {
+    return {
+      body: [customerName, context.parcelNumber || "-", context.pickupCode || "-"],
+    };
+  }
+  if (key === "ORDER_FULFILLED") {
+    return {
+      body: [customerName, context.preorderNumber || "-", context.parcelNumber || "-"],
+    };
+  }
+  return { body: [customerName] };
+}
+
+/**
+ * Point d'entrée utilisé par preorder-notifications.service.js pour le canal
+ * WHATSAPP. Essaie l'envoi réel MailerSend si configuré pour ce purpose,
+ * sinon retombe sur le mode simulé existant (sendTextMessage) avec le texte
+ * SMS/WhatsApp déjà préparé par l'appelant, pour ne jamais régresser avant la
+ * fin de la configuration MailerSend (add-on, WABA, modèles approuvés).
+ */
+async function sendPreorderWhatsAppNotification({ to, purpose, context = {}, fallbackMessage = "", metadata = {} }) {
+  const purposeKey = String(purpose || "").toUpperCase();
+  const templateId = getWhatsAppTemplateId(purposeKey);
+
+  if (mailerSendWhatsAppConfigured() && templateId) {
+    const variables = buildPreorderTemplateVariables(purposeKey, context);
+    return sendMailerSendWhatsAppTemplate({
+      to,
+      templateId,
+      header: variables.header || [],
+      body: variables.body || [],
+      buttons: variables.buttons || [],
+      metadata,
+    });
+  }
+
+  return sendTextMessage({ to, body: fallbackMessage, metadata });
+}
+
+/**
  * Envoi texte WhatsApp
  * Pour l’instant: mode simulé
  * Plus tard: remplacer par Meta Cloud API / Twilio / autre provider
@@ -248,4 +492,9 @@ module.exports = {
   buildInvoiceWhatsAppMessage,
   sendTextMessage,
   mapProviderStatus,
+  mailerSendWhatsAppConfigured,
+  getWhatsAppTemplateId,
+  sendMailerSendWhatsAppTemplate,
+  buildPreorderTemplateVariables,
+  sendPreorderWhatsAppNotification,
 };
