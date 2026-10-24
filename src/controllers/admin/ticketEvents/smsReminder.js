@@ -20,6 +20,8 @@ async function getSmsReminderPreview(req, res) {
     const orders = await reminder.listReminderOrders(eventId);
     const targets = reminder.filterTargets(orders, { onlyPhone, limit, countryCode: event.country?.code });
     const sample = targets.length ? reminder.buildReminderPreview(targets[0]) : null;
+    const phoneCounts = reminder.countOrdersByPhone(orders, event.country?.code);
+    const multiOrderPhoneCount = [...phoneCounts.values()].filter((count) => count > 1).length;
 
     return res.json({
       eventTitle: event.title,
@@ -27,6 +29,8 @@ async function getSmsReminderPreview(req, res) {
       targetCount: targets.length,
       sampleMessage: sample?.message || null,
       sampleOk: sample ? sample.ok : null,
+      multiOrderPhoneCount,
+      portalHintMessage: multiOrderPhoneCount ? reminder.buildPortalHintMessage() : null,
     });
   } catch (error) {
     console.error("ticketEvents.getSmsReminderPreview error:", error);
