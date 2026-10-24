@@ -69,6 +69,8 @@ async function main() {
   if (!send) {
     let shown = 0;
     const results = { ok: 0, skippedTooLong: 0, skippedNoUrl: 0 };
+    const phoneCounts = reminder.countOrdersByPhone(orders, event.country?.code);
+    const multiOrderPhones = new Set([...phoneCounts.entries()].filter(([, n]) => n > 1).map(([phone]) => phone));
     for (const order of targets) {
       const preview = reminder.buildReminderPreview(order);
       if (!preview.ok) {
@@ -83,7 +85,10 @@ async function main() {
         shown += 1;
       }
     }
-    console.log("Résumé :", JSON.stringify({ ...results, total: targets.length, dryRun: true }, null, 2));
+    if (multiOrderPhones.size) {
+      console.log(`${multiOrderPhones.size} numéro(s) avec plusieurs achats recevront aussi : "${reminder.buildPortalHintMessage()}"\n`);
+    }
+    console.log("Résumé :", JSON.stringify({ ...results, total: targets.length, multiOrderPhones: multiOrderPhones.size, dryRun: true }, null, 2));
     return;
   }
 

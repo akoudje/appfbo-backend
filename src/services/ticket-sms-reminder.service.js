@@ -38,6 +38,30 @@ function buildReminderMessage(url) {
   return `FOREVER: Votre billet est ici : ${url}`;
 }
 
+// Un même acheteur peut avoir plusieurs commandes distinctes pour le même
+// événement (achats séparés) : chaque commande a son propre lien, le SMS
+// de rappel n'en montre qu'un. Ce second message, envoyé une seule fois par
+// numéro (pas par commande), pointe vers le portail "Mes tickets" qui
+// regroupe tous les achats d'un même acheteur.
+function buildPortalHintMessage() {
+  const base = publicFrontendBaseUrl();
+  if (!base) return "";
+  const portalHint = `${base.replace(/^https?:\/\//i, "").replace(/\/+$/, "")}/tickets`;
+  return `FOREVER: Vous avez plusieurs achats. Voir tous vos billets : ${portalHint}`;
+}
+
+// Regroupe les commandes par numéro normalisé pour détecter les acheteurs
+// ayant plusieurs achats distincts (même téléphone, commandes séparées).
+function countOrdersByPhone(orders, countryCode) {
+  const counts = new Map();
+  for (const order of orders) {
+    const normalized = normalizeForCountry(order.buyerPhone, countryCode || "CIV");
+    if (!normalized) continue;
+    counts.set(normalized, (counts.get(normalized) || 0) + 1);
+  }
+  return counts;
+}
+
 function buildReminderPreview(order) {
   const url = ticketOrderUrl(order);
   if (!url) return { order, url: "", message: "", ok: false, reason: "NO_URL" };
@@ -85,12 +109,18 @@ async function sendReminders({ eventId, onlyPhone, limit, onProgress = null }) {
 
   const orders = await listReminderOrders(eventId);
   const targets = filterTargets(orders, { onlyPhone, limit, countryCode: event.country?.code });
+  // Calculé sur TOUTES les commandes de l'événement (pas seulement la cible
+  // filtrée --only/--limit) : un acheteur a "plusieurs achats" dans l'absolu,
+  // pas seulement par rapport à ce sous-ensemble d'envoi.
+  const phoneCounts = countOrdersByPhone(orders, event.country?.code);
+  const notifiedPhones = new Set();
 
   const results = {
     sent: 0,
     failed: 0,
     skippedTooLong: 0,
     skippedNoUrl: 0,
+    portalHintSent: 0,
     total: targets.length,
   };
 
@@ -115,6 +145,27 @@ async function sendReminders({ eventId, onlyPhone, limit, onProgress = null }) {
 
     if (onProgress) onProgress({ order, preview, result, results });
     await wait(SEND_DELAY_MS);
+
+    const normalizedPhone = normalizeForCountry(order.buyerPhone, event.country?.code || "CIV");
+    if (
+      normalizedPhone &&
+      (phoneCounts.get(normalizedPhone) || 0) > 1 &&
+      !notifiedPhones.has(normalizedPhone)
+    ) {
+      notifiedPhones.add(normalizedPhone);
+      const hintMessage = buildPortalHintMessage();
+      if (hintMessage) {
+        const hintResult = await sendSms({
+          to: order.buyerPhone,
+          message: hintMessage,
+          countryCode: event.country?.code || "CIV",
+          sensitive: true,
+        });
+        if (hintResult.accepted) results.portalHintSent += 1;
+        if (onProgress) onProgress({ order, preview: { message: hintMessage, ok: true }, result: hintResult, results, isPortalHint: true });
+        await wait(SEND_DELAY_MS);
+      }
+    }
   }
 
   return { event, targets, results };
@@ -125,6 +176,7 @@ async function getReminderOrderById(orderId) {
     where: { id: orderId },
     select: {
       id: true,
+      eventId: true,
       orderNumber: true,
       buyerFullName: true,
       buyerPhone: true,
@@ -166,13 +218,37 @@ async function sendReminderForOrder(orderId) {
     sensitive: true,
   });
 
-  return { order, preview, result };
+  let hintResult = null;
+  const siblingOrders = await listReminderOrders(order.eventId);
+  const normalizedPhone = normalizeForCountry(order.buyerPhone, order.country?.code || "CIV");
+  const hasMultipleOrders =
+    normalizedPhone &&
+    siblingOrders.filter(
+      (sibling) => normalizeForCountry(sibling.buyerPhone, order.country?.code || "CIV") === normalizedPhone,
+    ).length > 1;
+
+  if (hasMultipleOrders) {
+    const hintMessage = buildPortalHintMessage();
+    if (hintMessage) {
+      await wait(SEND_DELAY_MS);
+      hintResult = await sendSms({
+        to: order.buyerPhone,
+        message: hintMessage,
+        countryCode: order.country?.code || "CIV",
+        sensitive: true,
+      });
+    }
+  }
+
+  return { order, preview, result, hintResult };
 }
 
 module.exports = {
   MAX_SMS_LENGTH,
   ticketOrderUrl,
   buildReminderMessage,
+  buildPortalHintMessage,
+  countOrdersByPhone,
   buildReminderPreview,
   listReminderOrders,
   filterTargets,

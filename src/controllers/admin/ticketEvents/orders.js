@@ -493,7 +493,7 @@ async function resendOrderSmsReminder(req, res) {
       return res.status(404).json({ message: "Commande billet introuvable" });
     }
 
-    const { result } = await smsReminder.sendReminderForOrder(order.id);
+    const { result, hintResult } = await smsReminder.sendReminderForOrder(order.id);
     if (!result.accepted) {
       return res.status(502).json({
         message: result.errorMessage || "Envoi du SMS impossible.",
@@ -501,7 +501,10 @@ async function resendOrderSmsReminder(req, res) {
       });
     }
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      portalHintSent: Boolean(hintResult?.accepted),
+    });
   } catch (error) {
     if (error.statusCode) {
       return res.status(error.statusCode).json({ message: error.message });
