@@ -110,10 +110,12 @@ async function createCashOrder(req, res) {
         .status(400)
         .json({ message: "Nom et téléphone client requis." });
     }
-    if (!normalizedBuyerEmail) {
-      return res.status(400).json({
-        message: "Email client valide requis pour envoyer le ticket digital.",
-      });
+    // Email facultatif au guichet (le client peut toujours retrouver son
+    // ticket par téléphone, voir ticket-sms-reminder.service.js) : seule une
+    // valeur saisie mais invalide est bloquée, pour éviter une faute de
+    // frappe silencieuse.
+    if (String(buyerEmail || "").trim() && !normalizedBuyerEmail) {
+      return res.status(400).json({ message: "Email invalide." });
     }
     if (!normalizedHolderName) {
       return res.status(400).json({ message: "Nom du participant requis." });
