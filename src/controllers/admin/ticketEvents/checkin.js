@@ -20,6 +20,7 @@ function includeCheckInDetails() {
         holderFullName: true,
         status: true,
         checkedInAt: true,
+        checkedInBy: { select: { id: true, fullName: true, email: true } },
       },
     },
   };
