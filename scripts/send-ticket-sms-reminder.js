@@ -4,6 +4,10 @@
  * de confirmation n'est jamais arrivé (boîte pleine, etc.). Les commandes de
  * test (isTest: true) sont exclues.
  *
+ * Même logique que le bouton admin (ticketEvents/smsReminder.js) : les deux
+ * passent par ticket-sms-reminder.service.js, pour ne jamais diverger sur le
+ * message envoyé.
+ *
  * Par défaut : DRY RUN (affiche ce qui serait envoyé, n'envoie rien).
  * Envoi réel : ajouter --send.
  * --only=<téléphone> : limite aux commandes dont le numéro acheteur
@@ -18,44 +22,9 @@
  */
 
 const { PrismaClient } = require("@prisma/client");
-const { signTicketOrderAccessToken } = require("../src/services/ticket-order-ticketing.service");
-const { publicFrontendBaseUrl } = require("../src/services/public-url.service");
-const { normalizeForCountry } = require("../src/utils/phone");
+const reminder = require("../src/services/ticket-sms-reminder.service");
 
 const prisma = new PrismaClient();
-
-const SEND_DELAY_MS = 350;
-const MAX_SMS_LENGTH = 160;
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Même fonctions que l'email de confirmation (ticket-email-notifications.service.js
-// utilise les deux mêmes), pour garantir un lien strictement identique/valide —
-// notamment publicFrontendBaseUrl() qui normalise le schéma https:// (voir le
-// bug corrigé plus tôt cette session sur les liens de paiement sans schéma).
-function ticketOrderUrl(order) {
-  const base = publicFrontendBaseUrl();
-  if (!base || !order.orderNumber) return "";
-
-  const token = signTicketOrderAccessToken(order.orderNumber);
-  if (!token) return "";
-
-  const countryCode = order.country?.code || "CIV";
-  return `${base.replace(/\/+$/, "")}/tickets/${encodeURIComponent(order.orderNumber)}?country=${encodeURIComponent(countryCode)}&token=${encodeURIComponent(token)}`;
-}
-
-function buildMessage(order, url) {
-  return `Forever: billet -> ${url}`;
-}
-
-async function sendOneSms({ to, message, countryCode }) {
-  // require() tardif : évite de charger sms.service.js (et donc de valider
-  // la config Orange) avant même d'être sûr qu'on a un event/orders valides.
-  const { sendSms } = require("../src/services/sms.service");
-  return sendSms({ to, message, countryCode, sensitive: true });
-}
 
 async function main() {
   const eventId = process.argv[2];
@@ -73,7 +42,7 @@ async function main() {
 
   const event = await prisma.ticketEvent.findUnique({
     where: { id: eventId },
-    select: { id: true, title: true, startsAt: true, country: { select: { code: true } } },
+    select: { id: true, title: true, country: { select: { code: true } } },
   });
   if (!event) {
     console.error(`Événement introuvable : ${eventId}`);
@@ -81,32 +50,14 @@ async function main() {
     return;
   }
 
-  const orders = await prisma.ticketOrder.findMany({
-    where: { eventId, status: "PAID", isTest: false },
-    select: {
-      id: true,
-      orderNumber: true,
-      buyerFullName: true,
-      buyerPhone: true,
-      country: { select: { code: true } },
-      event: { select: { title: true } },
-    },
-    orderBy: { createdAt: "asc" },
-  });
+  const orders = await reminder.listReminderOrders(eventId);
+  const targets = reminder.filterTargets(orders, { onlyPhone, limit, countryCode: event.country?.code });
 
-  let targets = orders;
-  if (onlyPhone) {
-    const normalizedTarget = normalizeForCountry(onlyPhone, event.country?.code || "CIV");
-    targets = targets.filter(
-      (order) => normalizeForCountry(order.buyerPhone, event.country?.code || "CIV") === normalizedTarget,
-    );
-    if (!targets.length) {
-      console.error(`Aucune commande PAID (hors test) trouvée pour le numéro ${onlyPhone}.`);
-      process.exitCode = 1;
-      return;
-    }
+  if (onlyPhone && !targets.length) {
+    console.error(`Aucune commande PAID (hors test) trouvée pour le numéro ${onlyPhone}.`);
+    process.exitCode = 1;
+    return;
   }
-  if (limit) targets = targets.slice(0, limit);
 
   console.log(`Événement : ${event.title} (${event.country?.code || "?"}) — ${orders.length} commande(s) payée(s) hors test.`);
   if (onlyPhone || limit) {
@@ -115,49 +66,42 @@ async function main() {
   console.log(send ? "Mode : ENVOI RÉEL" : "Mode : DRY RUN (rien n'est envoyé — ajoutez --send pour le faire réellement)");
   console.log("");
 
-  const results = { sent: 0, failed: 0, skippedTooLong: 0, skippedNoUrl: 0 };
-  let shown = 0;
-
-  for (const order of targets) {
-    const url = ticketOrderUrl(order);
-    if (!url) {
-      results.skippedNoUrl += 1;
-      console.warn(`[SKIP] ${order.orderNumber} : impossible de construire le lien (config manquante).`);
-      continue;
+  if (!send) {
+    let shown = 0;
+    const results = { ok: 0, skippedTooLong: 0, skippedNoUrl: 0 };
+    for (const order of targets) {
+      const preview = reminder.buildReminderPreview(order);
+      if (!preview.ok) {
+        if (preview.reason === "TOO_LONG") results.skippedTooLong += 1;
+        else results.skippedNoUrl += 1;
+        console.warn(`[SKIP] ${order.orderNumber} : ${preview.reason}`);
+        continue;
+      }
+      results.ok += 1;
+      if (shown < 3) {
+        console.log(`[EXEMPLE] -> ${order.buyerFullName} (${order.buyerPhone})\n  "${preview.message}"\n`);
+        shown += 1;
+      }
     }
-
-    const message = buildMessage(order, url);
-    if (message.length > MAX_SMS_LENGTH) {
-      results.skippedTooLong += 1;
-      console.warn(`[SKIP] ${order.orderNumber} : message trop long (${message.length} caractères), lien risquerait d'être tronqué.`);
-      continue;
-    }
-
-    if (shown < 3) {
-      console.log(`[EXEMPLE] -> ${order.buyerFullName} (${order.buyerPhone})\n  "${message}"\n`);
-      shown += 1;
-    }
-
-    if (!send) continue;
-
-    const result = await sendOneSms({
-      to: order.buyerPhone,
-      message,
-      countryCode: order.country?.code || "CIV",
-    });
-
-    if (result.accepted) {
-      results.sent += 1;
-    } else {
-      results.failed += 1;
-      console.warn(`[ÉCHEC] ${order.orderNumber} : ${result.errorCode || "?"} ${result.errorMessage || ""}`);
-    }
-
-    await wait(SEND_DELAY_MS);
+    console.log("Résumé :", JSON.stringify({ ...results, total: targets.length, dryRun: true }, null, 2));
+    return;
   }
 
+  const { results } = await reminder.sendReminders({
+    eventId,
+    onlyPhone,
+    limit,
+    onProgress: ({ order, preview, result }) => {
+      if (!preview.ok) {
+        console.warn(`[SKIP] ${order.orderNumber} : ${preview.reason}`);
+      } else if (!result.accepted) {
+        console.warn(`[ÉCHEC] ${order.orderNumber} : ${result.errorCode || "?"} ${result.errorMessage || ""}`);
+      }
+    },
+  });
+
   console.log("");
-  console.log("Résumé :", JSON.stringify({ ...results, total: targets.length, dryRun: !send }, null, 2));
+  console.log("Résumé :", JSON.stringify({ ...results, dryRun: false }, null, 2));
 }
 
 main()

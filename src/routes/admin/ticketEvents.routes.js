@@ -131,6 +131,18 @@ router.get(
   ticketEventsController.getEventSummary,
 );
 
+router.get(
+  "/:id/sms-reminder/preview",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.getSmsReminderPreview,
+);
+
+router.post(
+  "/:id/sms-reminder",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.sendSmsReminder,
+);
+
 router.post(
   "/:id/close",
   requirePermission(Permission.MARKETING_WRITE),
