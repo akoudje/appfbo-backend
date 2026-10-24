@@ -120,6 +120,55 @@ async function sendReminders({ eventId, onlyPhone, limit, onProgress = null }) {
   return { event, targets, results };
 }
 
+async function getReminderOrderById(orderId) {
+  return prisma.ticketOrder.findUnique({
+    where: { id: orderId },
+    select: {
+      id: true,
+      orderNumber: true,
+      buyerFullName: true,
+      buyerPhone: true,
+      status: true,
+      isTest: true,
+      country: { select: { code: true } },
+    },
+  });
+}
+
+// Renvoi individuel (depuis la liste des commandes d'un événement) : même
+// message/lien que l'envoi en masse, pour une seule commande.
+async function sendReminderForOrder(orderId) {
+  const order = await getReminderOrderById(orderId);
+  if (!order) throw Object.assign(new Error("Commande introuvable."), { statusCode: 404 });
+  if (order.status !== "PAID") {
+    throw Object.assign(
+      new Error("Seules les commandes payées peuvent recevoir ce rappel."),
+      { statusCode: 400 },
+    );
+  }
+
+  const preview = buildReminderPreview(order);
+  if (!preview.ok) {
+    throw Object.assign(
+      new Error(
+        preview.reason === "TOO_LONG"
+          ? "Message trop long pour ce billet (lien trop long)."
+          : "Lien indisponible (configuration manquante).",
+      ),
+      { statusCode: 500 },
+    );
+  }
+
+  const result = await sendSms({
+    to: order.buyerPhone,
+    message: preview.message,
+    countryCode: order.country?.code || "CIV",
+    sensitive: true,
+  });
+
+  return { order, preview, result };
+}
+
 module.exports = {
   MAX_SMS_LENGTH,
   ticketOrderUrl,
@@ -128,4 +177,6 @@ module.exports = {
   listReminderOrders,
   filterTargets,
   sendReminders,
+  getReminderOrderById,
+  sendReminderForOrder,
 };
