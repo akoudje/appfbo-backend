@@ -65,6 +65,12 @@ router.post(
 );
 
 router.post(
+  "/orders/:orderId/resend-sms-reminder",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.resendOrderSmsReminder,
+);
+
+router.post(
   "/orders/:orderId/test-flag",
   requirePermission(Permission.MARKETING_WRITE),
   ticketEventsController.setOrderTestFlag,

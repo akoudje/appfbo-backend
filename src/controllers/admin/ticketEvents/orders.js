@@ -20,6 +20,7 @@ const {
 const {
   expireStaleTicketOrders,
 } = require("../../../services/ticket-order-expiration.service");
+const smsReminder = require("../../../services/ticket-sms-reminder.service");
 const { digitsOnly, buildOrdersWhere } = require("./shared");
 
 async function listOrders(req, res) {
@@ -479,6 +480,39 @@ async function resendOrderTicketsEmail(req, res) {
   }
 }
 
+// Renvoi individuel du rappel SMS (même message/lien que l'envoi en masse,
+// voir ticket-sms-reminder.service.js) — utile pour un acheteur précis sans
+// relancer tout l'événement.
+async function resendOrderSmsReminder(req, res) {
+  try {
+    const order = await prisma.ticketOrder.findFirst({
+      where: { id: req.params.orderId, countryId: req.countryId },
+      select: { id: true },
+    });
+    if (!order) {
+      return res.status(404).json({ message: "Commande billet introuvable" });
+    }
+
+    const { result } = await smsReminder.sendReminderForOrder(order.id);
+    if (!result.accepted) {
+      return res.status(502).json({
+        message: result.errorMessage || "Envoi du SMS impossible.",
+        errorCode: result.errorCode,
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    console.error("ticketEvents.resendOrderSmsReminder error:", error);
+    return res
+      .status(500)
+      .json({ message: "Erreur serveur (resendOrderSmsReminder)" });
+  }
+}
+
 // Depuis l'ajout du scheduler automatique (ticket-order-expiration.service.js),
 // ce bouton admin n'est plus la seule ligne de défense contre les commandes
 // Wave restées PENDING_PAYMENT — mais il reste utile pour forcer un passage
@@ -511,6 +545,7 @@ module.exports = {
   syncOrderWavePayment,
   cancelOrder,
   resendOrderTicketsEmail,
+  resendOrderSmsReminder,
   expireOrders,
   setOrderTestFlag,
 };
