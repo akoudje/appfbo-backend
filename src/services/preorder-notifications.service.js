@@ -1027,6 +1027,8 @@ async function sendByChannel({
   preorderId,
   countryCode = "CIV",
   maxSmsRetries = 2,
+  whatsappPurpose = null,
+  whatsappContext = null,
 }) {
   if (!to) {
     return {
@@ -1051,9 +1053,11 @@ async function sendByChannel({
   }
 
   if (channel === "WHATSAPP") {
-    return whatsappService.sendTextMessage({
+    return whatsappService.sendPreorderWhatsAppNotification({
       to,
-      body: message,
+      purpose: whatsappPurpose,
+      context: whatsappContext || {},
+      fallbackMessage: message,
       metadata: {
         preorderId,
       },
@@ -1300,6 +1304,8 @@ async function sendPreorderNotification({
       preorderId: preorder.id,
       countryCode: preorderCountryCode,
       maxSmsRetries,
+      whatsappPurpose: item.channel === "WHATSAPP" ? persistedPurpose : null,
+      whatsappContext: item.channel === "WHATSAPP" ? context : null,
     });
 
     const savedMessage = await persistNotificationResult({

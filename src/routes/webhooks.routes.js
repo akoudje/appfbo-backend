@@ -10,6 +10,7 @@ const {
   orangeSmsDlrWebhookProbe,
 } = require("../controllers/smsWebhook.controller");
 const { mailerSendEmailEventsWebhook } = require("../controllers/emailWebhook.controller");
+const { mailerSendWhatsAppEventsWebhook } = require("../controllers/whatsappWebhook.controller");
 const { createRateLimiter } = require("../middlewares/rateLimit");
 
 const genericWebhookLimiter = createRateLimiter({
@@ -23,5 +24,6 @@ router.get("/orange-sms/dlr", genericWebhookLimiter, orangeSmsDlrWebhookProbe);
 router.head("/orange-sms/dlr", genericWebhookLimiter, orangeSmsDlrWebhookProbe);
 router.post("/orange-sms/dlr", genericWebhookLimiter, orangeSmsDlrWebhook);
 router.post("/mailersend/email-events", genericWebhookLimiter, mailerSendEmailEventsWebhook);
+router.post("/mailersend/whatsapp-events", genericWebhookLimiter, mailerSendWhatsAppEventsWebhook);
 
 module.exports = router;
