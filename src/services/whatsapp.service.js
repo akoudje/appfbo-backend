@@ -1,5 +1,7 @@
 // backend/src/services/whatsapp.service.js
 
+const { normalizeForCountry } = require("../utils/phone");
+
 /**
  * Formate un montant FCFA
  */
@@ -245,9 +247,13 @@ async function sendMailerSendWhatsAppTemplate({
   body = [],
   buttons = [],
   metadata = {},
+  countryCode = "CIV",
 }) {
   const cfg = getMailerSendWhatsAppConfig();
-  const normalizedTo = normalizePhone(to);
+  // L'API MailerSend attend un numéro E.164 avec "+" (ex: "+2250506025071"),
+  // contrairement à normalizePhone() (digits seuls, pensé pour les liens
+  // wa.me) utilisé ailleurs dans ce fichier.
+  const normalizedTo = normalizeForCountry(to, countryCode);
 
   if (!cfg.apiKey || !cfg.sender) {
     return {
@@ -404,7 +410,14 @@ function buildPreorderTemplateVariables(purposeKey, context = {}) {
  * SMS/WhatsApp déjà préparé par l'appelant, pour ne jamais régresser avant la
  * fin de la configuration MailerSend (add-on, WABA, modèles approuvés).
  */
-async function sendPreorderWhatsAppNotification({ to, purpose, context = {}, fallbackMessage = "", metadata = {} }) {
+async function sendPreorderWhatsAppNotification({
+  to,
+  purpose,
+  context = {},
+  fallbackMessage = "",
+  metadata = {},
+  countryCode = "CIV",
+}) {
   const purposeKey = String(purpose || "").toUpperCase();
   const templateId = getWhatsAppTemplateId(purposeKey);
 
@@ -417,6 +430,7 @@ async function sendPreorderWhatsAppNotification({ to, purpose, context = {}, fal
       body: variables.body || [],
       buttons: variables.buttons || [],
       metadata,
+      countryCode,
     });
   }
 

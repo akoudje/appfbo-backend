@@ -1061,6 +1061,7 @@ async function sendByChannel({
       metadata: {
         preorderId,
       },
+      countryCode,
     });
   }
 
