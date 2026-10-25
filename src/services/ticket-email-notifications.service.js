@@ -194,7 +194,7 @@ async function sendTicketCreditIssuedEmail({ credit, originEvent, publicUrl } = 
   const base = isSafePublicFrontendOrigin(publicUrl)
     ? String(publicUrl || "").replace(/\/+$/, "")
     : publicFrontendBaseUrl();
-  const portalUrl = base ? `${base}/tickets` : "";
+  const portalUrl = base ? `${base}/tickets/credits` : "";
   const eventTitle = originEvent?.title || "l'événement";
   const expiresLabel = formatDateOnly(credit.expiresAt);
 

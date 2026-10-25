@@ -22,7 +22,7 @@ function buildCreditIssuedSmsMessage({ credit, originEvent, portalUrl }) {
 }
 
 async function notifyCreditIssued({ credit, originEvent, countryCode } = {}) {
-  const portalUrl = `${publicFrontendBaseUrl()}/tickets`;
+  const portalUrl = `${publicFrontendBaseUrl()}/tickets/credits`;
   const results = { sms: null, email: null };
 
   if (credit.holderPhone) {
