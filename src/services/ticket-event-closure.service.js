@@ -132,6 +132,66 @@ async function closeTicketEventAndIssueCredits({ eventId, actorAdminId = null, n
   return { ok: true, skipped: false, creditsCount: issuedCredits.credits.length, eventId: issuedCredits.event.id };
 }
 
+// Report au cas par cas d'un seul billet non scanné, décidé par un admin
+// après avoir contacté le client (pas de seuil de quantité : contrairement à
+// closeTicketEventAndIssueCredits, cette voie reste volontairement manuelle,
+// y compris pour une commande d'un seul billet).
+async function issueManualCreditForTicket({ ticketId, countryId, actorAdminId = null, now = new Date() } = {}) {
+  const issued = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Ticket" WHERE id = ${ticketId} FOR UPDATE`;
+    const ticket = await tx.ticket.findFirst({
+      where: { id: ticketId, countryId },
+      include: {
+        order: { select: { status: true, isTest: true } },
+        ticketType: { select: { label: true, priceFcfa: true } },
+        event: { select: { id: true, title: true, country: { select: { code: true } } } },
+      },
+    });
+    if (!ticket) return { ok: false, reason: "NOT_FOUND" };
+    if (ticket.status !== "ACTIVE") return { ok: false, reason: "NOT_ACTIVE", status: ticket.status };
+    if (ticket.order.status !== "PAID") return { ok: false, reason: "ORDER_NOT_PAID" };
+    if (ticket.order.isTest) return { ok: false, reason: "TEST_ORDER" };
+
+    const expiresAt = addMonths(now, getCreditValidityMonths());
+    const credit = await tx.ticketCredit.create({
+      data: {
+        countryId,
+        originEventId: ticket.eventId,
+        originOrderId: ticket.orderId,
+        originTicketId: ticket.id,
+        originTicketTypeId: ticket.ticketTypeId,
+        ticketTypeLabel: ticket.ticketType?.label || "",
+        priceFcfaSnapshot: ticket.ticketType?.priceFcfa || 0,
+        holderFullName: ticket.holderFullName,
+        holderPhone: ticket.holderPhone,
+        holderEmail: ticket.holderEmail,
+        expiresAt,
+        issuedById: actorAdminId,
+      },
+    });
+    await tx.ticket.update({
+      where: { id: ticket.id },
+      data: { status: "EXPIRED" },
+    });
+
+    return { ok: true, credit, event: ticket.event };
+  });
+
+  if (!issued.ok) return issued;
+
+  try {
+    await notifyCreditIssued({
+      credit: issued.credit,
+      originEvent: issued.event,
+      countryCode: issued.event.country?.code,
+    });
+  } catch (error) {
+    console.error("[ticket-event-closure] manual credit notification error:", error);
+  }
+
+  return { ok: true, credit: issued.credit };
+}
+
 function startTicketEventAutoCloseScheduler() {
   if (String(process.env.TICKET_EVENT_AUTO_CLOSE_ENABLED || "true").toLowerCase() !== "true") {
     console.info("[ticket-event-closure] scheduler disabled via TICKET_EVENT_AUTO_CLOSE_ENABLED");
@@ -174,5 +234,6 @@ function startTicketEventAutoCloseScheduler() {
 
 module.exports = {
   closeTicketEventAndIssueCredits,
+  issueManualCreditForTicket,
   startTicketEventAutoCloseScheduler,
 };

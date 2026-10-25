@@ -3,7 +3,10 @@
 // services/ticket-credit.service.js pour la logique métier).
 
 const prisma = require("../../../prisma");
-const { closeTicketEventAndIssueCredits } = require("../../../services/ticket-event-closure.service");
+const {
+  closeTicketEventAndIssueCredits,
+  issueManualCreditForTicket,
+} = require("../../../services/ticket-event-closure.service");
 
 async function closeEvent(req, res) {
   try {
@@ -91,9 +94,41 @@ async function revokeCredit(req, res) {
   }
 }
 
+// Report au cas par cas, décidé par un admin après avoir contacté le
+// client — jamais automatique, y compris pour un billet seul (voir
+// issueManualCreditForTicket, qui n'applique aucun seuil de quantité).
+async function issueManualCredit(req, res) {
+  try {
+    const { ticketId } = req.body || {};
+    if (!ticketId) return res.status(400).json({ message: "ticketId requis." });
+
+    const result = await issueManualCreditForTicket({
+      ticketId: String(ticketId),
+      countryId: req.countryId,
+      actorAdminId: req.user?.id || null,
+    });
+
+    if (!result.ok) {
+      const messages = {
+        NOT_FOUND: "Billet introuvable.",
+        NOT_ACTIVE: `Ce billet n'est pas éligible au report (statut actuel : ${result.status}).`,
+        ORDER_NOT_PAID: "La commande de ce billet n'est pas payée.",
+        TEST_ORDER: "Ce billet appartient à une commande de test.",
+      };
+      return res.status(409).json({ message: messages[result.reason] || "Report impossible." });
+    }
+
+    return res.json({ ok: true, credit: result.credit });
+  } catch (error) {
+    console.error("ticketEvents.issueManualCredit error:", error);
+    return res.status(500).json({ message: "Erreur serveur (issueManualCredit)" });
+  }
+}
+
 module.exports = {
   closeEvent,
   listEventCredits,
   getActiveCreditCounts,
   revokeCredit,
+  issueManualCredit,
 };
