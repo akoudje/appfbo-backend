@@ -96,6 +96,12 @@ router.post(
 );
 
 router.post(
+  "/credits/manual",
+  requirePermission(Permission.MARKETING_WRITE),
+  ticketEventsController.issueManualCredit,
+);
+
+router.post(
   "/check-in",
   requirePermission(Permission.TICKET_CHECKIN),
   ticketEventsController.checkInTicket,

@@ -698,6 +698,7 @@ model AdminUser {
   ticketCheckInSessions TicketCheckInSession[] @relation("TicketCheckInSessionAgent")
   ticketCheckInLogs TicketCheckInLog[] @relation("TicketCheckInLogAgent")
   revokedTicketCredits TicketCredit[] @relation("TicketCreditRevokedBy")
+  issuedTicketCredits TicketCredit[] @relation("TicketCreditIssuedBy")
   issuedFboDocuments FboDocument[] @relation("FboDocumentIssuedBy")
   cancelledFboDocuments FboDocument[] @relation("FboDocumentCancelledBy")
   createdExternalPaymentLinks ExternalPaymentLink[] @relation("ExternalPaymentLinkCreatedBy")
@@ -2490,6 +2491,13 @@ model TicketCredit {
   status TicketCreditStatus @default(ISSUED)
   issuedAt DateTime @default(now())
   expiresAt DateTime
+
+  // Non-null uniquement pour un crédit reporté au cas par cas par un admin
+  // (voir issueManualCreditForTicket) — null pour l'émission automatique en
+  // masse à la clôture de l'événement, qui n'est imputable à personne en
+  // particulier.
+  issuedById String?
+  issuedBy AdminUser? @relation("TicketCreditIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
 
   redeemedAt DateTime?
   redeemedEventId String?
