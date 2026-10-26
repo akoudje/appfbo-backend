@@ -88,7 +88,24 @@ function includeEventDetails() {
   };
 }
 
-function buildOrdersWhere(req, { eventId, status, q, paymentMethod } = {}) {
+// Origine de la commande : test (exclue du bilan), issue d'un crédit de
+// billet non scanné (autre édition, voir ticket-credit.service.js), ou achat
+// normal (ni l'un ni l'autre). Orthogonal au filtre paymentMethod ci-dessus.
+function buildOrderKindMatch(kind) {
+  const normalizedKind = String(kind || "").trim().toUpperCase();
+  const creditMatch = {
+    OR: [
+      { paymentMethod: { equals: "TICKET_CREDIT", mode: "insensitive" } },
+      { paymentProvider: { equals: "TICKET_CREDIT", mode: "insensitive" } },
+    ],
+  };
+  if (normalizedKind === "TEST") return { isTest: true };
+  if (normalizedKind === "CREDIT") return creditMatch;
+  if (normalizedKind === "NORMAL") return { isTest: false, NOT: creditMatch };
+  return null;
+}
+
+function buildOrdersWhere(req, { eventId, status, q, paymentMethod, kind } = {}) {
   const where = { countryId: req.countryId };
   if (eventId) where.eventId = String(eventId);
   if (status) where.status = String(status).trim().toUpperCase();
@@ -115,6 +132,8 @@ function buildOrdersWhere(req, { eventId, status, q, paymentMethod } = {}) {
       ];
     }
   }
+  const kindMatch = buildOrderKindMatch(kind);
+  if (kindMatch) where.AND = [...(where.AND || []), kindMatch];
   if (q && String(q).trim()) {
     const term = String(q).trim();
     where.OR = [

@@ -25,8 +25,8 @@ const { digitsOnly, buildOrdersWhere } = require("./shared");
 
 async function listOrders(req, res) {
   try {
-    const { eventId, status, q, paymentMethod } = req.query;
-    const where = buildOrdersWhere(req, { eventId, status, q, paymentMethod });
+    const { eventId, status, q, paymentMethod, kind } = req.query;
+    const where = buildOrdersWhere(req, { eventId, status, q, paymentMethod, kind });
     const paginated = req.query.page !== undefined;
     const requestedPage = Number(req.query.page || 1);
     const requestedSize = Number(req.query.pageSize || 25);
