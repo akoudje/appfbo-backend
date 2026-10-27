@@ -3,6 +3,7 @@
 
 const billingQueueService = require("../services/billingQueue.service");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
+const { buildInvoicerReport } = require("../services/billing-report.service");
 
 // Facturier caissier : les dossiers lui sont attribués par la répartition
 // automatique (dispatchBillingQueue), il ne se sert pas dans la file.
@@ -293,9 +294,29 @@ async function assignToInvoicer(req, res) {
   }
 }
 
+// GET /api/admin/billing/report?from=YYYY-MM-DD&to=YYYY-MM-DD[&invoicerId=]
+// Bilan d'activité : le sien, ou celui d'un facturier pour un superviseur.
+async function getReport(req, res) {
+  try {
+    const countryId = req.country?.id || req.countryId;
+    const requested = String(req.query.invoicerId || "").trim();
+    const isSupervisor = billingQueueService.BILLING_SUPERVISOR_ROLES.includes(req.user?.role);
+    const userId = requested && isSupervisor ? requested : req.user?.id;
+    if (!userId) return res.status(401).json({ message: "Utilisateur non authentifié" });
+
+    const report = await buildInvoicerReport({ countryId, userId, from: req.query.from, to: req.query.to });
+    return res.json({ ok: true, invoicerId: userId, ...report });
+  } catch (e) {
+    if (e.statusCode === 400) return res.status(400).json({ message: e.message });
+    console.error("getReport error:", e);
+    return res.status(500).json({ message: "Impossible de calculer le bilan." });
+  }
+}
+
 module.exports = {
   claimNext,
   claimSpecific,
+  getReport,
   listInvoicers,
   assignToInvoicer,
   startWork,

@@ -31,6 +31,7 @@ const {
   claimSpecific,
   listInvoicers,
   assignToInvoicer,
+  getReport,
   startWork,
   releaseWork,
   escalateWork,
@@ -115,6 +116,8 @@ router.patch(
 // et attribution manuelle d'un dossier à un facturier précis.
 router.get("/billing/invoicers", requireRole(BILLING_SUPERVISOR_ROLES), listInvoicers);
 router.post("/billing/:id/assign", requireRole(BILLING_SUPERVISOR_ROLES), assignToInvoicer);
+// Bilan d'activité (« Mon bilan ») ; un superviseur peut viser un facturier.
+router.get("/billing/report", requirePermission(Permission.INVOICE_CREATE), getReport);
 
 router.post(
   "/billing/claim-next",
