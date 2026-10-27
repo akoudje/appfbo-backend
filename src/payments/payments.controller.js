@@ -146,10 +146,14 @@ async function initiatePublicWavePayment(req, res) {
       return res.status(400).json({ message: "payerPhone requis" });
     }
 
+    // Le numéro saisi n'est plus imposé à Wave comme seul payeur autorisé :
+    // la précommande doit rester payable depuis n'importe quel compte Wave.
+    // Il reste utile comme indice d'affichage avant confirmation du vrai
+    // payeur (providerPayerPhone, renseigné par Wave après paiement).
     const result = await paymentsService.initiateWavePayment({
       req,
       preorderId: orderId,
-      restrictPayerMobile: payerPhone,
+      payerPhoneHint: payerPhone,
     });
 
     return res.json(result);

@@ -1533,6 +1533,7 @@ async function initiateWavePayment({
   req,
   preorderId,
   restrictPayerMobile,
+  payerPhoneHint,
   amountFcfaOverride = null,
   pricingMeta = null,
 }) {
@@ -1617,6 +1618,10 @@ async function initiateWavePayment({
     err.statusCode = 400;
     throw err;
   }
+  // Numéro déclaré par le client, affiché en attendant que Wave confirme le
+  // vrai payeur (providerPayerPhone) — jamais envoyé à Wave en restriction,
+  // voir la discussion sur le paiement multi-numéro.
+  const normalizedPayerHint = payerPhoneHint ? normalizeCI(payerPhoneHint) : null;
   const resolvedPricingMeta =
     pricingMeta ||
     computePaymentPricing({
@@ -1742,7 +1747,8 @@ async function initiateWavePayment({
         providerPayerPhone:
           providerMetadata.providerPayerPhone ||
           providerResponse.providerPayerPhone ||
-          normalizedPayerMobile,
+          normalizedPayerMobile ||
+          normalizedPayerHint,
         providerStatusLabel:
           providerMetadata.providerStatusLabel ||
           providerResponse.providerStatusLabel,
@@ -1753,6 +1759,7 @@ async function initiateWavePayment({
             amountExpectedFcfa: amountToChargeFcfa,
             clientReference: preorder.id,
             restrictPayerMobile: normalizedPayerMobile,
+            payerPhoneHint: normalizedPayerHint,
             simulated: simulation,
             pricingMeta: resolvedPricingMeta,
           },
@@ -1767,7 +1774,8 @@ async function initiateWavePayment({
           providerPayerPhone:
             providerMetadata.providerPayerPhone ||
             providerResponse.providerPayerPhone ||
-            normalizedPayerMobile,
+            normalizedPayerMobile ||
+            normalizedPayerHint,
           providerStatusLabel:
             providerMetadata.providerStatusLabel ||
             providerResponse.providerStatusLabel,
