@@ -12,6 +12,11 @@ const BILLING_ACTIVE_STATUSES = [
   "WAITING_CUSTOMER_DATA",
   "WAITING_PAYMENT",
 ];
+// Charge d'un facturier : seules les commandes encore vivantes comptent. Une
+// commande annulée ou payée peut garder un billingWorkStatus actif (jamais
+// remis à zéro) : sans ce filtre, ces dossiers fantômes réduisent sa capacité
+// et faussent la répartition (prise en charge, impression de la file).
+const BILLING_LOAD_ORDER_STATUSES = ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"];
 const AS400_CERTIFICATION_MISSING_TYPE = "AS400_CERTIFICATION_MISSING";
 const AS400_CERTIFICATION_OPEN_STATUSES = ["OPEN", "REPORTED"];
 const BILLING_CONNECTED_ELIGIBLE_ROLES = Object.entries(ROLE_PERMISSIONS)
@@ -61,6 +66,7 @@ async function countActiveAssignments(tx, { countryId, userId }) {
     where: {
       countryId,
       assignedInvoicerId: userId,
+      status: { in: BILLING_LOAD_ORDER_STATUSES },
       billingWorkStatus: {
         in: BILLING_ACTIVE_STATUSES,
       },
@@ -101,6 +107,7 @@ async function loadConnectedBillingInvoicers({
     where: {
       countryId,
       assignedInvoicerId: { in: admins.map((admin) => admin.id) },
+      status: { in: BILLING_LOAD_ORDER_STATUSES },
       billingWorkStatus: { in: BILLING_ACTIVE_STATUSES },
     },
     _count: { _all: true },
