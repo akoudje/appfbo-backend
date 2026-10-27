@@ -29,5 +29,6 @@ router.post("/:id/request-changes", sponsorshipsController.requestChanges);
 router.post("/:id/reject", sponsorshipsController.rejectSponsorship);
 router.post("/:id/approve", requirePermission(Permission.INVOICE_CREATE), sponsorshipsController.approveSponsorship);
 router.post("/:id/evaluate", sponsorshipsController.evaluateNow);
+router.post("/:id/resend-notification", sponsorshipsController.resendNotification);
 
 module.exports = router;

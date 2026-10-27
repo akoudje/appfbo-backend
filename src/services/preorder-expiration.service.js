@@ -661,8 +661,13 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
       paymentCollectionCode: true,
       countryId: true,
       fboNomComplet: true,
+      // Destinataires du rappel : sans eux, sendPreorderNotification n'a aucun
+      // canal et le rappel était journalisé « envoyé » sans rien envoyer.
+      factureWhatsappTo: true,
+      fboEmail: true,
       country: {
         select: {
+          code: true,
           settings: {
             select: {
               preinvoicedAutoCancelAfterHours: true,
@@ -724,6 +729,7 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
   }
 
   const reminded = [];
+  const { buildPreorderActionLink } = require("../payments/payments.service");
   for (const candidate of due) {
     const latestMessage = await prisma.orderMessage.findFirst({
       where: {
@@ -738,7 +744,10 @@ async function sendReminderForDuePreorders({ now = new Date(), dryRun = false } 
     });
 
     const paymentLink = String(
-      latestMessage?.paymentLinkTracked || latestMessage?.paymentLinkTarget || "",
+      latestMessage?.paymentLinkTracked ||
+        latestMessage?.paymentLinkTarget ||
+        buildPreorderActionLink(candidate) ||
+        "",
     ).trim();
     const countrySettings = candidate.country?.settings || null;
     const reminderMessage = buildPaymentReminderMessage(

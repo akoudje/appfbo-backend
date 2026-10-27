@@ -178,6 +178,10 @@ function isTransientOrangeError(err) {
     return true;
   }
 
+  // SVC0001 « A service error occurred » (AAS error default) : erreur générique
+  // et passagère côté Orange (le même numéro passe à l'essai suivant).
+  if (getOrangeErrorCode(err) === "SVC0001") return true;
+
   const status = Number(err?.status || err?.response?.status || 0);
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
