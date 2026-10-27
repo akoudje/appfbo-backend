@@ -1410,6 +1410,11 @@ async function submit(req, res) {
       },
     });
 
+    // Répartition automatique vers les facturiers caissiers connectés.
+    billingQueueService.dispatchBillingQueue({ countryId: preorder.countryId || req.countryId }).catch((error) => {
+      console.error("[billingQueue] dispatch after submit error:", error);
+    });
+
     return res.json({
       preorderId,
       preorderNumber:

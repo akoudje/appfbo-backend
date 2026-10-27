@@ -767,7 +767,12 @@ async function getSubmittedOrdersExport(req, res) {
 // l'impression reste un export de consultation.
 async function claimSubmittedOrdersForPrint(req, res) {
   try {
-    if (req.user?.permissions?.includes(Permission.EXPORT_READ)) {
+    // Profil EXPORT_READ : consultation. Facturier caissier : ses dossiers lui
+    // sont attribués par la répartition automatique, il imprime les siens.
+    if (
+      req.user?.permissions?.includes(Permission.EXPORT_READ) ||
+      billingQueueService.BILLING_AUTO_DISPATCH_ROLES.includes(req.user?.role)
+    ) {
       return res.json({ ok: true, claimedCount: 0, skipped: true });
     }
     const filterWhere = await buildOrdersListWhere(req, { status: "SUBMITTED" });

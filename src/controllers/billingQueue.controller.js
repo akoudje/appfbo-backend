@@ -4,6 +4,12 @@
 const billingQueueService = require("../services/billingQueue.service");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
 
+// Facturier caissier : les dossiers lui sont attribués par la répartition
+// automatique (dispatchBillingQueue), il ne se sert pas dans la file.
+function isAutoDispatched(req) {
+  return billingQueueService.BILLING_AUTO_DISPATCH_ROLES.includes(req.user?.role);
+}
+
 async function claimNext(req, res) {
   try {
     const userId = req.user?.id;
@@ -12,6 +18,7 @@ async function claimNext(req, res) {
     if (!userId) {
       return res.status(401).json({ message: "Utilisateur non authentifié" });
     }
+    if (isAutoDispatched(req)) return res.json({ ok: false, reason: "AUTO_DISPATCH" });
 
     const result = await billingQueueService.claimNextPreorderForInvoicer({
       userId,
@@ -34,6 +41,7 @@ async function claimSpecific(req, res) {
     if (!userId) {
       return res.status(401).json({ message: "Utilisateur non authentifié" });
     }
+    if (isAutoDispatched(req)) return res.json({ ok: false, reason: "AUTO_DISPATCH" });
 
     const result = await billingQueueService.claimSpecificPreorderForInvoicer({
       preorderId: id,
@@ -98,6 +106,11 @@ async function releaseWork(req, res) {
         assignedInvoicerId: result?.assignedInvoicerId || null,
         autoAssigned: false,
       },
+    });
+
+    // Dossier remis en file : la répartition automatique le reprend aussitôt.
+    billingQueueService.dispatchBillingQueue({ countryId }).catch((error) => {
+      console.error("[billingQueue] dispatch after release error:", error);
     });
 
     return res.json({
@@ -231,9 +244,60 @@ async function resolveEscalation(req, res) {
   }
 }
 
+// GET /api/admin/billing/invoicers : facturiers du pays, connexion et charge.
+async function listInvoicers(req, res) {
+  try {
+    const countryId = req.country?.id || req.countryId;
+    const invoicers = await billingQueueService.listBillingInvoicers({ countryId });
+    return res.json({ invoicers });
+  } catch (e) {
+    console.error("listInvoicers error:", e);
+    return res.status(500).json({ message: "Impossible de charger les facturiers." });
+  }
+}
+
+const ASSIGN_ERROR_MESSAGES = {
+  INVOICER_NOT_FOUND: "Facturier introuvable ou inactif.",
+  PREORDER_NOT_FOUND: "Précommande introuvable.",
+  PREORDER_NOT_ASSIGNABLE: "Cette précommande n'est plus à facturer : elle ne peut pas être attribuée.",
+  PREORDER_CHANGED: "La précommande vient d'être modifiée. Rechargez la file et réessayez.",
+};
+
+// POST /api/admin/billing/:id/assign { invoicerId } : attribution manuelle
+// par un superviseur (responsable facturation, directeur commercial, admin).
+async function assignToInvoicer(req, res) {
+  try {
+    const countryId = req.country?.id || req.countryId;
+    const invoicerId = String(req.body?.invoicerId || "").trim();
+    if (!invoicerId) return res.status(400).json({ message: "Choisissez un facturier." });
+
+    const result = await billingQueueService.assignPreorderToInvoicerManually({
+      preorderId: req.params.id,
+      invoicerId,
+      countryId,
+      actorAdminId: req.user?.id || null,
+    });
+    if (!result.ok) {
+      return res.status(result.reason === "PREORDER_NOT_FOUND" ? 404 : 409).json({
+        message: ASSIGN_ERROR_MESSAGES[result.reason] || "Attribution impossible.",
+        reason: result.reason,
+      });
+    }
+    return res.json(result);
+  } catch (e) {
+    if (e?.code === "PREORDER_CHANGED") {
+      return res.status(409).json({ message: ASSIGN_ERROR_MESSAGES.PREORDER_CHANGED, reason: e.code });
+    }
+    console.error("assignToInvoicer error:", e);
+    return res.status(500).json({ message: "Attribution impossible." });
+  }
+}
+
 module.exports = {
   claimNext,
   claimSpecific,
+  listInvoicers,
+  assignToInvoicer,
   startWork,
   releaseWork,
   escalateWork,
