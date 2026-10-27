@@ -453,6 +453,78 @@ async function claimSpecificPreorderForInvoicer({ preorderId, userId, countryId 
   );
 }
 
+// Réservation à l'impression de la file : attribue au facturier, dans l'ordre
+// FIFO, les dossiers encore libres correspondant à ses filtres, dans la limite
+// de sa capacité (maxActiveBillingPerInvoicer). Chaque attribution garde la
+// même garde atomique que "Traiter" : deux facturiers qui impriment au même
+// moment ne peuvent pas réserver le même dossier, l'un d'eux passe au suivant.
+async function claimPreordersForPrint({ userId, countryId, filterWhere = {}, orderBy }) {
+  if (!userId) {
+    return {
+      ok: false,
+      reason: "UNAUTHENTICATED_USER",
+    };
+  }
+
+  releaseExpiredAssignments({ countryId }).catch((error) => {
+    console.error("[billingQueue] releaseExpiredAssignments error:", error);
+  });
+  const settings = await getBillingSettings(countryId);
+  const maxActive = settings.maxActiveBillingPerInvoicer;
+  const activeCount = await countActiveAssignments(prisma, { countryId, userId });
+  const capacity = Math.max(0, maxActive - activeCount);
+
+  if (!capacity) {
+    return { ok: true, claimedCount: 0, activeCount, maxActive, reason: "MAX_ACTIVE_REACHED" };
+  }
+
+  // Marge au-delà de la capacité : des candidats peuvent être pris entre-temps.
+  const candidates = await prisma.preorder.findMany({
+    where: {
+      AND: [
+        filterWhere,
+        {
+          countryId,
+          status: "SUBMITTED",
+          assignedInvoicerId: null,
+          billingWorkStatus: { in: BILLING_QUEUE_CLAIMABLE_STATUSES },
+        },
+      ],
+    },
+    orderBy,
+    select: { id: true },
+    take: capacity * 3,
+  });
+
+  let claimedCount = 0;
+  for (const candidate of candidates) {
+    if (claimedCount >= capacity) break;
+    const result = await prisma.$transaction(
+      (tx) =>
+        assignQueuedPreorderToInvoicer({
+          tx,
+          preorderId: candidate.id,
+          countryId,
+          userId,
+          actorAdminId: userId,
+          mode: "PRINT_CLAIM",
+          note: "Précommande réservée à l'impression de la file de facturation",
+          maxActive,
+        }),
+      { timeout: 15000, maxWait: 10000 },
+    );
+    if (result?.ok) claimedCount += 1;
+    else if (result?.reason === "MAX_ACTIVE_REACHED") break;
+  }
+
+  return {
+    ok: true,
+    claimedCount,
+    activeCount: activeCount + claimedCount,
+    maxActive,
+  };
+}
+
 async function startBillingWork({ preorderId, userId, countryId }) {
   const preorder = await prisma.preorder.findFirst({
     where: {
@@ -872,6 +944,7 @@ async function resolveBillingEscalation({ preorderId, userId, countryId, note })
 module.exports = {
   claimNextPreorderForInvoicer,
   claimSpecificPreorderForInvoicer,
+  claimPreordersForPrint,
   autoAssignQueuedPreorder,
   startBillingWork,
   releaseBillingWork,

@@ -23,6 +23,11 @@ router.get(
   requireAnyPermission([Permission.EXPORT_READ, Permission.INVOICE_CREATE]),
   ordersController.getSubmittedOrdersExport,
 );
+router.post(
+  "/submitted-export/claim",
+  requirePermission(Permission.INVOICE_CREATE),
+  ordersController.claimSubmittedOrdersForPrint,
+);
 router.get(
   "/pickup-overdue",
   requirePermission(Permission.PREPARATION_UPDATE),
