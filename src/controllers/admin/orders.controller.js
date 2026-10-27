@@ -23,6 +23,7 @@ const {
 const { normalizePhone, sendSms } = require("../../services/sms.service");
 const { normalizeEmail, sendEmail } = require("../../services/email.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
+const billingQueueService = require("../../services/billingQueue.service");
 const {
   getOverduePickups,
   applyPickupPenalty,
@@ -664,13 +665,14 @@ async function getSubmittedOrdersExport(req, res) {
       ? scopeWhere(req, { preorderNumber: { in: preorderNumbers } })
       : await buildOrdersListWhere(req, { status: "SUBMITTED" });
 
-    // Sans EXPORT_READ (ex. facturier via INVOICE_CREATE) : on ne laisse
-    // jamais imprimer autre chose que sa propre file (non réclamé + ses
-    // dossiers), quels que soient les paramètres passés dans l'URL.
+    // Sans EXPORT_READ (ex. facturier via INVOICE_CREATE) : on n'imprime que
+    // ses propres dossiers, quels que soient les paramètres passés dans l'URL.
+    // Les dossiers libres sont d'abord réservés (claimSubmittedOrdersForPrint) :
+    // deux facturiers ne peuvent plus imprimer la même précommande.
     if (!req.user?.permissions?.includes(Permission.EXPORT_READ)) {
       where.AND = [
         ...(Array.isArray(where.AND) ? where.AND : []),
-        { OR: [{ assignedInvoicerId: null }, { assignedInvoicerId: req.user?.id || "__no_user__" }] },
+        { assignedInvoicerId: req.user?.id || "__no_user__" },
       ];
     }
 
@@ -756,6 +758,29 @@ async function getSubmittedOrdersExport(req, res) {
     return res
       .status(500)
       .json({ message: "Erreur serveur (getSubmittedOrdersExport)" });
+  }
+}
+
+// POST /api/admin/orders/submitted-export/claim (mêmes filtres que l'export) :
+// avant d'imprimer sa file, le facturier se réserve les dossiers libres, dans
+// la limite de sa capacité. Sans effet pour un profil EXPORT_READ, dont
+// l'impression reste un export de consultation.
+async function claimSubmittedOrdersForPrint(req, res) {
+  try {
+    if (req.user?.permissions?.includes(Permission.EXPORT_READ)) {
+      return res.json({ ok: true, claimedCount: 0, skipped: true });
+    }
+    const filterWhere = await buildOrdersListWhere(req, { status: "SUBMITTED" });
+    const result = await billingQueueService.claimPreordersForPrint({
+      userId: req.user?.id,
+      countryId: filterWhere.countryId,
+      filterWhere,
+      orderBy: SUBMITTED_FIFO_ORDER,
+    });
+    return res.json(result);
+  } catch (e) {
+    console.error("claimSubmittedOrdersForPrint error:", e);
+    return res.status(500).json({ message: "Impossible de réserver les dossiers à imprimer." });
   }
 }
 
@@ -4578,6 +4603,7 @@ module.exports = {
   listOrders,
   exportOrders,
   getSubmittedOrdersExport,
+  claimSubmittedOrdersForPrint,
   getOrderById,
   listOrderMessages,
   downloadBankProofFile,
