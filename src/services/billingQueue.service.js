@@ -1202,6 +1202,7 @@ module.exports = {
   startBillingDispatchScheduler,
   assignPreorderToInvoicerManually,
   listBillingInvoicers,
+  getBillingSettings,
   autoAssignQueuedPreorder,
   BILLING_AUTO_DISPATCH_ROLES,
   BILLING_SUPERVISOR_ROLES,

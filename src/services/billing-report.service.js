@@ -5,6 +5,7 @@
 // CashierTransaction.cashierId, preparationLaunchedById, PreorderLog) : aucune
 // donnée propre au bilan n'est stockée.
 
+const { Prisma } = require("@prisma/client");
 const prisma = require("../prisma");
 
 const MAX_DAYS = 92;
@@ -203,4 +204,161 @@ async function buildInvoicerReport({ countryId, userId, from, to }) {
   };
 }
 
-module.exports = { buildInvoicerReport, parseReportPeriod };
+// Supervision : une ligne par facturier du pays (facturiers caissiers et
+// facturiers), mêmes indicateurs que buildInvoicerReport mais agrégés en
+// quelques requêtes groupées, plus l'état de la file et la dernière activité.
+async function buildSupervisionReport({ countryId, from, to, connectedUserIds = [], maxActive }) {
+  const period = parseReportPeriod({ from, to });
+  const { start, end } = period;
+
+  const invoicers = await prisma.adminUser.findMany({
+    where: { countryId, actif: true, role: { in: ["FACTURIER_CAISSIER", "INVOICER"] } },
+    select: { id: true, fullName: true, email: true, role: true, lastLoginAt: true },
+    orderBy: [{ fullName: "asc" }, { email: "asc" }],
+  });
+  const ids = invoicers.map((admin) => admin.id);
+  if (!ids.length) {
+    return { period: { from: period.from, to: period.to }, invoicers: [], queue: await loadQueueState(countryId) };
+  }
+
+  const amount = Prisma.sql`COALESCE(p."as400InvoiceTotalFcfa", p."totalFcfa", 0)`;
+  const [received, invoiced, paid, counter, launched, cancelled, toInvoice, waiting, lastLog, lastCounter, queue] =
+    await Promise.all([
+      prisma.$queryRaw`
+        SELECT l.meta->>'assignedInvoicerId' AS id, COUNT(DISTINCT l."preorderId")::int AS count
+        FROM "PreorderLog" l JOIN "Preorder" p ON p.id = l."preorderId"
+        WHERE p."countryId" = ${countryId} AND l.action = 'ASSIGN_INVOICER'
+          AND l."createdAt" BETWEEN ${start} AND ${end}
+          AND l.meta->>'assignedInvoicerId' IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      prisma.$queryRaw`
+        SELECT p."invoicedById" AS id, COUNT(*)::int AS count, SUM(${amount})::bigint AS amount
+        FROM "Preorder" p
+        WHERE p."countryId" = ${countryId} AND p."invoicedAt" BETWEEN ${start} AND ${end}
+          AND p."invoicedById" IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      // Payées : attribuées au facturier du dossier, sinon à celui qui a facturé.
+      prisma.$queryRaw`
+        SELECT COALESCE(p."assignedInvoicerId", p."invoicedById") AS id, COUNT(*)::int AS count, SUM(${amount})::bigint AS amount
+        FROM "Preorder" p
+        WHERE p."countryId" = ${countryId} AND p."paymentStatus" = 'PAID' AND p."paidAt" BETWEEN ${start} AND ${end}
+          AND COALESCE(p."assignedInvoicerId", p."invoicedById") IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      prisma.$queryRaw`
+        SELECT t."cashierId" AS id, COUNT(*)::int AS count,
+          SUM(COALESCE(t."amountReceivedFcfa", t."amountExpectedFcfa", 0))::bigint AS amount
+        FROM "CashierTransaction" t JOIN "Preorder" p ON p.id = t."preorderId"
+        WHERE p."countryId" = ${countryId} AND t."createdAt" BETWEEN ${start} AND ${end}
+          AND t."cashierId" IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      prisma.$queryRaw`
+        SELECT p."preparationLaunchedById" AS id, COUNT(*)::int AS count
+        FROM "Preorder" p
+        WHERE p."countryId" = ${countryId} AND p."preparationLaunchedAt" BETWEEN ${start} AND ${end}
+          AND p."preparationLaunchedById" IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      prisma.$queryRaw`
+        SELECT p."invoicedById" AS id, COUNT(*)::int AS count,
+          COUNT(*) FILTER (WHERE p."cancelledById" IS NULL)::int AS expired
+        FROM "Preorder" p
+        WHERE p."countryId" = ${countryId} AND p.status = 'CANCELLED' AND p."cancelledAt" BETWEEN ${start} AND ${end}
+          AND p."invoicedById" IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      prisma.$queryRaw`
+        SELECT p."assignedInvoicerId" AS id, COUNT(*)::int AS count
+        FROM "Preorder" p
+        WHERE p."countryId" = ${countryId} AND p.status = 'SUBMITTED'
+          AND p."billingWorkStatus" IN ('ASSIGNED', 'IN_PROGRESS', 'WAITING_CUSTOMER_DATA')
+          AND p."assignedInvoicerId" IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      prisma.$queryRaw`
+        SELECT COALESCE(p."assignedInvoicerId", p."invoicedById") AS id, COUNT(*)::int AS count, SUM(${amount})::bigint AS amount
+        FROM "Preorder" p
+        WHERE p."countryId" = ${countryId} AND p.status IN ('INVOICED', 'PAYMENT_PENDING')
+          AND COALESCE(p."assignedInvoicerId", p."invoicedById") IN (${Prisma.join(ids)})
+        GROUP BY 1`,
+      // Dernière action tracée (facturation, encaissement, préparation…).
+      prisma.$queryRaw`
+        SELECT l."actorAdminId" AS id, MAX(l."createdAt") AS at
+        FROM "PreorderLog" l
+        WHERE l."actorAdminId" IN (${Prisma.join(ids)}) AND l."createdAt" > NOW() - INTERVAL '31 days'
+        GROUP BY 1`,
+      prisma.$queryRaw`
+        SELECT t."cashierId" AS id, MAX(t."createdAt") AS at
+        FROM "CashierTransaction" t
+        WHERE t."cashierId" IN (${Prisma.join(ids)}) AND t."createdAt" > NOW() - INTERVAL '31 days'
+        GROUP BY 1`,
+      loadQueueState(countryId),
+    ]);
+
+  const byId = (rows) => new Map(rows.map((row) => [row.id, row]));
+  const maps = {
+    received: byId(received),
+    invoiced: byId(invoiced),
+    paid: byId(paid),
+    counter: byId(counter),
+    launched: byId(launched),
+    cancelled: byId(cancelled),
+    toInvoice: byId(toInvoice),
+    waiting: byId(waiting),
+    lastLog: byId(lastLog),
+    lastCounter: byId(lastCounter),
+  };
+  const connected = new Set(connectedUserIds.map(String));
+  const n = (value) => Number(value || 0);
+
+  const rows = invoicers.map((admin) => {
+    const pick = (key) => maps[key].get(admin.id) || {};
+    const activity = [pick("lastLog").at, pick("lastCounter").at].filter(Boolean).map((d) => new Date(d));
+    return {
+      ...admin,
+      connected: connected.has(admin.id),
+      autoDispatch: admin.role === "FACTURIER_CAISSIER",
+      lastActivityAt: activity.length ? new Date(Math.max(...activity)).toISOString() : null,
+      load: n(pick("toInvoice").count),
+      maxActive,
+      waitingPayment: { count: n(pick("waiting").count), amountFcfa: n(pick("waiting").amount) },
+      received: n(pick("received").count),
+      invoiced: { count: n(pick("invoiced").count), amountFcfa: n(pick("invoiced").amount) },
+      paid: { count: n(pick("paid").count), amountFcfa: n(pick("paid").amount) },
+      counter: { count: n(pick("counter").count), amountFcfa: n(pick("counter").amount) },
+      preparationLaunched: n(pick("launched").count),
+      cancelled: { count: n(pick("cancelled").count), expiredCount: n(pick("cancelled").expired) },
+    };
+  });
+
+  const total = (pickValue) => rows.reduce((sum, row) => sum + pickValue(row), 0);
+  return {
+    period: { from: period.from, to: period.to },
+    queue,
+    totals: {
+      connected: rows.filter((row) => row.connected).length,
+      load: total((row) => row.load),
+      waitingPayment: total((row) => row.waitingPayment.count),
+      invoiced: { count: total((row) => row.invoiced.count), amountFcfa: total((row) => row.invoiced.amountFcfa) },
+      paid: { count: total((row) => row.paid.count), amountFcfa: total((row) => row.paid.amountFcfa) },
+      counter: { count: total((row) => row.counter.count), amountFcfa: total((row) => row.counter.amountFcfa) },
+      preparationLaunched: total((row) => row.preparationLaunched),
+      cancelled: total((row) => row.cancelled.count),
+    },
+    invoicers: rows,
+  };
+}
+
+// File de facturation : dossiers en attente d'attribution et urgences.
+async function loadQueueState(countryId) {
+  const [waiting, oldest, escalated] = await Promise.all([
+    prisma.preorder.count({
+      where: { countryId, status: "SUBMITTED", assignedInvoicerId: null, billingWorkStatus: { in: ["QUEUED", "RELEASED"] } },
+    }),
+    prisma.preorder.findFirst({
+      where: { countryId, status: "SUBMITTED", assignedInvoicerId: null, billingWorkStatus: { in: ["QUEUED", "RELEASED"] } },
+      orderBy: { submittedAt: "asc" },
+      select: { submittedAt: true },
+    }),
+    prisma.preorder.count({ where: { countryId, billingWorkStatus: "ESCALATED", status: { not: "CANCELLED" } } }),
+  ]);
+  return { unassigned: waiting, oldestSubmittedAt: oldest?.submittedAt || null, escalated };
+}
+
+module.exports = { buildInvoicerReport, buildSupervisionReport, parseReportPeriod };
