@@ -130,6 +130,14 @@ function subscribeRealtimeEvents({ req, res }) {
   listeners.set(listenerId, listener);
   stats.connectedTotal += 1;
   if (listener.userId) cancelPendingDisconnectRelease(listener.userId);
+  // Un facturier caissier qui se connecte reçoit aussitôt ses dossiers
+  // (require tardif : dépendance circulaire, voir plus haut).
+  if (listener.countryId && req.user?.role === "FACTURIER_CAISSIER") {
+    const { dispatchBillingQueue } = require("./billingQueue.service");
+    dispatchBillingQueue({ countryId: listener.countryId }).catch((error) => {
+      console.error("[realtime] dispatch on connect error:", error);
+    });
+  }
 
   sendSse(
     res,

@@ -29,12 +29,15 @@ const {
 const {
   claimNext,
   claimSpecific,
+  listInvoicers,
+  assignToInvoicer,
   startWork,
   releaseWork,
   escalateWork,
   resolveAs400CertificationDispute,
   resolveEscalation,
 } = require("../controllers/billingQueue.controller");
+const { BILLING_SUPERVISOR_ROLES } = require("../services/billingQueue.service");
 
 const ordersController = require("../controllers/admin/orders.controller");
 const ordersRoutes = require("./admin/orders.routes");
@@ -107,6 +110,11 @@ router.patch(
   requirePermission(Permission.PREORDER_UPDATE_STATUS),
   ordersController.updateOrderStatus,
 );
+
+// Supervision de la facturation : liste des facturiers (connexion, charge)
+// et attribution manuelle d'un dossier à un facturier précis.
+router.get("/billing/invoicers", requireRole(BILLING_SUPERVISOR_ROLES), listInvoicers);
+router.post("/billing/:id/assign", requireRole(BILLING_SUPERVISOR_ROLES), assignToInvoicer);
 
 router.post(
   "/billing/claim-next",

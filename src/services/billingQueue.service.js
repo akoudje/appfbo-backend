@@ -12,11 +12,16 @@ const BILLING_ACTIVE_STATUSES = [
   "WAITING_CUSTOMER_DATA",
   "WAITING_PAYMENT",
 ];
-// Charge d'un facturier : seules les commandes encore vivantes comptent. Une
+// Charge d'un facturier : ses dossiers encore à facturer. Une commande
+// facturée en attente de paiement dépend du client, plus du facturier ; une
 // commande annulée ou payée peut garder un billingWorkStatus actif (jamais
-// remis à zéro) : sans ce filtre, ces dossiers fantômes réduisent sa capacité
-// et faussent la répartition (prise en charge, impression de la file).
-const BILLING_LOAD_ORDER_STATUSES = ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"];
+// remis à zéro) : ni l'une ni l'autre ne doit réduire sa capacité.
+const BILLING_LOAD_ORDER_STATUSES = ["SUBMITTED"];
+// Rôles servis par la répartition automatique : ils ne se servent plus dans
+// la file, l'application leur attribue les dossiers (dispatchBillingQueue).
+const BILLING_AUTO_DISPATCH_ROLES = ["FACTURIER_CAISSIER"];
+// Rôles qui supervisent la facturation et attribuent les dossiers à la main.
+const BILLING_SUPERVISOR_ROLES = ["BILLING_MANAGER", "SALES_DIRECTOR", "SUPER_ADMIN", "TECH_ADMIN"];
 const AS400_CERTIFICATION_MISSING_TYPE = "AS400_CERTIFICATION_MISSING";
 const AS400_CERTIFICATION_OPEN_STATUSES = ["OPEN", "REPORTED"];
 const BILLING_CONNECTED_ELIGIBLE_ROLES = Object.entries(ROLE_PERMISSIONS)
@@ -279,11 +284,15 @@ async function releaseExpiredAssignments({ countryId }) {
   const timeoutMin = settings.billingClaimTimeoutMin;
   const cutoff = new Date(Date.now() - timeoutMin * 60 * 1000);
   const now = new Date();
+  // Dossiers attribués d'office à un facturier caissier encore connecté : ils
+  // attendent leur tour dans sa liste, pas d'expiration (sa déconnexion, elle,
+  // les remet dans la file : releaseActiveBillingWorkForDisconnectedUser).
+  const connectedDispatchIds = (await loadConnectedAutoDispatchInvoicers(countryId)).map((admin) => admin.id);
 
   const expired = await prisma.preorder.findMany({
     where: {
       countryId,
-      assignedInvoicerId: { not: null },
+      assignedInvoicerId: { not: null, notIn: connectedDispatchIds },
       billingWorkStatus: { in: ["ASSIGNED", "IN_PROGRESS"] },
       billingLastActivityAt: { lt: cutoff },
       status: "SUBMITTED",
@@ -334,6 +343,243 @@ async function releaseExpiredAssignments({ countryId }) {
   });
 
   return { releasedCount: expired.length };
+}
+
+async function loadConnectedAutoDispatchInvoicers(countryId) {
+  const connectedUserIds = normalizeIdList(getConnectedRealtimeUserIds({ countryId }));
+  if (!connectedUserIds.length) return [];
+  return prisma.adminUser.findMany({
+    where: {
+      id: { in: connectedUserIds },
+      actif: true,
+      countryId,
+      role: { in: BILLING_AUTO_DISPATCH_ROLES },
+    },
+    select: { id: true, fullName: true, email: true },
+  });
+}
+
+async function loadBillingLoads(countryId, userIds) {
+  if (!userIds.length) return new Map();
+  const loads = await prisma.preorder.groupBy({
+    by: ["assignedInvoicerId"],
+    where: {
+      countryId,
+      assignedInvoicerId: { in: userIds },
+      status: { in: BILLING_LOAD_ORDER_STATUSES },
+      billingWorkStatus: { in: BILLING_ACTIVE_STATUSES },
+    },
+    _count: { _all: true },
+  });
+  return new Map(loads.map((item) => [String(item.assignedInvoicerId), Number(item._count?._all || 0)]));
+}
+
+// Répartition automatique : chaque facturier caissier connecté est complété
+// jusqu'à sa charge maximale, le moins chargé d'abord, dossier par dossier
+// dans l'ordre de la file (priorité, puis ancienneté). Le surplus reste en
+// file et part au prochain passage (soumission, connexion, minuterie).
+const dispatchState = new Map();
+
+async function dispatchBillingQueue({ countryId }) {
+  if (!countryId) return { assignedCount: 0 };
+  // Un seul passage à la fois par pays ; une demande pendant un passage en
+  // relance un juste après (une soumission ne doit pas attendre la minuterie).
+  const state = dispatchState.get(countryId) || { running: false, again: false };
+  dispatchState.set(countryId, state);
+  if (state.running) {
+    state.again = true;
+    return { assignedCount: 0, deferred: true };
+  }
+  state.running = true;
+  let assignedCount = 0;
+  try {
+    do {
+      state.again = false;
+      assignedCount += await dispatchOnce(countryId);
+    } while (state.again);
+  } finally {
+    state.running = false;
+  }
+  return { assignedCount };
+}
+
+async function dispatchOnce(countryId) {
+  const invoicers = await loadConnectedAutoDispatchInvoicers(countryId);
+  if (!invoicers.length) return 0;
+
+  const { maxActiveBillingPerInvoicer: maxActive } = await getBillingSettings(countryId);
+  const loadMap = await loadBillingLoads(countryId, invoicers.map((admin) => admin.id));
+  const pool = invoicers.map((admin) => ({ ...admin, load: loadMap.get(admin.id) || 0 }));
+  const freeSlots = pool.reduce((sum, admin) => sum + Math.max(0, maxActive - admin.load), 0);
+  if (!freeSlots) return 0;
+
+  const candidates = await prisma.preorder.findMany({
+    where: {
+      countryId,
+      status: "SUBMITTED",
+      assignedInvoicerId: null,
+      billingWorkStatus: { in: BILLING_QUEUE_CLAIMABLE_STATUSES },
+    },
+    orderBy: [
+      { billingPriority: "desc" },
+      { submittedAt: { sort: "asc", nulls: "last" } },
+      { createdAt: "asc" },
+    ],
+    select: { id: true, billingWorkStatus: true },
+    take: freeSlots,
+  });
+
+  // Dossier remis en file par un facturier (libération, déconnexion, expiration) :
+  // on évite de le lui rendre aussitôt si un autre facturier a de la place.
+  const releasedIds = candidates.filter((c) => c.billingWorkStatus === "RELEASED").map((c) => c.id);
+  const previousInvoicer = new Map();
+  if (releasedIds.length) {
+    const logs = await prisma.preorderLog.findMany({
+      where: { preorderId: { in: releasedIds }, action: "RELEASE_INVOICER" },
+      orderBy: { createdAt: "desc" },
+      select: { preorderId: true, meta: true },
+    });
+    for (const log of logs) {
+      if (!previousInvoicer.has(log.preorderId)) {
+        previousInvoicer.set(log.preorderId, log.meta?.previousAssignedInvoicerId || null);
+      }
+    }
+  }
+
+  let assigned = 0;
+  for (const candidate of candidates) {
+    const available = pool
+      .filter((admin) => admin.load < maxActive)
+      .sort((a, b) => a.load - b.load || String(a.fullName || a.email).localeCompare(String(b.fullName || b.email)));
+    const previous = previousInvoicer.get(candidate.id);
+    const target = available.find((admin) => admin.id !== previous) || available[0];
+    if (!target) break;
+
+    const result = await prisma.$transaction(
+      (tx) =>
+        assignQueuedPreorderToInvoicer({
+          tx,
+          preorderId: candidate.id,
+          countryId,
+          userId: target.id,
+          actorAdminId: null,
+          mode: "AUTO_DISPATCH",
+          note: "Précommande attribuée automatiquement (répartition entre facturiers caissiers connectés)",
+          maxActive,
+        }),
+      { timeout: 15000, maxWait: 10000 },
+    );
+    if (result?.ok) {
+      target.load += 1;
+      assigned += 1;
+    } else if (result?.reason === "MAX_ACTIVE_REACHED") {
+      target.load = maxActive;
+    }
+  }
+  return assigned;
+}
+
+// Passage périodique, pour chaque pays où un facturier caissier est connecté :
+// rattrape les dossiers remis en file (expiration, déconnexion, libération)
+// et les places libérées par les dossiers facturés.
+function startBillingDispatchScheduler({ intervalMs = 30000 } = {}) {
+  const tick = async () => {
+    try {
+      const connectedUserIds = normalizeIdList(getConnectedRealtimeUserIds());
+      if (!connectedUserIds.length) return;
+      const admins = await prisma.adminUser.findMany({
+        where: { id: { in: connectedUserIds }, actif: true, role: { in: BILLING_AUTO_DISPATCH_ROLES } },
+        select: { countryId: true },
+      });
+      const countryIds = [...new Set(admins.map((admin) => admin.countryId).filter(Boolean))];
+      for (const countryId of countryIds) {
+        await releaseExpiredAssignments({ countryId });
+        await dispatchBillingQueue({ countryId });
+      }
+    } catch (error) {
+      console.error("[billingQueue] dispatch scheduler error:", error);
+    }
+  };
+  const timer = setInterval(tick, intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  return timer;
+}
+
+// Attribution manuelle par un superviseur : à un facturier précis, qu'il soit
+// libre ou déjà attribué à un autre, sans plafond de charge.
+async function assignPreorderToInvoicerManually({ preorderId, invoicerId, countryId, actorAdminId }) {
+  const invoicer = await prisma.adminUser.findFirst({
+    where: { id: invoicerId, countryId, actif: true, role: { in: BILLING_CONNECTED_ELIGIBLE_ROLES } },
+    select: { id: true, fullName: true, email: true },
+  });
+  if (!invoicer) return { ok: false, reason: "INVOICER_NOT_FOUND" };
+
+  const preorder = await prisma.preorder.findFirst({
+    where: { id: preorderId, countryId },
+    select: { id: true, status: true, billingWorkStatus: true, assignedInvoicerId: true },
+  });
+  if (!preorder) return { ok: false, reason: "PREORDER_NOT_FOUND" };
+  if (preorder.status !== "SUBMITTED" || !["QUEUED", "RELEASED", "ASSIGNED", "IN_PROGRESS", "WAITING_CUSTOMER_DATA"].includes(preorder.billingWorkStatus)) {
+    return { ok: false, reason: "PREORDER_NOT_ASSIGNABLE" };
+  }
+  if (preorder.assignedInvoicerId === invoicer.id) return { ok: true, unchanged: true };
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    const updated = await tx.preorder.updateMany({
+      where: {
+        id: preorder.id,
+        status: "SUBMITTED",
+        assignedInvoicerId: preorder.assignedInvoicerId,
+        billingWorkStatus: preorder.billingWorkStatus,
+      },
+      data: {
+        assignedInvoicerId: invoicer.id,
+        assignedAt: now,
+        billingWorkStatus: "ASSIGNED",
+        billingLastActivityAt: now,
+      },
+    });
+    if (updated.count !== 1) {
+      const error = new Error("PREORDER_CHANGED");
+      error.code = "PREORDER_CHANGED";
+      throw error;
+    }
+    await tx.preorderLog.create({
+      data: {
+        preorderId: preorder.id,
+        action: "ASSIGN_INVOICER",
+        note: `Précommande attribuée manuellement à ${invoicer.fullName || invoicer.email}`,
+        actorAdminId,
+        meta: {
+          assignedInvoicerId: invoicer.id,
+          previousAssignedInvoicerId: preorder.assignedInvoicerId || null,
+          mode: "MANUAL_ASSIGN",
+        },
+      },
+    });
+  });
+  return { ok: true };
+}
+
+// Facturiers du pays (pour l'attribution manuelle et la supervision) :
+// connexion, charge à facturer et charge maximale.
+async function listBillingInvoicers({ countryId }) {
+  const admins = await prisma.adminUser.findMany({
+    where: { countryId, actif: true, role: { in: ["FACTURIER_CAISSIER", "INVOICER"] } },
+    select: { id: true, fullName: true, email: true, role: true, lastLoginAt: true },
+    orderBy: [{ fullName: "asc" }, { email: "asc" }],
+  });
+  const connected = new Set(normalizeIdList(getConnectedRealtimeUserIds({ countryId })));
+  const loadMap = await loadBillingLoads(countryId, admins.map((admin) => admin.id));
+  const { maxActiveBillingPerInvoicer } = await getBillingSettings(countryId);
+  return admins.map((admin) => ({
+    ...admin,
+    connected: connected.has(admin.id),
+    autoDispatch: BILLING_AUTO_DISPATCH_ROLES.includes(admin.role),
+    load: loadMap.get(admin.id) || 0,
+    maxActive: maxActiveBillingPerInvoicer,
+  }));
 }
 
 async function claimNextPreorderForInvoicer({ userId, countryId }) {
@@ -952,7 +1198,13 @@ module.exports = {
   claimNextPreorderForInvoicer,
   claimSpecificPreorderForInvoicer,
   claimPreordersForPrint,
+  dispatchBillingQueue,
+  startBillingDispatchScheduler,
+  assignPreorderToInvoicerManually,
+  listBillingInvoicers,
   autoAssignQueuedPreorder,
+  BILLING_AUTO_DISPATCH_ROLES,
+  BILLING_SUPERVISOR_ROLES,
   startBillingWork,
   releaseBillingWork,
   releaseActiveBillingWorkForDisconnectedUser,

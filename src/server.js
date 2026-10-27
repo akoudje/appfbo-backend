@@ -43,6 +43,7 @@ const {
 } = require("./services/notification-dispatch.service");
 const { startSponsorshipScheduler } = require("./services/sponsorship.service");
 const { startTicketEventAutoCloseScheduler } = require("./services/ticket-event-closure.service");
+const { startBillingDispatchScheduler } = require("./services/billingQueue.service");
 
 
 const app = express();
@@ -303,5 +304,6 @@ startExpiredInvoiceAutoCancelScheduler();
 startPickupOverdueScheduler();
 startDraftRetentionScheduler();
 startNotificationDispatchScheduler();
+startBillingDispatchScheduler();
 startSponsorshipScheduler();
 startTicketEventAutoCloseScheduler();
