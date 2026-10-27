@@ -32,6 +32,7 @@ const {
   listInvoicers,
   assignToInvoicer,
   getReport,
+  getSupervision,
   startWork,
   releaseWork,
   escalateWork,
@@ -118,6 +119,7 @@ router.get("/billing/invoicers", requireRole(BILLING_SUPERVISOR_ROLES), listInvo
 router.post("/billing/:id/assign", requireRole(BILLING_SUPERVISOR_ROLES), assignToInvoicer);
 // Bilan d'activité (« Mon bilan ») ; un superviseur peut viser un facturier.
 router.get("/billing/report", requirePermission(Permission.INVOICE_CREATE), getReport);
+router.get("/billing/supervision", requireRole(BILLING_SUPERVISOR_ROLES), getSupervision);
 
 router.post(
   "/billing/claim-next",

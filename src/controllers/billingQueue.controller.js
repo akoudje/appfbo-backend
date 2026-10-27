@@ -2,8 +2,8 @@
 // Contrôleur pour gérer la file de précommandes à facturer
 
 const billingQueueService = require("../services/billingQueue.service");
-const { publishRealtimeEvent } = require("../services/realtime-events.service");
-const { buildInvoicerReport } = require("../services/billing-report.service");
+const { publishRealtimeEvent, getConnectedRealtimeUserIds } = require("../services/realtime-events.service");
+const { buildInvoicerReport, buildSupervisionReport } = require("../services/billing-report.service");
 
 // Facturier caissier : les dossiers lui sont attribués par la répartition
 // automatique (dispatchBillingQueue), il ne se sert pas dans la file.
@@ -313,10 +313,32 @@ async function getReport(req, res) {
   }
 }
 
+// GET /api/admin/billing/supervision?from&to : tableau du responsable, une
+// ligne par facturier (connexion, charge, dernière activité, bilan).
+async function getSupervision(req, res) {
+  try {
+    const countryId = req.country?.id || req.countryId;
+    const { maxActiveBillingPerInvoicer } = await billingQueueService.getBillingSettings(countryId);
+    const report = await buildSupervisionReport({
+      countryId,
+      from: req.query.from,
+      to: req.query.to,
+      connectedUserIds: getConnectedRealtimeUserIds({ countryId }),
+      maxActive: maxActiveBillingPerInvoicer,
+    });
+    return res.json({ ok: true, ...report });
+  } catch (e) {
+    if (e.statusCode === 400) return res.status(400).json({ message: e.message });
+    console.error("getSupervision error:", e);
+    return res.status(500).json({ message: "Impossible de charger la supervision." });
+  }
+}
+
 module.exports = {
   claimNext,
   claimSpecific,
   getReport,
+  getSupervision,
   listInvoicers,
   assignToInvoicer,
   startWork,
