@@ -348,6 +348,28 @@ function buildShortBankProofUploadUrl(
   return `${publicBaseUrl}/payment/b/${encodeURIComponent(token)}`;
 }
 
+// Lien d'action client d'une commande préfacturée, recalculé à partir de la
+// commande (le lien est signé, donc stable) : paiement Wave, ou dépôt de preuve
+// pour virement / Ecobank Pay / PI-SPI ; null pour un règlement en caisse.
+// Sert aux renvois et rappels quand aucun message précédent ne porte le lien
+// (ex. achat de parrainage, notifié avec l'approbation et non par la facture).
+function buildPreorderActionLink(preorder, countryCode = "CIV") {
+  if (!preorder?.id || !preorder?.paymentCollectionCode) return null;
+  const mode = String(
+    preorder.preorderPaymentMode || preorder.paymentMode || preorder.paymentProvider || "",
+  )
+    .trim()
+    .toUpperCase();
+  const code = preorder.country?.code || countryCode || "CIV";
+  if (mode.includes("WAVE") || mode.includes("MOBILE") || mode.includes("MOMO")) {
+    return buildShortWavePaymentUrl(preorder.id, code, preorder.paymentCollectionCode);
+  }
+  if (["BANK", "ECOBANK", "SPI", "VIREMENT"].some((key) => mode.includes(key))) {
+    return buildShortBankProofUploadUrl(preorder.id, code, preorder.paymentCollectionCode);
+  }
+  return null;
+}
+
 async function resolveShortWavePaymentLink(token) {
   const normalizedToken = String(token || "").trim();
   const match = normalizedToken.match(
@@ -2862,6 +2884,7 @@ async function listPaymentTransactionLogs({ req, preorderId, take = 200 }) {
 }
 
 module.exports = {
+  buildPreorderActionLink,
   buildPublicBankProofUploadUrl,
   buildShortBankProofUploadUrl,
   buildPublicWavePaymentUrl,

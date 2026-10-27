@@ -4,7 +4,8 @@
 //   préfacturée, montant et lien de paiement ; l'email joint la fiche
 //   d'agrément cachetée ;
 // - validation : achat payé, lien parrain-filleul enregistré.
-// Un échec d'envoi n'interrompt jamais le parcours (journalisé).
+// Un échec d'envoi n'interrompt jamais le parcours (journalisé). L'admin peut
+// renvoyer la notification du statut en cours (resendSponsorshipNotification).
 
 const prisma = require("../prisma");
 const { sendEmail } = require("./email.service");
@@ -71,11 +72,23 @@ async function safeEmail(args, context) {
   }
 }
 
+// Texte SMS dans l'alphabet GSM : un seul caractère hors alphabet (espace fine
+// des montants « 98 485 F », « ° », « ê », apostrophe typographique) fait passer
+// tout le SMS en Unicode, limité à 70 caractères par fragment.
+function gsmText(text) {
+  return String(text || "")
+    .replace(/[  ]/g, " ")
+    .replace(/[‘’]/g, "'")
+    .replace(/°/g, "o")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+}
+
 async function safeSms({ to, message, countryCode }) {
   if (!to) return { channel: "SMS", to: null, ok: false, skipped: true };
   try {
     const { sendSms } = require("./sms.service");
-    const result = await sendSms({ to, message, countryCode });
+    const result = await sendSms({ to, message: gsmText(message), countryCode });
     return { channel: "SMS", to, ok: Boolean(result?.accepted), error: result?.accepted ? undefined : result?.errorMessage || result?.errorCode };
   } catch (error) {
     console.error("[sponsorship] SMS non envoyé", { to, error: error?.message || String(error) });
@@ -83,11 +96,28 @@ async function safeSms({ to, message, countryCode }) {
   }
 }
 
+// Envoi des messages préparés ({ who, channel, send }) : les SMS l'un après
+// l'autre (deux SMS partis au même instant échouaient souvent chez Orange,
+// SVC0001), les emails en parallèle. `channels` restreint les canaux (renvoi).
+async function dispatch(messages, channels = null) {
+  const selected = channels ? messages.filter((m) => channels.includes(m.channel)) : messages;
+  const results = new Array(selected.length);
+  const emails = Promise.all(
+    selected.map(async (m, i) => {
+      if (m.channel === "EMAIL") results[i] = { ...(await m.send()), who: m.who };
+    }),
+  );
+  for (const [i, m] of selected.entries()) {
+    if (m.channel !== "EMAIL") results[i] = { ...(await m.send()), who: m.who };
+  }
+  await emails;
+  return results;
+}
+
 // Résumé lisible des envois pour l'historique du parrainage.
 function summarizeResults(results) {
-  const who = { 0: "filleul", 1: "parrain", 2: "filleul", 3: "parrain" };
   return results
-    .map((r, i) => `${r.channel === "SMS" ? "SMS" : "email"} ${who[i]} : ${r.skipped ? "pas de destinataire" : r.ok ? "envoyé" : `échec${r.error ? ` (${r.error})` : ""}`}`)
+    .map((r) => `${r.channel === "SMS" ? "SMS" : "email"} ${r.who} : ${r.skipped ? "pas de destinataire" : r.ok ? "envoyé" : `échec${r.error ? ` (${r.error})` : ""}`}`)
     .join(" · ");
 }
 
@@ -102,10 +132,16 @@ async function approverName(approvedById) {
   return admin?.fullName || admin?.email || "";
 }
 
+// Note d'historique : « Renvoi … par X » pour un renvoi depuis l'admin.
+function logNote(label, results, resentBy) {
+  return `${resentBy ? `Renvoi de la notification ${label} par ${resentBy}` : `Notification ${label}`} : ${summarizeResults(results)}.`;
+}
+
 // Approbation + achat préfacturé : un seul message, aux deux.
 // order : { preorderNumber, amountToPayFcfa, paymentMode }, paymentLink : lien
 // Wave / dépôt de preuve, ou null (paiement en caisse).
-async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink }) {
+// channels (optionnel) : ["SMS", "EMAIL"] ; resentBy : auteur d'un renvoi.
+async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink, channels = null, resentBy = null, actorAdminId = null }) {
   const s = await prisma.sponsorship.findUnique({ where: { id: sponsorshipId } });
   if (!s) return [];
   const { countryCode, countryName } = await countryInfo(s.countryId);
@@ -114,15 +150,18 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink }) 
   const paymentLabel = PAYMENT_LABELS[String(order.paymentMode || "").toUpperCase()] || order.paymentMode || "";
   const pay = paymentLink ? `a payer: ${paymentLink}` : "a regler en caisse.";
 
-  const pdf = await buildSponsorshipAgreementPdfBuffer({
-    sponsorship: s,
-    approverName: await approverName(s.approvedById),
-    countryName: countryName || "Côte d'Ivoire",
-    countryCode,
-  }).catch((error) => {
-    console.error("[sponsorship] fiche PDF non générée", { id: s.id, error: error?.message });
-    return null;
-  });
+  const withEmail = !channels || channels.includes("EMAIL");
+  const pdf = withEmail
+    ? await buildSponsorshipAgreementPdfBuffer({
+        sponsorship: s,
+        approverName: await approverName(s.approvedById),
+        countryName: countryName || "Côte d'Ivoire",
+        countryCode,
+      }).catch((error) => {
+        console.error("[sponsorship] fiche PDF non générée", { id: s.id, error: error?.message });
+        return null;
+      })
+    : null;
   const attachments = pdf ? [{ filename: `agrement-${s.recruitFboNumero}.pdf`, content: pdf }] : [];
 
   const rows = [
@@ -133,31 +172,42 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink }) 
   ];
   const cta = paymentLink ? { label: "Payer la commande", href: paymentLink } : null;
   const finalNote = "Le parrainage sera validé dès le paiement de cette commande.";
+  const sponsorPhone = s.sponsorPhone || (await findSponsorPhone(s));
 
-  const results = await Promise.all([
-    safeSms({
-      to: s.mobile,
-      countryCode,
-      message: fitSms([
-        `FOREVER: bienvenue ${s.firstNames}! Votre n° FBO: ${s.recruitFboNumero}. Commande ${order.preorderNumber} ${amount} ${pay}`,
-        `FOREVER: bienvenue! N° FBO ${s.recruitFboNumero}. Cde ${order.preorderNumber} ${amount} ${pay}`,
-        `FOREVER: FBO ${s.recruitFboNumero}. ${amount} ${pay}`,
-      ]),
-    }),
-    safeSms({
-      to: s.sponsorPhone || (await findSponsorPhone(s)),
-      countryCode,
-      message: fitSms([
-        `FOREVER: parrainage de ${recruitName} approuve (FBO ${s.recruitFboNumero}). Cde ${order.preorderNumber} ${amount} ${pay}`,
-        `FOREVER: parrainage approuve, FBO ${s.recruitFboNumero}. Cde ${order.preorderNumber} ${amount} ${pay}`,
-        `FOREVER: FBO ${s.recruitFboNumero} approuve. ${amount} ${pay}`,
-      ]),
-    }),
-    safeEmail(
+  const results = await dispatch(
+    [
       {
-        to: s.email,
-        subject: `Bienvenue chez Forever : votre n° FBO ${s.recruitFboNumero}`,
-        ...(() => {
+        who: "filleul",
+        channel: "SMS",
+        send: () =>
+          safeSms({
+            to: s.mobile,
+            countryCode,
+            message: fitSms([
+              `FOREVER: bienvenue ${s.firstNames}! Votre n° FBO: ${s.recruitFboNumero}. Commande ${order.preorderNumber} ${amount} ${pay}`,
+              `FOREVER: bienvenue! N° FBO ${s.recruitFboNumero}. Cde ${order.preorderNumber} ${amount} ${pay}`,
+              `FOREVER: FBO ${s.recruitFboNumero}. ${amount} ${pay}`,
+            ]),
+          }),
+      },
+      {
+        who: "parrain",
+        channel: "SMS",
+        send: () =>
+          safeSms({
+            to: sponsorPhone,
+            countryCode,
+            message: fitSms([
+              `FOREVER: parrainage de ${recruitName} approuve (FBO ${s.recruitFboNumero}). Cde ${order.preorderNumber} ${amount} ${pay}`,
+              `FOREVER: parrainage approuve, FBO ${s.recruitFboNumero}. Cde ${order.preorderNumber} ${amount} ${pay}`,
+              `FOREVER: FBO ${s.recruitFboNumero} approuve. ${amount} ${pay}`,
+            ]),
+          }),
+      },
+      {
+        who: "filleul",
+        channel: "EMAIL",
+        send: () => {
           const content = {
             greeting: `Bonjour ${recruitName},`,
             paragraphs: [
@@ -167,18 +217,23 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink }) 
             rows,
             cta,
           };
-          return { html: emailHtml(content), body: emailText(content) };
-        })(),
-        attachments,
-        metadata: { type: "SPONSORSHIP_APPROVED", sponsorshipId: s.id, recipient: "RECRUIT" },
+          return safeEmail(
+            {
+              to: s.email,
+              subject: `Bienvenue chez Forever : votre n° FBO ${s.recruitFboNumero}`,
+              html: emailHtml(content),
+              body: emailText(content),
+              attachments,
+              metadata: { type: "SPONSORSHIP_APPROVED", sponsorshipId: s.id, recipient: "RECRUIT" },
+            },
+            "recruit-approved",
+          );
+        },
       },
-      "recruit-approved",
-    ),
-    safeEmail(
       {
-        to: s.sponsorEmail,
-        subject: `Parrainage approuvé : ${recruitName} (FBO ${s.recruitFboNumero})`,
-        ...(() => {
+        who: "parrain",
+        channel: "EMAIL",
+        send: () => {
           const content = {
             greeting: `Bonjour ${s.sponsorNom},`,
             paragraphs: [
@@ -188,26 +243,35 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink }) 
             rows,
             cta,
           };
-          return { html: emailHtml(content), body: emailText(content) };
-        })(),
-        attachments,
-        metadata: { type: "SPONSORSHIP_APPROVED", sponsorshipId: s.id, recipient: "SPONSOR" },
+          return safeEmail(
+            {
+              to: s.sponsorEmail,
+              subject: `Parrainage approuvé : ${recruitName} (FBO ${s.recruitFboNumero})`,
+              html: emailHtml(content),
+              body: emailText(content),
+              attachments,
+              metadata: { type: "SPONSORSHIP_APPROVED", sponsorshipId: s.id, recipient: "SPONSOR" },
+            },
+            "sponsor-approved",
+          );
+        },
       },
-      "sponsor-approved",
-    ),
-  ]);
+    ],
+    channels,
+  );
 
   await addSponsorshipLog(null, {
     sponsorshipId: s.id,
-    action: "APPROVAL_NOTIFIED",
-    note: `Notification d'approbation (commande ${order.preorderNumber}) : ${summarizeResults(results)}.`,
-    meta: { results, paymentLink: paymentLink || null },
+    action: resentBy ? "APPROVAL_NOTIFICATION_RESENT" : "APPROVAL_NOTIFIED",
+    note: logNote(`d'approbation (commande ${order.preorderNumber})`, results, resentBy),
+    meta: { results, paymentLink: paymentLink || null, channels },
+    actorAdminId,
   }).catch(() => {});
   return results;
 }
 
 // Parrainage validé (achat payé) : confirmation aux deux.
-async function notifySponsorshipValidated({ sponsorshipId, preorderNumber }) {
+async function notifySponsorshipValidated({ sponsorshipId, preorderNumber, channels = null, resentBy = null, actorAdminId = null }) {
   const s = await prisma.sponsorship.findUnique({ where: { id: sponsorshipId } });
   if (!s) return [];
   const { countryCode } = await countryInfo(s.countryId);
@@ -217,23 +281,123 @@ async function notifySponsorshipValidated({ sponsorshipId, preorderNumber }) {
   const content = (greeting, paragraph) => ({ greeting, paragraphs: [paragraph], rows });
   const recruitContent = content(`Bonjour ${recruitName},`, `Votre premier achat est payé : votre parrainage est validé. Bienvenue chez Forever !`);
   const sponsorContent = content(`Bonjour ${s.sponsorNom},`, `L'achat de ${recruitName} est payé : le parrainage est validé et ${s.firstNames} est désormais rattaché(e) à votre équipe. Merci !`);
+  const sponsorPhone = s.sponsorPhone || (await findSponsorPhone(s));
 
-  return Promise.all([
-    safeSms({ to: s.mobile, countryCode, message: `FOREVER: votre achat est paye, votre parrainage est valide (FBO ${s.recruitFboNumero}). Bienvenue !` }),
-    safeSms({
-      to: s.sponsorPhone || (await findSponsorPhone(s)),
-      countryCode,
-      message: fitSms([`FOREVER: parrainage de ${recruitName} valide (FBO ${s.recruitFboNumero}). Merci !`, `FOREVER: parrainage valide (FBO ${s.recruitFboNumero}). Merci !`]),
-    }),
-    safeEmail(
-      { to: s.email, subject: "Votre parrainage Forever est validé", html: emailHtml(recruitContent), body: emailText(recruitContent), metadata: { type: "SPONSORSHIP_VALIDATED", sponsorshipId: s.id, recipient: "RECRUIT" } },
-      "recruit-validated",
-    ),
-    safeEmail(
-      { to: s.sponsorEmail, subject: `Parrainage validé : ${recruitName}`, html: emailHtml(sponsorContent), body: emailText(sponsorContent), metadata: { type: "SPONSORSHIP_VALIDATED", sponsorshipId: s.id, recipient: "SPONSOR" } },
-      "sponsor-validated",
-    ),
-  ]);
+  const results = await dispatch(
+    [
+      { who: "filleul", channel: "SMS", send: () => safeSms({ to: s.mobile, countryCode, message: `FOREVER: votre achat est paye, votre parrainage est valide (FBO ${s.recruitFboNumero}). Bienvenue !` }) },
+      {
+        who: "parrain",
+        channel: "SMS",
+        send: () =>
+          safeSms({
+            to: sponsorPhone,
+            countryCode,
+            message: fitSms([`FOREVER: parrainage de ${recruitName} valide (FBO ${s.recruitFboNumero}). Merci !`, `FOREVER: parrainage valide (FBO ${s.recruitFboNumero}). Merci !`]),
+          }),
+      },
+      {
+        who: "filleul",
+        channel: "EMAIL",
+        send: () =>
+          safeEmail(
+            { to: s.email, subject: "Votre parrainage Forever est validé", html: emailHtml(recruitContent), body: emailText(recruitContent), metadata: { type: "SPONSORSHIP_VALIDATED", sponsorshipId: s.id, recipient: "RECRUIT" } },
+            "recruit-validated",
+          ),
+      },
+      {
+        who: "parrain",
+        channel: "EMAIL",
+        send: () =>
+          safeEmail(
+            { to: s.sponsorEmail, subject: `Parrainage validé : ${recruitName}`, html: emailHtml(sponsorContent), body: emailText(sponsorContent), metadata: { type: "SPONSORSHIP_VALIDATED", sponsorshipId: s.id, recipient: "SPONSOR" } },
+            "sponsor-validated",
+          ),
+      },
+    ],
+    channels,
+  );
+
+  // Journalisé comme les autres notifications (absent jusqu'ici : impossible
+  // de savoir si la validation avait été reçue).
+  await addSponsorshipLog(null, {
+    sponsorshipId: s.id,
+    action: resentBy ? "VALIDATION_NOTIFICATION_RESENT" : "VALIDATION_NOTIFIED",
+    note: logNote(`de validation (commande ${preorderNumber || "-"})`, results, resentBy),
+    meta: { results, channels },
+    actorAdminId,
+  }).catch(() => {});
+  return results;
+}
+
+const RESEND_CHANNELS = ["SMS", "EMAIL"];
+
+// Renvoi depuis l'admin de la notification du statut en cours : approbation
+// (n° FBO, commande à payer et lien) tant que l'achat attend, validation une
+// fois l'achat payé. Le lien de paiement est recalculé depuis la commande.
+async function resendSponsorshipNotification({ sponsorship: s, channels, resentBy, actorAdminId = null }) {
+  const httpError = (status, message) => Object.assign(new Error(message), { statusCode: status });
+  const wanted = (Array.isArray(channels) ? channels : RESEND_CHANNELS)
+    .map((c) => String(c || "").trim().toUpperCase())
+    .filter((c) => RESEND_CHANNELS.includes(c));
+  if (!wanted.length) throw httpError(400, "Choisissez au moins un canal (SMS ou email).");
+
+  if (s.status === "APPROVED_PENDING_PURCHASE") {
+    const order = s.purchasePreorderId
+      ? await prisma.preorder.findUnique({
+          where: { id: s.purchasePreorderId },
+          select: {
+            id: true,
+            preorderNumber: true,
+            status: true,
+            paymentStatus: true,
+            totalFcfa: true,
+            preorderPaymentMode: true,
+            paymentProvider: true,
+            paymentCollectionCode: true,
+            country: { select: { code: true } },
+            activePayment: { select: { amountExpectedFcfa: true } },
+          },
+        })
+      : null;
+    if (!order) throw httpError(409, "Aucune commande d'achat à rappeler : relancez l'achat du parrainage.");
+    if (order.paymentStatus === "PAID") {
+      throw httpError(409, `La commande ${order.preorderNumber} est payée : cliquez sur « Réévaluer » pour valider le parrainage (la notification de validation partira alors).`);
+    }
+    if (order.status === "CANCELLED") {
+      throw httpError(409, `La commande ${order.preorderNumber} est annulée : relancez l'achat avant de renvoyer la notification.`);
+    }
+    const { buildPreorderActionLink } = require("../payments/payments.service");
+    const { computePaymentPricing } = require("../payments/payment-pricing");
+    const amountToPayFcfa =
+      Number(order.activePayment?.amountExpectedFcfa || 0) ||
+      computePaymentPricing({ preorderPaymentMode: order.preorderPaymentMode, paymentProvider: order.paymentProvider, orderTotalFcfa: order.totalFcfa }).amountToPayFcfa;
+    const results = await notifySponsorshipApproved({
+      sponsorshipId: s.id,
+      order: { preorderNumber: order.preorderNumber, amountToPayFcfa, paymentMode: order.preorderPaymentMode },
+      paymentLink: buildPreorderActionLink(order),
+      channels: wanted,
+      resentBy,
+      actorAdminId,
+    });
+    return { kind: "APPROVAL", results };
+  }
+
+  if (s.status === "VALIDATED") {
+    const qualifying = s.qualifyingPreorderId
+      ? await prisma.preorder.findUnique({ where: { id: s.qualifyingPreorderId }, select: { preorderNumber: true } })
+      : null;
+    const results = await notifySponsorshipValidated({
+      sponsorshipId: s.id,
+      preorderNumber: qualifying?.preorderNumber || null,
+      channels: wanted,
+      resentBy,
+      actorAdminId,
+    });
+    return { kind: "VALIDATION", results };
+  }
+
+  throw httpError(409, "Seules les notifications d'un parrainage approuvé ou validé peuvent être renvoyées.");
 }
 
 // Demande de complément ou refus : motif envoyé au filleul ET au parrain (SMS +
@@ -292,11 +456,12 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
   };
   const subject = changes ? `Parrainage à compléter : ${recruitName}` : `Parrainage non accepté : ${recruitName}`;
 
-  const results = await Promise.all([
-    safeSms({ to: s.mobile, countryCode, message: recruitSms }),
-    safeSms({ to: s.sponsorPhone || (await findSponsorPhone(s)), countryCode, message: sponsorSms }),
-    safeEmail({ to: s.email, subject, html: emailHtml(recruitContent), body: emailText(recruitContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "RECRUIT" } }, `recruit-${kind}`),
-    safeEmail({ to: s.sponsorEmail, subject, html: emailHtml(sponsorContent), body: emailText(sponsorContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "SPONSOR" } }, `sponsor-${kind}`),
+  const sponsorPhone = s.sponsorPhone || (await findSponsorPhone(s));
+  const results = await dispatch([
+    { who: "filleul", channel: "SMS", send: () => safeSms({ to: s.mobile, countryCode, message: recruitSms }) },
+    { who: "parrain", channel: "SMS", send: () => safeSms({ to: sponsorPhone, countryCode, message: sponsorSms }) },
+    { who: "filleul", channel: "EMAIL", send: () => safeEmail({ to: s.email, subject, html: emailHtml(recruitContent), body: emailText(recruitContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "RECRUIT" } }, `recruit-${kind}`) },
+    { who: "parrain", channel: "EMAIL", send: () => safeEmail({ to: s.sponsorEmail, subject, html: emailHtml(sponsorContent), body: emailText(sponsorContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "SPONSOR" } }, `sponsor-${kind}`) },
   ]);
   await addSponsorshipLog(null, {
     sponsorshipId: s.id,
@@ -307,4 +472,4 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
   return results;
 }
 
-module.exports = { notifySponsorshipApproved, notifySponsorshipReview, notifySponsorshipValidated };
+module.exports = { notifySponsorshipApproved, notifySponsorshipReview, notifySponsorshipValidated, resendSponsorshipNotification };

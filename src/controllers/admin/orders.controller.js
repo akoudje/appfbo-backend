@@ -2277,6 +2277,7 @@ async function resendInvoiceSms(req, res) {
         paymentProvider: true,
         factureWhatsappTo: true,
         whatsappMessage: true,
+        country: { select: { code: true } },
         activePayment: {
           select: {
             amountExpectedFcfa: true,
@@ -2306,9 +2307,12 @@ async function resendInvoiceSms(req, res) {
     });
 
     const amountToPayFcfa = resolveOrderAmountToPayFcfa(order);
+    // Sans message précédent portant le lien (achat de parrainage, notifié avec
+    // l'approbation), le lien est recalculé : sinon le SMS part sans lien.
     const paymentLink = String(
       latestMessage?.paymentLinkTracked ||
         latestMessage?.paymentLinkTarget ||
+        paymentsService.buildPreorderActionLink(order) ||
         "",
     ).trim();
     const smsBody = buildInvoiceMessage({

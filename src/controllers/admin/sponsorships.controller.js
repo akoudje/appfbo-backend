@@ -5,7 +5,7 @@ const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const sponsorship = require("../../services/sponsorship.service");
 const purchase = require("../../services/sponsorship-purchase.service");
-const { notifySponsorshipApproved, notifySponsorshipReview } = require("../../services/sponsorship-notifications.service");
+const { notifySponsorshipApproved, notifySponsorshipReview, resendSponsorshipNotification } = require("../../services/sponsorship-notifications.service");
 const { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf } = require("../../services/sponsorship-agreement-pdf.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
@@ -385,6 +385,24 @@ async function evaluateNow(req, res) {
   }
 }
 
+// POST /api/admin/sponsorships/:id/resend-notification { channels: ["SMS", "EMAIL"] }
+// Renvoie au filleul et au parrain la notification du statut en cours :
+// approbation (achat à payer, avec le lien) ou validation (achat payé).
+async function resendNotification(req, res) {
+  try {
+    const row = await loadForReview(req, ["APPROVED_PENDING_PURCHASE", "VALIDATED"]);
+    const { kind, results } = await resendSponsorshipNotification({
+      sponsorship: row,
+      channels: req.body?.channels,
+      resentBy: req.user?.fullName || req.user?.email || "l'administration",
+      actorAdminId: req.user?.id || null,
+    });
+    return res.json({ ok: true, kind, results });
+  } catch (error) {
+    return sendError(res, error, "resendNotification error:");
+  }
+}
+
 // GET /api/admin/sponsorships/:id/agreement.pdf : fiche cachetée (archive / impression).
 async function downloadSponsorshipAgreement(req, res) {
   try {
@@ -662,4 +680,5 @@ module.exports = {
   approveSponsorship,
   cancelSponsorship,
   evaluateNow,
+  resendNotification,
 };
