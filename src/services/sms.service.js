@@ -300,6 +300,15 @@ function mapOrangeDeliveryStatus(raw = "") {
   const s = String(raw || "").trim().toLowerCase();
   if (!s) return "unknown";
 
+  // Statuts des accusés Orange (deliveryInfoNotification) : seul
+  // DeliveredToTerminal vaut livraison sur le téléphone. DeliveredToNetwork
+  // (remis à l'opérateur) et MessageWaiting (téléphone injoignable, nouvel
+  // essai en cours) restent en attente ; DeliveryUncertain reste inconnu.
+  if (s === "deliveredtoterminal") return "delivered";
+  if (s === "deliveredtonetwork" || s === "messagewaiting") return "pending";
+  if (s === "deliveryimpossible") return "failed";
+  if (s === "deliveryuncertain") return "unknown";
+
   if (
     s.includes("deliveredtoterminal") ||
     s.includes("delivered") ||

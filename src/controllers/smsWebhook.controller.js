@@ -66,9 +66,21 @@ function readCallbackExternalLinkId(rawCallbackData) {
   return match?.[1] || null;
 }
 
+// Identifiant Orange d'un envoi (fin de resourceURL ".../requests/<id>").
+function looksLikeOrangeRequestId(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
+// Format Orange Afrique (developer.orange.com, SMS API) :
+// { deliveryInfoNotification: { callbackData: "<resource_id>",
+//   deliveryInfo: { address: "tel:+225…", deliveryStatus: "DeliveredToTerminal" } } }
+// callbackData y est l'identifiant Orange de l'envoi, pas le nôtre : l'URL de
+// retour est enregistrée une fois chez Orange, le receiptRequest par message
+// est ignoré.
 function parseOrangeDeliveryPayload(body = {}) {
+  const notification = body?.deliveryInfoNotification || body?.deliveryReceiptNotification || null;
   const deliveryStatusRaw = pickString([
-    body?.deliveryReceiptNotification?.deliveryInfo?.deliveryStatus,
+    notification?.deliveryInfo?.deliveryStatus,
     body?.deliveryInfoList?.deliveryInfo?.[0]?.deliveryStatus,
     body?.outboundSMSMessageRequest?.deliveryInfoList?.deliveryInfo?.[0]
       ?.deliveryStatus,
@@ -77,29 +89,30 @@ function parseOrangeDeliveryPayload(body = {}) {
   ]);
 
   const providerMessageId = pickString([
-    body?.deliveryReceiptNotification?.resourceURL,
+    notification?.resourceURL,
     body?.outboundSMSMessageRequest?.resourceURL,
     body?.resourceURL,
     body?.resourceUrl,
   ]);
 
+  const rawCallbackData = pickString([
+    notification?.callbackData,
+    body?.outboundSMSMessageRequest?.receiptRequest?.callbackData,
+    body?.callbackData,
+  ]);
+
   const requestId = pickString([
     extractRequestId(providerMessageId),
-    body?.deliveryReceiptNotification?.messageId,
+    looksLikeOrangeRequestId(rawCallbackData) ? rawCallbackData : null,
+    notification?.messageId,
     body?.messageId,
     body?.id,
   ]);
 
-  const callbackData = readCallbackPreorderId(
-    pickString([
-      body?.deliveryReceiptNotification?.callbackData,
-      body?.outboundSMSMessageRequest?.receiptRequest?.callbackData,
-      body?.callbackData,
-    ]),
-  );
+  const callbackData = readCallbackPreorderId(rawCallbackData);
 
   const recipient = pickString([
-    body?.deliveryReceiptNotification?.deliveryInfo?.address,
+    notification?.deliveryInfo?.address,
     body?.deliveryInfoList?.deliveryInfo?.[0]?.address,
     body?.address,
   ]);
@@ -138,6 +151,22 @@ function logUnauthorizedWebhook(req) {
     userAgent: req.get("user-agent") || null,
     bodyKeys:
       req.body && typeof req.body === "object" ? Object.keys(req.body).slice(0, 10) : [],
+  });
+}
+
+// SMS de commande visé par l'accusé, retrouvé par l'identifiant Orange de
+// l'envoi (providerMessageId = resourceURL ".../requests/<id>"). Les accusés
+// arrivent dans les 24 h : la recherche est bornée aux envois récents.
+async function findOrderMessageForDelivery(parsed) {
+  if (!parsed.requestId) return null;
+  return prisma.orderMessage.findFirst({
+    where: {
+      channel: "SMS",
+      provider: "ORANGE",
+      providerMessageId: { endsWith: `/requests/${parsed.requestId}` },
+      createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+    },
+    orderBy: { createdAt: "desc" },
   });
 }
 
@@ -246,7 +275,10 @@ async function orangeSmsDlrWebhook(req, res) {
 
   try {
     const parsed = parseOrangeDeliveryPayload(req.body || {});
-    const preorder = await findPreorderForDelivery(parsed);
+    const matchedMessage = await findOrderMessageForDelivery(parsed);
+    const preorder = matchedMessage
+      ? { id: matchedMessage.preorderId }
+      : await findPreorderForDelivery(parsed);
 
     if (!preorder) {
       const externalPaymentLink = await findExternalPaymentLinkForDelivery(parsed);
@@ -280,26 +312,20 @@ async function orangeSmsDlrWebhook(req, res) {
     const now = new Date();
 
     await prisma.$transaction(async (tx) => {
-      await tx.preorder.update({
-        where: { id: preorder.id },
-        data: {
-          lastWhatsappStatus: persistedStatus || parsed.providerStatus || "SENT",
-          lastWhatsappStatusAt: now,
-          lastWhatsappMessageId:
-            parsed.providerMessageId || undefined,
-        },
-      });
+      let relatedMessage = matchedMessage;
 
-      let relatedMessage = await tx.orderMessage.findFirst({
-        where: {
-          preorderId: preorder.id,
-          channel: "SMS",
-          ...(parsed.providerMessageId
-            ? { providerMessageId: parsed.providerMessageId }
-            : {}),
-        },
-        orderBy: { createdAt: "desc" },
-      });
+      if (!relatedMessage) {
+        relatedMessage = await tx.orderMessage.findFirst({
+          where: {
+            preorderId: preorder.id,
+            channel: "SMS",
+            ...(parsed.providerMessageId
+              ? { providerMessageId: parsed.providerMessageId }
+              : {}),
+          },
+          orderBy: { createdAt: "desc" },
+        });
+      }
 
       if (!relatedMessage) {
         relatedMessage = await tx.orderMessage.findFirst({
@@ -311,11 +337,50 @@ async function orangeSmsDlrWebhook(req, res) {
         });
       }
 
-      if (relatedMessage && messageStatus) {
+      // Statut SMS de la commande : seulement pour son dernier SMS (un accusé
+      // tardif d'un ancien SMS ne doit pas l'écraser).
+      const current = await tx.preorder.findUnique({
+        where: { id: preorder.id },
+        select: { lastWhatsappMessageId: true },
+      });
+      const isLatestSms =
+        !matchedMessage ||
+        !current?.lastWhatsappMessageId ||
+        current.lastWhatsappMessageId === matchedMessage.providerMessageId;
+
+      // Un accusé intermédiaire arrivé en retard (remis à l'opérateur) ne fait
+      // pas repasser un SMS livré ou en échec à "envoyé".
+      const isFinal = ["DELIVERED", "READ", "FAILED"].includes(relatedMessage?.status);
+      const nextStatus = messageStatus === "SENT" && isFinal ? null : messageStatus;
+
+      if (isLatestSms && (nextStatus || !relatedMessage)) {
+        await tx.preorder.update({
+          where: { id: preorder.id },
+          data: {
+            lastWhatsappStatus: persistedStatus || parsed.providerStatus || "SENT",
+            lastWhatsappStatusAt: now,
+            lastWhatsappMessageId:
+              parsed.providerMessageId || undefined,
+          },
+        });
+      }
+
+      if (relatedMessage) {
+        await tx.orderMessageEvent.create({
+          data: {
+            orderMessageId: relatedMessage.id,
+            status: messageStatus || parsed.deliveryStatus || "unknown",
+            rawPayload: parsed.rawPayload || null,
+            note: `Webhook Orange: ${parsed.providerStatus || parsed.deliveryStatus || "unknown"}`,
+          },
+        });
+      }
+
+      if (relatedMessage && nextStatus) {
         await tx.orderMessage.update({
           where: { id: relatedMessage.id },
           data: {
-            status: messageStatus,
+            status: nextStatus,
             lastStatusAt: now,
             deliveredAt:
               messageStatus === "DELIVERED"
@@ -332,18 +397,11 @@ async function orangeSmsDlrWebhook(req, res) {
                 : null,
           },
         });
-
-        await tx.orderMessageEvent.create({
-          data: {
-            orderMessageId: relatedMessage.id,
-            status: messageStatus,
-            rawPayload: parsed.rawPayload || null,
-            note: `Webhook Orange: ${parsed.providerStatus || parsed.deliveryStatus || "unknown"}`,
-          },
-        });
       }
 
-      await tx.preorderLog.create({
+      // Historique de la commande : seulement l'issue (livré / échec), pas
+      // les étapes intermédiaires (remis à l'opérateur, en attente).
+      if (["delivered", "failed"].includes(parsed.deliveryStatus)) await tx.preorderLog.create({
         data: {
           preorderId: preorder.id,
           action: "PAYMENT_PENDING",
@@ -402,4 +460,5 @@ function orangeSmsDlrWebhookProbe(req, res) {
 module.exports = {
   orangeSmsDlrWebhook,
   orangeSmsDlrWebhookProbe,
+  parseOrangeDeliveryPayload,
 };
