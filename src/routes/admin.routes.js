@@ -42,6 +42,7 @@ const {
 const { BILLING_SUPERVISOR_ROLES } = require("../services/billingQueue.service");
 
 const ordersController = require("../controllers/admin/orders.controller");
+const settlementController = require("../controllers/settlement.controller");
 const ordersRoutes = require("./admin/orders.routes");
 const paymentsRoutes = require("./admin/payments.routes");
 const statsRoutes = require("./admin/stats.routes");
@@ -120,6 +121,17 @@ router.post("/billing/:id/assign", requireRole(BILLING_SUPERVISOR_ROLES), assign
 // Bilan d'activité (« Mon bilan ») ; un superviseur peut viser un facturier.
 router.get("/billing/report", requirePermission(Permission.INVOICE_CREATE), getReport);
 router.get("/billing/supervision", requireRole(BILLING_SUPERVISOR_ROLES), getSupervision);
+// Précommandes réglées par une autre filiale FLP (ex. FLP Burkina) : lot de
+// n° transmis par le client, rapport pour la filiale.
+router.get("/billing/settlements/entities", requirePermission(Permission.INVOICE_CREATE), settlementController.listEntities);
+router.post("/billing/settlements/mark", requirePermission(Permission.INVOICE_CREATE), settlementController.markBatch);
+router.get("/billing/settlements/pending", requirePermission(Permission.INVOICE_CREATE), settlementController.listPending);
+router.delete("/billing/settlements/:id", requirePermission(Permission.INVOICE_CREATE), settlementController.unmark);
+router.get(
+  "/billing/settlements/report",
+  requireRole(settlementController.SETTLEMENT_REPORT_ROLES),
+  settlementController.getReport,
+);
 
 router.post(
   "/billing/claim-next",

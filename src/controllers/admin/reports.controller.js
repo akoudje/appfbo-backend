@@ -1,6 +1,7 @@
 const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const { csvCell } = require("../../helpers/order-query");
+const { settlementLabel } = require("../../services/settlement.service");
 
 // Plafond du détail par commande (tableaux, export, répartitions) par
 // section. Les totaux (count/amountFcfa) ne dépendent jamais de ce plafond,
@@ -354,6 +355,7 @@ function buildOrderRow(order) {
     status: order.status || null,
     paymentStatus: order.paymentStatus || null,
     preorderPaymentMode: order.preorderPaymentMode || null,
+    settlementEntity: order.settlementEntity || null,
     deliveryMode: order.deliveryMode || null,
     totalFcfa: toNumber(order.totalFcfa),
     as400InvoiceTotalFcfa: toNumber(order.as400InvoiceTotalFcfa || order.totalFcfa),
@@ -700,7 +702,12 @@ async function getDailySalesReport(req, res) {
       },
       paid: {
         ...withTruncationFlag(paidTotals, paidRows),
-        byPaymentMode: groupBy(paidRows, (row) => paymentModeLabel(row.preorderPaymentMode), "as400InvoiceTotalFcfa"),
+        // Réglées par une autre filiale (hors caisse) : rangées sous la filiale.
+        byPaymentMode: groupBy(
+          paidRows,
+          (row) => (row.settlementEntity ? settlementLabel(row.settlementEntity) : paymentModeLabel(row.preorderPaymentMode)),
+          "as400InvoiceTotalFcfa",
+        ),
         byCashier: groupByAdmin(paidRows, (row) => row.cashier, "as400InvoiceTotalFcfa"),
         rows: paidRows,
       },

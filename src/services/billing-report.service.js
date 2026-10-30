@@ -95,6 +95,7 @@ const ORDER_SELECT = {
   cancelledById: true,
   cancelReason: true,
   isTest: true,
+  settlementEntity: true,
 };
 
 async function buildInvoicerReport({ countryId, userId, from, to }) {
@@ -202,7 +203,13 @@ async function buildInvoicerReport({ countryId, userId, from, to }) {
     paid: {
       count: paid.length,
       amountFcfa: sumBy(paid, orderAmount),
-      byMode: groupAmounts(paid, (order) => order.paymentProvider || order.preorderPaymentMode, orderAmount),
+      // Réglées par une autre filiale : rangées sous la filiale (ex.
+      // FLP_BURKINA), pas sous le mode choisi par le client.
+      byMode: groupAmounts(
+        paid,
+        (order) => order.settlementEntity || order.paymentProvider || order.preorderPaymentMode,
+        orderAmount,
+      ),
     },
     counter: {
       count: counterTransactions.length,

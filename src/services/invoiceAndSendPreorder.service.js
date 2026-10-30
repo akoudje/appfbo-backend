@@ -17,6 +17,11 @@ const { computePreorderTotalsForGrade } = require("./pricing.service");
 const { computePaymentPricing } = require("../payments/payment-pricing");
 const { sendPreorderNotification } = require("./preorder-notifications.service");
 const { normalizeEmail } = require("./email.service");
+const {
+  settledPreorderData,
+  logSettlementPaymentTx,
+  settlementLabel,
+} = require("./settlement.service");
 
 const BILLING_GRADES = [
   "CLIENT_PRIVILEGIE",
@@ -576,6 +581,14 @@ async function invoiceAndSendPreorder({
       throw err;
     }
 
+    // Réglée par une autre filiale (settlement.service.js) : relu ici, ligne
+    // verrouillée par la garde ci-dessus, pour ne pas manquer un marquage
+    // fait pendant la saisie de la facture.
+    const settlement = await tx.preorder.findUnique({
+      where: { id: existingPreorder.id },
+      select: { settlementEntity: true, settlementReference: true },
+    });
+
     for (const it of pricingSummary.items) {
       await tx.preorderItem.update({
         where: {
@@ -632,6 +645,10 @@ async function invoiceAndSendPreorder({
         billingStartedAt: existingPreorder.billingStartedAt || now,
         billingLastActivityAt: now,
         billingWorkStatus: "WAITING_PAYMENT",
+        // Réglée par la filiale : directement payée, sans échéance.
+        ...(settlement?.settlementEntity
+          ? settledPreorderData({ ...existingPreorder, ...settlement }, now)
+          : {}),
       },
       include: {
         fbo: true,
@@ -657,14 +674,42 @@ async function invoiceAndSendPreorder({
         totalFcfa: effectiveInvoiceTotalFcfa || 0,
         paymentServiceFeeFcfa: paymentPricing.paymentServiceFeeFcfa,
         amountToPayFcfa: paymentPricing.amountToPayFcfa,
-        paymentExpiresAt: paymentExpiresAt ? paymentExpiresAt.toISOString() : null,
+        paymentExpiresAt: updatedPreorder.paymentExpiresAt ? updatedPreorder.paymentExpiresAt.toISOString() : null,
+        settlementEntity: settlement?.settlementEntity || null,
         actorName,
       },
       actorAdminId,
     });
 
+    if (settlement?.settlementEntity) {
+      await logSettlementPaymentTx(tx, { id: existingPreorder.id, ...settlement }, actorAdminId);
+    }
+
     return updatedPreorder;
   });
+
+  // Réglée par une autre filiale : ni lien de paiement ni SMS au client.
+  if (invoicedPreorder.settlementEntity) {
+    await createPreorderLog(prisma, {
+      preorderId: invoicedPreorder.id,
+      action: "INVOICE",
+      note: `Precommande facturee, reglee par ${settlementLabel(invoicedPreorder.settlementEntity)} : aucun SMS envoye.`,
+      meta: { invoiceRef, settlementEntity: invoicedPreorder.settlementEntity, messageStatus: "SKIPPED", actorName },
+      actorAdminId,
+    });
+    return {
+      preorder: invoicedPreorder,
+      billingMessage: null,
+      whatsappStatus: "SKIPPED",
+      whatsappTo,
+      paymentLinkTarget: null,
+      trackedPaymentLink: null,
+      paymentRef: null,
+      paymentPricing,
+      notificationChannel: null,
+      notificationAttempts: [],
+    };
+  }
 
   // 🔍 Logs déplacés ici (correct)
   console.log("[invoiceAndSendPreorder] preorderPaymentMode =", invoicedPreorder?.preorderPaymentMode);
