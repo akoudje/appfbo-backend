@@ -1,6 +1,10 @@
 const prisma = require("../prisma");
 const { pickCountryId } = require("../helpers/countryScope");
 const { normalizeHomeFeatured } = require("../services/homeFeatured.service");
+const {
+  computeSubmissionWindow,
+  serializeWindow,
+} = require("../services/submission-schedule.service");
 
 // Cache en mémoire, même principe que le cache pays de resolveCountry.js :
 // cette config change rarement (réglages admin, contenu marketing) mais est
@@ -17,14 +21,32 @@ function getCachedStorefrontConfig(countryId) {
     storefrontConfigCache.delete(countryId);
     return null;
   }
-  return cached.payload;
+  return cached;
 }
 
-function setCachedStorefrontConfig(countryId, payload) {
+function setCachedStorefrontConfig(countryId, payload, submissionSettings) {
   storefrontConfigCache.set(countryId, {
     payload,
+    submissionSettings,
     expiresAt: Date.now() + STOREFRONT_CONFIG_CACHE_TTL_MS,
   });
+}
+
+// Ouverture recalculée à chaque appel, même depuis le cache : l'heure de
+// fermeture doit s'appliquer à la minute près, pas 30 s plus tard.
+// preorderSubmissionEnabled et son message restent pour les clients déjà
+// déployés ; submissionWindow ajoute horaires, tolérance et compte à rebours.
+function withSubmissionWindow(payload, submissionSettings, countryCode) {
+  const window = serializeWindow(
+    computeSubmissionWindow({ settings: submissionSettings, countryCode }),
+    submissionSettings,
+  );
+  return {
+    ...payload,
+    preorderSubmissionEnabled: window.open,
+    preorderSubmissionDisabledMessage: window.message || payload.preorderSubmissionDisabledMessage,
+    submissionWindow: window,
+  };
 }
 
 function clearStorefrontConfigCache(countryId) {
@@ -162,7 +184,7 @@ async function getStorefrontConfig(req, res) {
 
     const cached = getCachedStorefrontConfig(countryId);
     if (cached) {
-      return res.json(cached);
+      return res.json(withSubmissionWindow(cached.payload, cached.submissionSettings, req.country?.code));
     }
 
     const [settings, marketing] = await Promise.all([
@@ -173,6 +195,10 @@ async function getStorefrontConfig(req, res) {
           maxQtyPerProduct: true,
           preorderSubmissionEnabled: true,
           preorderSubmissionDisabledMessage: true,
+          submissionScheduleEnabled: true,
+          submissionSchedule: true,
+          submissionGraceMinutes: true,
+          submissionOverride: true,
           publicAnnouncementEnabled: true,
           publicAnnouncementMessage: true,
           closedOnSaturday: true,
@@ -314,8 +340,16 @@ async function getStorefrontConfig(req, res) {
       },
     };
 
-    setCachedStorefrontConfig(countryId, payload);
-    return res.json(payload);
+    const submissionSettings = {
+      preorderSubmissionEnabled: settings?.preorderSubmissionEnabled ?? true,
+      preorderSubmissionDisabledMessage: settings?.preorderSubmissionDisabledMessage || null,
+      submissionScheduleEnabled: settings?.submissionScheduleEnabled ?? false,
+      submissionSchedule: settings?.submissionSchedule ?? null,
+      submissionGraceMinutes: settings?.submissionGraceMinutes,
+      submissionOverride: settings?.submissionOverride ?? null,
+    };
+    setCachedStorefrontConfig(countryId, payload, submissionSettings);
+    return res.json(withSubmissionWindow(payload, submissionSettings, countryCode));
   } catch (e) {
     console.error("getStorefrontConfig error:", e);
     return res.status(500).json({ message: "Erreur serveur (getStorefrontConfig)" });

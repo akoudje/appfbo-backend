@@ -2,6 +2,19 @@ const { validateCountrySettings } = require("../../services/country-settings-val
 const { persistCountrySettings } = require("../../services/country-settings-save");
 const prisma = require("../../prisma");
 const { pickCountryId } = require("../../helpers/countryScope");
+const { clearStorefrontConfigCache } = require("../publicConfig.controller");
+const {
+  DEFAULT_GRACE_MINUTES,
+  computeSubmissionWindow,
+  serializeWindow,
+  localParts,
+  minutesOf,
+  zoneOf,
+} = require("../../services/submission-schedule.service");
+
+function submissionWindowOf(settings, countryCode) {
+  return serializeWindow(computeSubmissionWindow({ settings, countryCode }), settings);
+}
 
 const FBO_HELP_TOPIC_IDS = new Set([
   "country",
@@ -146,6 +159,10 @@ async function getCountrySettings(req, res) {
         packagingFeeFcfa: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
+        submissionScheduleEnabled: true,
+        submissionSchedule: true,
+        submissionGraceMinutes: true,
+        submissionOverride: true,
         publicAnnouncementEnabled: true,
         publicAnnouncementMessage: true,
         closedOnSaturday: true,
@@ -211,6 +228,11 @@ async function getCountrySettings(req, res) {
         packagingFeeFcfa: 100,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: null,
+        submissionScheduleEnabled: false,
+        submissionSchedule: null,
+        submissionGraceMinutes: DEFAULT_GRACE_MINUTES,
+        submissionOverride: null,
+        submissionWindow: submissionWindowOf({}, req.country?.code),
         publicAnnouncementEnabled: false,
         publicAnnouncementMessage: null,
         closedOnSaturday: false,
@@ -269,6 +291,7 @@ async function getCountrySettings(req, res) {
       ...settings,
       fboHelpTopics: normalizeFboHelpTopics(settings.fboHelpTopics),
       countryCode: req.country?.code || null,
+      submissionWindow: submissionWindowOf(settings, req.country?.code),
     });
   } catch (e) {
     console.error("getCountrySettings error:", e);
@@ -290,6 +313,9 @@ async function updateCountrySettings(req, res) {
       packagingFeeFcfa,
       preorderSubmissionEnabled,
       preorderSubmissionDisabledMessage,
+      submissionScheduleEnabled,
+      submissionSchedule,
+      submissionGraceMinutes,
       publicAnnouncementEnabled,
       publicAnnouncementMessage,
       closedOnSaturday,
@@ -379,6 +405,13 @@ async function updateCountrySettings(req, res) {
         ? String(preorderSubmissionDisabledMessage).trim()
         : null;
     }
+
+    // Validés par validateCountrySettings ; l'exception du jour passe par
+    // setSubmissionOverride, jamais par l'enregistrement du formulaire.
+    if (submissionScheduleEnabled !== undefined)
+      data.submissionScheduleEnabled = Boolean(submissionScheduleEnabled);
+    if (submissionSchedule !== undefined) data.submissionSchedule = submissionSchedule;
+    if (submissionGraceMinutes !== undefined) data.submissionGraceMinutes = submissionGraceMinutes;
 
     if (publicAnnouncementEnabled !== undefined) {
       data.publicAnnouncementEnabled = Boolean(publicAnnouncementEnabled);
@@ -647,6 +680,9 @@ async function updateCountrySettings(req, res) {
               : true,
           preorderSubmissionDisabledMessage:
             data.preorderSubmissionDisabledMessage ?? null,
+          submissionScheduleEnabled: data.submissionScheduleEnabled ?? false,
+          submissionSchedule: data.submissionSchedule ?? undefined,
+          submissionGraceMinutes: data.submissionGraceMinutes ?? DEFAULT_GRACE_MINUTES,
           publicAnnouncementEnabled:
             data.publicAnnouncementEnabled !== undefined
               ? data.publicAnnouncementEnabled
@@ -741,6 +777,10 @@ async function updateCountrySettings(req, res) {
         packagingFeeFcfa: true,
         preorderSubmissionEnabled: true,
         preorderSubmissionDisabledMessage: true,
+        submissionScheduleEnabled: true,
+        submissionSchedule: true,
+        submissionGraceMinutes: true,
+        submissionOverride: true,
         publicAnnouncementEnabled: true,
         publicAnnouncementMessage: true,
         closedOnSaturday: true,
@@ -795,10 +835,12 @@ async function updateCountrySettings(req, res) {
         updatedAt: true,
       },
     }, data);
+    clearStorefrontConfigCache(countryId);
 
     return res.json({
       ...updated,
       fboHelpTopics: normalizeFboHelpTopics(updated.fboHelpTopics),
+      submissionWindow: submissionWindowOf(updated, req.country?.code),
     });
   } catch (e) {
     console.error("updateCountrySettings error:", e);
@@ -813,7 +855,71 @@ async function getCountrySettingsHistory(req,res) {
  catch(error){console.error('settings history error:',error);return res.status(500).json({message:"Impossible de charger l’historique des paramètres."});}
 }
 
+// Exception du jour : « Fermer maintenant », « Ouvrir jusqu'à HH:MM »
+// (prolongation ou réouverture manuelle) ou retour à l'horaire normal
+// (mode null). La date est celle du pays, calculée ici : l'exception expire
+// d'elle-même à minuit, heure locale. Tracée dans l'historique des réglages.
+async function setSubmissionOverride(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const countryCode = req.country?.code;
+    const { mode = null, until = null } = req.body || {};
+    if (mode !== null && mode !== "OPEN" && mode !== "CLOSED")
+      return res.status(400).json({ message: "Action inconnue." });
+    const now = new Date();
+    const local = localParts(now, zoneOf(countryCode));
+    if (mode === "OPEN") {
+      const untilMinutes = minutesOf(until);
+      if (untilMinutes === null)
+        return res.status(400).json({ message: "Saisissez l’heure de fin au format HH:MM." });
+      if (untilMinutes <= local.minutes)
+        return res.status(400).json({ message: "L’heure de fin doit être postérieure à l’heure actuelle." });
+    }
+    const existing = await prisma.countrySettings.findUnique({ where: { countryId } });
+    const override = mode
+      ? {
+          date: local.date,
+          mode,
+          ...(mode === "OPEN" ? { until } : {}),
+          at: now.toISOString(),
+          actorLabel: req.user?.email || "Administrateur",
+        }
+      : null;
+    const updated = await persistCountrySettings(
+      prisma,
+      req,
+      existing,
+      {
+        where: { countryId },
+        create: { countryId },
+        select: {
+          preorderSubmissionEnabled: true,
+          preorderSubmissionDisabledMessage: true,
+          submissionScheduleEnabled: true,
+          submissionSchedule: true,
+          submissionGraceMinutes: true,
+          submissionOverride: true,
+          updatedAt: true,
+        },
+      },
+      { submissionOverride: override },
+    );
+    clearStorefrontConfigCache(countryId);
+    return res.json({
+      submissionOverride: updated.submissionOverride,
+      updatedAt: updated.updatedAt,
+      submissionWindow: submissionWindowOf(updated, countryCode),
+    });
+  } catch (e) {
+    console.error("setSubmissionOverride error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.statusCode ? e.message : "Erreur serveur (setSubmissionOverride)" });
+  }
+}
+
 module.exports = {
+  setSubmissionOverride,
   getCountrySettingsHistory,
   getCountrySettings,
   updateCountrySettings,

@@ -13,6 +13,12 @@ router.get(
 
 router.get("/history", requirePermission(Permission.COUNTRY_WRITE), settingsController.getCountrySettingsHistory);
 
+router.post(
+  "/submission-override",
+  requirePermission(Permission.COUNTRY_WRITE),
+  settingsController.setSubmissionOverride,
+);
+
 router.patch(
   "/",
   requirePermission(Permission.COUNTRY_WRITE),

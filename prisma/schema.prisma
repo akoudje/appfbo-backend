@@ -576,6 +576,14 @@ model CountrySettings {
   fboNumberPrefix               String?
   preorderSubmissionEnabled Boolean @default(true)
   preorderSubmissionDisabledMessage String? @db.Text
+  // Horaire hebdomadaire des soumissions client, en heure locale du pays
+  // (voir services/submission-schedule.service.js). submissionSchedule :
+  // { "0".."6": { open: "HH:MM", close: "HH:MM" } | null }, 0 = dimanche.
+  // submissionOverride : exception du jour { date, mode: OPEN|CLOSED, until?, at, actorLabel }.
+  submissionScheduleEnabled Boolean @default(false)
+  submissionSchedule        Json?
+  submissionGraceMinutes    Int     @default(15)
+  submissionOverride        Json?
   publicAnnouncementEnabled Boolean @default(false)
   publicAnnouncementMessage String? @db.Text
   closedOnSaturday Boolean @default(false)
