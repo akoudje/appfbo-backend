@@ -17,6 +17,11 @@ const {
 } = require("../services/preorder-notifications.service");
 const billingQueueService = require("../services/billingQueue.service");
 const { publishRealtimeEvent } = require("../services/realtime-events.service");
+const {
+  computeSubmissionWindow,
+  canSubmitNow,
+  serializeWindow,
+} = require("../services/submission-schedule.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
 const {
@@ -1059,11 +1064,24 @@ async function submit(req, res) {
       return res.status(404).json({ error: "Preorder not found" });
     }
 
-    if (preorder.country?.settings?.preorderSubmissionEnabled === false) {
-      return res.status(503).json({
-        error: resolveSubmissionDisabledMessage(preorder.country.settings),
-        code: "PREORDER_SUBMISSION_DISABLED",
+    // Suspension, horaire du pays et exception du jour. Un brouillon déjà
+    // soumis passe (rejeu idempotent ou « not editable » plus bas) ; un panier
+    // commencé avant une fermeture automatique bénéficie de la tolérance.
+    if (preorder.status === "DRAFT") {
+      const now = new Date();
+      const window = computeSubmissionWindow({
+        settings: preorder.country?.settings || {},
+        countryCode: preorder.country?.code,
+        now,
       });
+      if (!canSubmitNow(window, { draftCreatedAt: preorder.createdAt, now })) {
+        const closed = serializeWindow(window, preorder.country?.settings || {}, now);
+        return res.status(503).json({
+          error: closed.message || resolveSubmissionDisabledMessage(preorder.country?.settings),
+          code: "PREORDER_SUBMISSION_DISABLED",
+          submissionWindow: closed,
+        });
+      }
     }
 
     if (preorder.status !== "DRAFT") {

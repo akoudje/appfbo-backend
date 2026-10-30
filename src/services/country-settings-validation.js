@@ -1,3 +1,5 @@
+const { validateSchedule, MAX_GRACE_MINUTES } = require("./submission-schedule.service");
+
 function validateCountrySettings(patch, existing = {}) {
   const errors = {};
   const all = { ...existing, ...patch };
@@ -14,6 +16,7 @@ function validateCountrySettings(patch, existing = {}) {
     preinvoicedAutoCancelAfterMinutes: [1, 43200],
     preinvoicedAutoReminderAfterMinutes: [1, 43199],
     sponsorshipMinPurchaseFcfa: [0, 100000000],
+    submissionGraceMinutes: [0, MAX_GRACE_MINUTES],
   };
   for (const [key, [min, max]] of Object.entries(numbers))
     if (
@@ -39,6 +42,7 @@ function validateCountrySettings(patch, existing = {}) {
     "themeSliderEnabled",
     "themeSidePanelsEnabled",
     "sponsorshipEnabled",
+    "submissionScheduleEnabled",
   ];
   for (const key of booleans)
     if (key in patch && typeof patch[key] !== "boolean")
@@ -115,6 +119,17 @@ function validateCountrySettings(patch, existing = {}) {
     "piSpiQrImageUrl",
   ]);
   requiredIfEnabled("publicAnnouncementEnabled", ["publicAnnouncementMessage"]);
+  if ("submissionSchedule" in patch) {
+    const scheduleError = validateSchedule(patch.submissionSchedule);
+    if (scheduleError) errors.submissionSchedule = scheduleError;
+  }
+  if (
+    ("submissionScheduleEnabled" in patch || "submissionSchedule" in patch) &&
+    all.submissionScheduleEnabled &&
+    !errors.submissionSchedule &&
+    !Object.values(all.submissionSchedule || {}).some(Boolean)
+  )
+    errors.submissionSchedule = "Ouvrez au moins un jour, ou désactivez l’horaire automatique.";
   if (
     "preorderSubmissionEnabled" in patch &&
     !all.preorderSubmissionEnabled &&
