@@ -534,6 +534,7 @@ async function listOrders(req, res) {
           paymentStatus: true,
           paymentProvider: true,
           preorderPaymentMode: true,
+          settlementEntity: true,
           totalFcfa: true,
           fboGrade: true,
           billingGrade: true,
@@ -1435,7 +1436,8 @@ async function invoiceOrder(req, res) {
 
     publishRealtimeEvent({
       countryId: result?.preorder?.countryId || req.countryId,
-      eventKey: "cashier_collect_new",
+      // Réglée par une autre filiale : déjà payée, directement à lancer.
+      eventKey: result?.preorder?.status === "PAID" ? "cashier_launch_new" : "cashier_collect_new",
       orderId: result?.preorder?.id || id,
       meta: {
         status: result?.preorder?.status || "INVOICED",

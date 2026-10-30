@@ -256,6 +256,9 @@ async function findClosure(req, id) {
 function buildPaidOrdersWhere(req, { start, end, cashierId }) {
   const where = scopeWhere(req, {
     paymentStatus: "PAID",
+    // Réglées au siège d'une autre filiale (cf. settlement.service.js) : rien
+    // n'est encaissé ici, hors caisse.
+    settlementEntity: null,
     OR: [
       { manualPaymentValidatedAt: { gte: start, lte: end } },
       { paidAt: { gte: start, lte: end } },

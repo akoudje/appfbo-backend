@@ -367,6 +367,9 @@ enum PreorderLogAction {
   CANCEL
   REACTIVATE
 
+  SETTLEMENT_MARKED
+  SETTLEMENT_UNMARKED
+
   BACKORDER_CREDIT_ISSUED
   BACKORDER_CREDIT_CANCELLED
 
@@ -672,6 +675,7 @@ model AdminUser {
   preparedPreorders               Preorder[] @relation("PreorderPreparedBy")
   fulfilledPreorders              Preorder[] @relation("PreorderFulfilledBy")
   cancelledPreorders              Preorder[] @relation("PreorderCancelledBy")
+  settlementMarkedPreorders       Preorder[] @relation("PreorderSettlementMarkedBy")
   pickupPenaltyAppliedPreorders   Preorder[] @relation("PreorderPickupPenaltyAppliedBy")
 
   stockMovements StockMovement[]
@@ -1062,6 +1066,7 @@ model Preorder {
   shippingPaymentLinkId String? @unique
   shippingPaymentLink ExternalPaymentLink? @relation("ShippingPayment", fields: [shippingPaymentLinkId], references: [id], onDelete: Restrict)
   @@index([countryId, deliveryMode, status])
+  @@index([countryId, settlementEntity])
 
   // Protection des données personnelles
   personalDataConsentAccepted  Boolean   @default(false)
@@ -1120,6 +1125,16 @@ model Preorder {
   manualPaymentValidatedAt   DateTime?
   manualPaymentValidatedById String?
   manualPaymentValidatedBy   AdminUser? @relation("PreorderManualPaymentValidatedBy", fields: [manualPaymentValidatedById], references: [id], onDelete: SetNull)
+
+  // Règlement par une autre filiale FLP (ex. FLP_BURKINA, cf.
+  // settlement.service.js) : commande traitée et retirée ici, payée au siège
+  // de la filiale. Facturée directement en PAID, sans lien de paiement ni SMS,
+  // hors caisse : c'est une créance sur la filiale.
+  settlementEntity     String?
+  settlementReference  String?
+  settlementMarkedAt   DateTime?
+  settlementMarkedById String?
+  settlementMarkedBy   AdminUser? @relation("PreorderSettlementMarkedBy", fields: [settlementMarkedById], references: [id], onDelete: SetNull)
 
   // Paiement global
   paymentProvider PaymentProvider?
