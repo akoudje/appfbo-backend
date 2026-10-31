@@ -23,4 +23,16 @@ router.get(
   reportsController.exportPackagingSummaryReport,
 );
 
+router.get(
+  "/cash-supervision",
+  requirePermission(Permission.EXPORT_READ),
+  reportsController.getCashSupervisionReport,
+);
+
+router.get(
+  "/cash-supervision/export",
+  requirePermission(Permission.EXPORT_READ),
+  reportsController.exportCashSupervisionReport,
+);
+
 module.exports = router;

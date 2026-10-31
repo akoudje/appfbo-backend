@@ -2,6 +2,7 @@ const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const { csvCell } = require("../../helpers/order-query");
 const { settlementLabel } = require("../../services/settlement.service");
+const cashSupervision = require("../../services/cash-supervision.service");
 
 // Plafond du détail par commande (tableaux, export, répartitions) par
 // section. Les totaux (count/amountFcfa) ne dépendent jamais de ce plafond,
@@ -985,8 +986,97 @@ async function exportPackagingSummaryReport(req, res) {
   }
 }
 
+// Point de caisse de la responsable caisse : tous les encaissements de la
+// période (précommandes, billets, liens hors précommande, frais
+// d'expédition), voir cash-supervision.service.js.
+async function getCashSupervisionReport(req, res) {
+  try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+
+    const reportPeriod = resolveReportPeriod(req.query || {});
+    const filters = cashSupervision.normalizeFilters(req.query || {});
+    const report = await cashSupervision.buildCashSupervisionReport(req, reportPeriod, filters);
+
+    return res.json({
+      ok: true,
+      countryId: pickCountryId(req),
+      filters,
+      period: {
+        type: reportPeriod.type,
+        label: reportPeriod.label,
+        start: reportPeriod.start.toISOString(),
+        end: reportPeriod.end.toISOString(),
+        previousStart: reportPeriod.previous.start.toISOString(),
+        previousEnd: reportPeriod.previous.end.toISOString(),
+      },
+      ...report,
+    });
+  } catch (error) {
+    if (!error.statusCode) console.error("getCashSupervisionReport error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Erreur serveur (point de caisse)",
+    });
+  }
+}
+
+async function exportCashSupervisionReport(req, res) {
+  try {
+    const reportPeriod = resolveReportPeriod(req.query || {});
+    const filters = cashSupervision.normalizeFilters(req.query || {});
+    const report = await cashSupervision.buildCashSupervisionReport(req, reportPeriod, filters);
+
+    const header = [
+      "Date d'encaissement",
+      "Source",
+      "Référence",
+      "Client",
+      "Détail",
+      "Moyen de paiement",
+      "Facturier",
+      "Caissier",
+      "Montant hors frais (FCFA)",
+      "Frais de service (FCFA)",
+      "Montant encaissé (FCFA)",
+      "Emballage (FCFA)",
+    ];
+    const lines = report.rows.map((row) => [
+      row.paidAt ? new Date(row.paidAt).toISOString().replace("T", " ").slice(0, 16) : "",
+      cashSupervision.SOURCES[row.source],
+      row.reference,
+      row.customer,
+      row.detail,
+      cashSupervision.paymentModeLabel(row.paymentMode),
+      row.invoicer?.label || "",
+      row.cashier?.label || "",
+      row.baseAmountFcfa,
+      row.serviceFeeFcfa,
+      row.amountFcfa,
+      row.packagingFcfa,
+    ]);
+    const { totals } = report;
+    lines.push([
+      "TOTAL", `${totals.count} encaissement(s)`, "", "", "", "", "", "",
+      totals.baseAmountFcfa, totals.serviceFeeFcfa, totals.amountFcfa, report.packaging.amountFcfa,
+    ]);
+
+    const fileKey = reportPeriod.type === "custom" ? reportPeriod.label.replace(/ au /, "_") : reportPeriod.iso;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="point-de-caisse-${reportPeriod.type}-${fileKey}.csv"`);
+    return res.send("﻿" + [header, ...lines].map((line) => line.map(csvCell).join(";")).join("\r\n"));
+  } catch (error) {
+    if (!error.statusCode) console.error("exportCashSupervisionReport error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Impossible de générer l'export du point de caisse.",
+    });
+  }
+}
+
 module.exports = {
   getDailySalesReport,
   getPackagingSummaryReport,
   exportPackagingSummaryReport,
+  getCashSupervisionReport,
+  exportCashSupervisionReport,
 };
