@@ -390,10 +390,25 @@ async function buildPulse(req, now = new Date()) {
   };
 }
 
+const GLOBAL_ADMIN_ROLES = new Set(["SUPER_ADMIN", "TECH_ADMIN"]);
+
+// Un virement validé n'entre pas dans le tiroir : un jour où le caissier n'a
+// validé que des virements (ou rien), aucune clôture n'est attendue, et un
+// brouillon laissé ouvert ces jours-là ne compte pas comme manquant.
+// Un administrateur global n'encaisse pas : il aide le client (relance,
+// changement de moyen de paiement) et transmet la preuve au facturier.
+function closureState(row) {
+  if (row.closure && row.closure.status !== "DRAFT") return row.closure.status;
+  if (row.adminAssist) return "ADMIN_ASSIST";
+  if (row.transferCount < row.transactionCount) return row.closure ? "DRAFT" : "MISSING";
+  return row.transactionCount ? "TRANSFER_ONLY" : "NOTHING_TO_CLOSE";
+}
+
 // Clôtures de caisse sur la période, par caissier et par jour : attendu
 // (commandes dont il a validé le paiement), déclaré, écart, et clôtures
 // manquantes (encaissements sans clôture). Mêmes montants que
 // cashClosures.controller.js.
+
 async function buildClosuresReport(req, period) {
   const fromKey = period.start.toISOString().slice(0, 10);
   const toKey = period.end.toISOString().slice(0, 10);
@@ -455,8 +470,11 @@ async function buildClosuresReport(req, period) {
         key,
         dateKey,
         cashier: formatAdmin(cashier),
+        adminAssist: GLOBAL_ADMIN_ROLES.has(String(cashier?.role || "").toUpperCase()),
         expectedFcfa: 0,
+        transferFcfa: 0,
         transactionCount: 0,
+        transferCount: 0,
         closure: null,
       });
     }
@@ -466,8 +484,13 @@ async function buildClosuresReport(req, period) {
   for (const order of orders) {
     const at = order.manualPaymentValidatedAt || order.paidAt;
     const row = rowFor(new Date(at).toISOString().slice(0, 10), order.manualPaymentValidatedBy);
-    row.expectedFcfa += resolveOrderExpectedAmount(order);
+    const amount = resolveOrderExpectedAmount(order);
+    row.expectedFcfa += amount;
     row.transactionCount += 1;
+    if (resolveOrderPaymentMode(order) === "BANK_TRANSFER") {
+      row.transferFcfa += amount;
+      row.transferCount += 1;
+    }
   }
   for (const closure of closures) {
     rowFor(closure.dateKey, closure.cashier).closure = {
@@ -483,7 +506,7 @@ async function buildClosuresReport(req, period) {
   }
 
   const list = [...rows.values()]
-    .map((row) => ({ ...row, state: row.closure?.status || "MISSING" }))
+    .map((row) => ({ ...row, state: closureState(row) }))
     .sort((a, b) => b.dateKey.localeCompare(a.dateKey) || a.cashier.label.localeCompare(b.cashier.label));
   const closed = list.filter((row) => row.closure && row.closure.status !== "DRAFT");
 
@@ -494,6 +517,8 @@ async function buildClosuresReport(req, period) {
       declaredFcfa: closed.reduce((sum, row) => sum + row.closure.declaredFcfa, 0),
       discrepancyFcfa: closed.reduce((sum, row) => sum + row.closure.discrepancyFcfa, 0),
       missing: list.filter((row) => row.state === "MISSING" || row.state === "DRAFT").length,
+      transferOnly: list.filter((row) => row.state === "TRANSFER_ONLY").length,
+      adminAssist: list.filter((row) => row.state === "ADMIN_ASSIST").length,
       toReview: list.filter((row) => row.state === "SUBMITTED").length,
       withDiscrepancy: closed.filter((row) => row.closure.discrepancyFcfa !== 0).length,
     },
