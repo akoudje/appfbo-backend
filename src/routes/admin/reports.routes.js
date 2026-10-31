@@ -30,6 +30,12 @@ router.get(
 );
 
 router.get(
+  "/cash-supervision/recovery",
+  requirePermission(Permission.EXPORT_READ),
+  reportsController.getCashRecoveryReport,
+);
+
+router.get(
   "/cash-supervision/export",
   requirePermission(Permission.EXPORT_READ),
   reportsController.exportCashSupervisionReport,

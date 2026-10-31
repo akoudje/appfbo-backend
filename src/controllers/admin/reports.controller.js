@@ -3,6 +3,7 @@ const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const { csvCell } = require("../../helpers/order-query");
 const { settlementLabel } = require("../../services/settlement.service");
 const cashSupervision = require("../../services/cash-supervision.service");
+const cashRecovery = require("../../services/cash-recovery.service");
 
 // Plafond du détail par commande (tableaux, export, répartitions) par
 // section. Les totaux (count/amountFcfa) ne dépendent jamais de ce plafond,
@@ -1073,7 +1074,39 @@ async function exportCashSupervisionReport(req, res) {
   }
 }
 
+// Recouvrement : par facturier (traitées → payées), liste « À recouvrer »,
+// efficacité des relances. Voir cash-recovery.service.js.
+async function getCashRecoveryReport(req, res) {
+  try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+
+    const reportPeriod = resolveReportPeriod(req.query || {});
+    const invoicerId = String(req.query?.invoicerId || "").trim() || null;
+    const report = await cashRecovery.buildRecoveryReport(req, reportPeriod, { invoicerId });
+
+    return res.json({
+      ok: true,
+      filters: { invoicerId },
+      period: {
+        type: reportPeriod.type,
+        label: reportPeriod.label,
+        start: reportPeriod.start.toISOString(),
+        end: reportPeriod.end.toISOString(),
+      },
+      ...report,
+    });
+  } catch (error) {
+    if (!error.statusCode) console.error("getCashRecoveryReport error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Erreur serveur (recouvrement)",
+    });
+  }
+}
+
 module.exports = {
+  getCashRecoveryReport,
   getDailySalesReport,
   getPackagingSummaryReport,
   exportPackagingSummaryReport,
