@@ -122,3 +122,45 @@ test('requêtes : précommandes de test et billets gratuits exclus, filtre factu
   assert.equal(seen.ticket, undefined, 'les billets n\'ont pas de facturier');
   assert.equal(report.totals.count, 1);
 });
+
+test('évolution par jour : total, emballage, billets', () => {
+  const s = service();
+  const rows = [
+    s.preorderRow({ ...wavePreorder, paidAt: new Date('2026-10-29T10:00:00Z') }),
+    s.preorderRow({ ...wavePreorder, paidAt: new Date('2026-10-30T10:00:00Z') }),
+    s.ticketRow({ id: 't1', orderNumber: 'TK-1', eventId: 'e1', event: { title: 'Gala' }, quantity: 3, totalFcfa: 30000, amountToPayFcfa: 30300, paymentMethod: 'WAVE', paidAt: new Date('2026-10-30T12:00:00Z') }),
+  ];
+  const summary = s.summarize(rows);
+  assert.equal(JSON.stringify(summary.byDay.map((d) => [d.key, d.count, d.packagingFcfa, d.ticketCount])),
+    JSON.stringify([['2026-10-29', 1, 100, 0], ['2026-10-30', 2, 100, 3]]));
+  assert.equal(summary.ticketsByEvent[0].ticketCount, 3);
+});
+
+test('clôtures : attendu par caissier et par jour, clôture manquante ou avec écart', async () => {
+  const awa = { id: 'awa', fullName: 'Awa' };
+  const db = {
+    preorder: {
+      findMany: async () => [
+        { manualPaymentValidatedAt: new Date('2026-10-30T09:00:00Z'), manualPaymentValidatedBy: awa, preorderPaymentMode: 'ESPECES', as400InvoiceTotalFcfa: 50000, cashierTransactions: [{ paymentMode: 'ESPECES', amountReceivedFcfa: 50000 }] },
+        { manualPaymentValidatedAt: new Date('2026-10-31T09:00:00Z'), manualPaymentValidatedBy: awa, preorderPaymentMode: 'ESPECES', as400InvoiceTotalFcfa: 20000, cashierTransactions: [] },
+      ],
+    },
+    cashClosure: {
+      findMany: async () => [
+        { id: 'c1', dateKey: '2026-10-30', status: 'SUBMITTED', totalExpectedFcfa: 50000, totalDeclaredFcfa: 49000, discrepancyFcfa: -1000, cashier: awa },
+      ],
+    },
+    cashRegisterStatus: { findMany: async () => [{ userId: null, isOpen: true }] },
+  };
+  const period = { start: new Date('2026-10-30T00:00:00Z'), end: new Date('2026-10-31T23:59:59Z') };
+  const report = await service(db).buildClosuresReport({ countryId: 'CIV' }, period);
+  const byDay = Object.fromEntries(report.rows.map((row) => [row.dateKey, row]));
+  assert.equal(byDay['2026-10-30'].state, 'SUBMITTED');
+  assert.equal(byDay['2026-10-30'].closure.discrepancyFcfa, -1000);
+  assert.equal(byDay['2026-10-31'].state, 'MISSING');
+  assert.equal(byDay['2026-10-31'].expectedFcfa, 20000);
+  assert.equal(report.summary.missing, 1);
+  assert.equal(report.summary.toReview, 1);
+  assert.equal(report.summary.withDiscrepancy, 1);
+  assert.equal(report.registers[0].label, 'Caisse du comptoir');
+});

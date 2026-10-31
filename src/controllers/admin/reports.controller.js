@@ -1105,7 +1105,51 @@ async function getCashRecoveryReport(req, res) {
   }
 }
 
+function noStore(res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+}
+
+// Pouls du point de caisse du jour (rafraîchissement quasi temps réel).
+async function getCashSupervisionPulse(req, res) {
+  try {
+    noStore(res);
+    return res.json({ ok: true, ...(await cashSupervision.buildPulse(req)) });
+  } catch (error) {
+    if (!error.statusCode) console.error("getCashSupervisionPulse error:", error);
+    return res.status(error.statusCode || 500).json({ message: "Erreur serveur (pouls caisse)" });
+  }
+}
+
+// Clôtures de caisse de la période : attendu / déclaré / écart par caissier
+// et par jour, clôtures manquantes, état des caisses.
+async function getCashSupervisionClosures(req, res) {
+  try {
+    noStore(res);
+    const reportPeriod = resolveReportPeriod(req.query || {});
+    const report = await cashSupervision.buildClosuresReport(req, reportPeriod);
+    return res.json({
+      ok: true,
+      period: {
+        type: reportPeriod.type,
+        label: reportPeriod.label,
+        start: reportPeriod.start.toISOString(),
+        end: reportPeriod.end.toISOString(),
+      },
+      ...report,
+    });
+  } catch (error) {
+    if (!error.statusCode) console.error("getCashSupervisionClosures error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Erreur serveur (clôtures de caisse)",
+    });
+  }
+}
+
 module.exports = {
+  getCashSupervisionPulse,
+  getCashSupervisionClosures,
   getCashRecoveryReport,
   getDailySalesReport,
   getPackagingSummaryReport,
