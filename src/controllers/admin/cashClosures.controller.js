@@ -744,4 +744,9 @@ module.exports = {
   submitClosure,
   approveClosure: (req, res) => reviewClosure(req, res, "APPROVED"),
   rejectClosure: (req, res) => reviewClosure(req, res, "REJECTED"),
+  // Partagés avec le point de caisse (cash-supervision.service.js) : mêmes
+  // montants et moyens de paiement que les clôtures.
+  resolveOrderPaymentMode,
+  resolveOrderExpectedAmount,
+  paymentModeLabel,
 };
