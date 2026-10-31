@@ -390,11 +390,16 @@ async function buildPulse(req, now = new Date()) {
   };
 }
 
+const GLOBAL_ADMIN_ROLES = new Set(["SUPER_ADMIN", "TECH_ADMIN"]);
+
 // Un virement validé n'entre pas dans le tiroir : un jour où le caissier n'a
 // validé que des virements (ou rien), aucune clôture n'est attendue, et un
 // brouillon laissé ouvert ces jours-là ne compte pas comme manquant.
+// Un administrateur global n'encaisse pas : il aide le client (relance,
+// changement de moyen de paiement) et transmet la preuve au facturier.
 function closureState(row) {
   if (row.closure && row.closure.status !== "DRAFT") return row.closure.status;
+  if (row.adminAssist) return "ADMIN_ASSIST";
   if (row.transferCount < row.transactionCount) return row.closure ? "DRAFT" : "MISSING";
   return row.transactionCount ? "TRANSFER_ONLY" : "NOTHING_TO_CLOSE";
 }
@@ -465,6 +470,7 @@ async function buildClosuresReport(req, period) {
         key,
         dateKey,
         cashier: formatAdmin(cashier),
+        adminAssist: GLOBAL_ADMIN_ROLES.has(String(cashier?.role || "").toUpperCase()),
         expectedFcfa: 0,
         transferFcfa: 0,
         transactionCount: 0,
@@ -512,6 +518,7 @@ async function buildClosuresReport(req, period) {
       discrepancyFcfa: closed.reduce((sum, row) => sum + row.closure.discrepancyFcfa, 0),
       missing: list.filter((row) => row.state === "MISSING" || row.state === "DRAFT").length,
       transferOnly: list.filter((row) => row.state === "TRANSFER_ONLY").length,
+      adminAssist: list.filter((row) => row.state === "ADMIN_ASSIST").length,
       toReview: list.filter((row) => row.state === "SUBMITTED").length,
       withDiscrepancy: closed.filter((row) => row.closure.discrepancyFcfa !== 0).length,
     },

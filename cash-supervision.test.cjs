@@ -175,6 +175,7 @@ test('clôtures : un jour de virements uniquement n\'attend pas de clôture', as
         transfer('2026-10-30', 300000),
         transfer('2026-10-31', 80000),
         { manualPaymentValidatedAt: new Date('2026-10-31T10:00:00Z'), manualPaymentValidatedBy: awa, preorderPaymentMode: 'ESPECES', as400InvoiceTotalFcfa: 20000, cashierTransactions: [] },
+        { manualPaymentValidatedAt: new Date('2026-10-31T11:00:00Z'), manualPaymentValidatedBy: { id: 'sa', fullName: 'Super Admin', role: 'SUPER_ADMIN' }, preorderPaymentMode: 'ESPECES', as400InvoiceTotalFcfa: 90000, cashierTransactions: [] },
       ],
     },
     cashClosure: {
@@ -187,11 +188,13 @@ test('clôtures : un jour de virements uniquement n\'attend pas de clôture', as
   };
   const period = { start: new Date('2026-10-30T00:00:00Z'), end: new Date('2026-10-31T23:59:59Z') };
   const report = await service(db).buildClosuresReport({ countryId: 'CIV' }, period);
-  const state =(day, cashier) => report.rows.find((row) => row.dateKey === day && row.cashier.id === cashier).state;
+  const state = (day, cashier) => report.rows.find((row) => row.dateKey === day && row.cashier.id === cashier).state;
   assert.equal(state('2026-10-30', 'awa'), 'TRANSFER_ONLY', 'un brouillon un jour de virements ne compte pas');
   assert.equal(report.rows.find((row) => row.dateKey === '2026-10-30').transferFcfa, 450000);
   assert.equal(state('2026-10-31', 'awa'), 'MISSING', 'des espèces le même jour exigent la clôture');
   assert.equal(state('2026-10-31', 'julie'), 'NOTHING_TO_CLOSE', 'brouillon vide sans paiement');
+  assert.equal(state('2026-10-31', 'sa'), 'ADMIN_ASSIST', 'un administrateur global n\'encaisse pas');
   assert.equal(report.summary.missing, 1);
   assert.equal(report.summary.transferOnly, 1);
+  assert.equal(report.summary.adminAssist, 1);
 });
