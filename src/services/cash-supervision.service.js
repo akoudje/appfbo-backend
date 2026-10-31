@@ -303,7 +303,209 @@ function summarize(rows) {
       count: preorders.filter((row) => row.packagingFcfa > 0).length,
       amountFcfa: preorders.reduce((sum, row) => sum + row.packagingFcfa, 0),
     },
-    ticketsByEvent: groupRows(tickets, (row) => row.eventId, (row) => row.eventTitle || "Événement"),
+    ticketsByEvent: groupRows(tickets, (row) => row.eventId, (row) => row.eventTitle || "Événement").map(
+      (group) => ({
+        ...group,
+        ticketCount: tickets
+          .filter((row) => row.eventId === group.key)
+          .reduce((sum, row) => sum + (row.quantity || 0), 0),
+      }),
+    ),
+    byDay: summarizeByDay(rows),
+  };
+}
+
+// Évolution jour par jour (semaine, mois, période) : total, emballage et
+// billets. Jour UTC, comme les bornes de période (UTC = heure d'Abidjan).
+function summarizeByDay(rows) {
+  const days = new Map();
+  for (const row of rows) {
+    if (!row.paidAt) continue;
+    const key = new Date(row.paidAt).toISOString().slice(0, 10);
+    const day = days.get(key) || {
+      key,
+      count: 0,
+      amountFcfa: 0,
+      packagingFcfa: 0,
+      preorderCount: 0,
+      ticketAmountFcfa: 0,
+      ticketCount: 0,
+    };
+    day.count += 1;
+    day.amountFcfa += row.amountFcfa;
+    day.packagingFcfa += row.packagingFcfa;
+    if (row.source === "PREORDER") day.preorderCount += 1;
+    if (row.source === "TICKET") {
+      day.ticketAmountFcfa += row.amountFcfa;
+      day.ticketCount += row.quantity || 0;
+    }
+    days.set(key, day);
+  }
+  return [...days.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// Pouls du jour : requêtes agrégées très légères, interrogées toutes les
+// quelques secondes par la page ; le rapport complet n'est rechargé que si la
+// signature change. Couvre toutes les sources sans dépendre des événements
+// temps réel (non émis par les confirmations Wave, et propres à chaque
+// instance du serveur).
+async function buildPulse(req, now = new Date()) {
+  const dayIso = now.toISOString().slice(0, 10);
+  const window = paidWindow(new Date(`${dayIso}T00:00:00.000Z`), new Date(`${dayIso}T23:59:59.999Z`));
+  const [preorders, validated, tickets, links] = await Promise.all([
+    prisma.preorder.aggregate({
+      where: scopeWhere(req, { paymentStatus: "PAID", isTest: false, paidAt: window }),
+      _count: { _all: true },
+      _max: { paidAt: true },
+    }),
+    prisma.preorder.aggregate({
+      where: scopeWhere(req, { paymentStatus: "PAID", isTest: false, manualPaymentValidatedAt: window }),
+      _count: { _all: true },
+      _max: { manualPaymentValidatedAt: true },
+    }),
+    prisma.ticketOrder.aggregate({
+      where: scopeWhere(req, { paymentStatus: "SUCCEEDED", isTest: false, paidAt: window }),
+      _count: { _all: true },
+      _max: { paidAt: true },
+    }),
+    prisma.externalPaymentLink.aggregate({
+      where: scopeWhere(req, { status: "PAID", paidAt: window }),
+      _count: { _all: true },
+      _max: { paidAt: true },
+    }),
+  ]);
+
+  const dates = [
+    preorders._max?.paidAt,
+    validated._max?.manualPaymentValidatedAt,
+    tickets._max?.paidAt,
+    links._max?.paidAt,
+  ].filter(Boolean);
+  const lastPaidAt = dates.length ? new Date(Math.max(...dates.map((d) => new Date(d).getTime()))) : null;
+  const counts = [preorders, validated, tickets, links].map((result) => result._count?._all || 0);
+  return {
+    date: dayIso,
+    lastPaidAt,
+    signature: `${counts.join("-")}@${lastPaidAt ? lastPaidAt.toISOString() : ""}`,
+  };
+}
+
+// Clôtures de caisse sur la période, par caissier et par jour : attendu
+// (commandes dont il a validé le paiement), déclaré, écart, et clôtures
+// manquantes (encaissements sans clôture). Mêmes montants que
+// cashClosures.controller.js.
+async function buildClosuresReport(req, period) {
+  const fromKey = period.start.toISOString().slice(0, 10);
+  const toKey = period.end.toISOString().slice(0, 10);
+  const window = paidWindow(period.start, period.end);
+
+  const [orders, closures, registers] = await Promise.all([
+    prisma.preorder.findMany({
+      where: scopeWhere(req, {
+        paymentStatus: "PAID",
+        isTest: false,
+        settlementEntity: null,
+        manualPaymentValidatedById: { not: null },
+        OR: [{ manualPaymentValidatedAt: window }, { paidAt: window }],
+      }),
+      select: {
+        manualPaymentValidatedAt: true,
+        paidAt: true,
+        preorderPaymentMode: true,
+        paymentProvider: true,
+        totalFcfa: true,
+        as400InvoiceTotalFcfa: true,
+        manualPaymentValidatedBy: adminSelect,
+        activePayment: { select: { provider: true, amountPaidFcfa: true, amountExpectedFcfa: true } },
+        cashierTransactions: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: { paymentMode: true, amountExpectedFcfa: true, amountReceivedFcfa: true },
+        },
+      },
+      take: DETAIL_ROWS_LIMIT,
+    }),
+    prisma.cashClosure.findMany({
+      where: scopeWhere(req, { dateKey: { gte: fromKey, lte: toKey } }),
+      select: {
+        id: true,
+        dateKey: true,
+        status: true,
+        totalExpectedFcfa: true,
+        totalDeclaredFcfa: true,
+        discrepancyFcfa: true,
+        transactionCount: true,
+        submittedAt: true,
+        reviewedAt: true,
+        cashier: adminSelect,
+        reviewedBy: adminSelect,
+      },
+    }),
+    prisma.cashRegisterStatus.findMany({
+      where: scopeWhere(req, {}),
+      select: { userId: true, isOpen: true, closedAt: true, reopenedAt: true, user: adminSelect },
+    }),
+  ]);
+
+  const rows = new Map();
+  const rowFor = (dateKey, cashier) => {
+    const key = `${dateKey}|${cashier.id}`;
+    if (!rows.has(key)) {
+      rows.set(key, {
+        key,
+        dateKey,
+        cashier: formatAdmin(cashier),
+        expectedFcfa: 0,
+        transactionCount: 0,
+        closure: null,
+      });
+    }
+    return rows.get(key);
+  };
+
+  for (const order of orders) {
+    const at = order.manualPaymentValidatedAt || order.paidAt;
+    const row = rowFor(new Date(at).toISOString().slice(0, 10), order.manualPaymentValidatedBy);
+    row.expectedFcfa += resolveOrderExpectedAmount(order);
+    row.transactionCount += 1;
+  }
+  for (const closure of closures) {
+    rowFor(closure.dateKey, closure.cashier).closure = {
+      id: closure.id,
+      status: closure.status,
+      expectedFcfa: closure.totalExpectedFcfa,
+      declaredFcfa: closure.totalDeclaredFcfa,
+      discrepancyFcfa: closure.discrepancyFcfa,
+      submittedAt: closure.submittedAt,
+      reviewedAt: closure.reviewedAt,
+      reviewedBy: formatAdmin(closure.reviewedBy),
+    };
+  }
+
+  const list = [...rows.values()]
+    .map((row) => ({ ...row, state: row.closure?.status || "MISSING" }))
+    .sort((a, b) => b.dateKey.localeCompare(a.dateKey) || a.cashier.label.localeCompare(b.cashier.label));
+  const closed = list.filter((row) => row.closure && row.closure.status !== "DRAFT");
+
+  return {
+    rows: list,
+    summary: {
+      expectedFcfa: list.reduce((sum, row) => sum + row.expectedFcfa, 0),
+      declaredFcfa: closed.reduce((sum, row) => sum + row.closure.declaredFcfa, 0),
+      discrepancyFcfa: closed.reduce((sum, row) => sum + row.closure.discrepancyFcfa, 0),
+      missing: list.filter((row) => row.state === "MISSING" || row.state === "DRAFT").length,
+      toReview: list.filter((row) => row.state === "SUBMITTED").length,
+      withDiscrepancy: closed.filter((row) => row.closure.discrepancyFcfa !== 0).length,
+    },
+    registers: registers
+      .map((register) => ({
+        global: !register.userId,
+        label: register.userId ? formatAdmin(register.user)?.label || "Caisse personnelle" : "Caisse du comptoir",
+        isOpen: register.isOpen,
+        closedAt: register.closedAt,
+        reopenedAt: register.reopenedAt,
+      }))
+      .sort((a, b) => Number(b.global) - Number(a.global) || a.label.localeCompare(b.label)),
   };
 }
 
@@ -346,6 +548,8 @@ module.exports = {
   paymentModeLabel,
   normalizeFilters,
   buildCashSupervisionReport,
+  buildPulse,
+  buildClosuresReport,
   // exposés pour les tests
   preorderRow,
   ticketRow,

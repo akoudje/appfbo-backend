@@ -30,6 +30,18 @@ router.get(
 );
 
 router.get(
+  "/cash-supervision/pulse",
+  requirePermission(Permission.EXPORT_READ),
+  reportsController.getCashSupervisionPulse,
+);
+
+router.get(
+  "/cash-supervision/closures",
+  requirePermission(Permission.EXPORT_READ),
+  reportsController.getCashSupervisionClosures,
+);
+
+router.get(
   "/cash-supervision/recovery",
   requirePermission(Permission.EXPORT_READ),
   reportsController.getCashRecoveryReport,
