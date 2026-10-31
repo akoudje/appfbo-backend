@@ -43,6 +43,7 @@ const {
   isBankProofPaymentMode,
   getEffectiveExpiryMinutes,
 } = require("../../services/preorder-expiration.service");
+const { checkRelaunchWindow } = require("../../services/payment-followup.service");
 const { Prisma } = require("@prisma/client");
 const { resolveOrderSearchIds: resolveOrderSearchIdsShared } = require("../../helpers/preorder-search");
 
@@ -1735,6 +1736,7 @@ async function relaunchPayment(req, res) {
       where: scopeWhere(req, { id }),
       include: {
         items: true,
+        country: { select: { code: true } },
         logs: {
           orderBy: { createdAt: "desc" },
           take: 20,
@@ -1794,12 +1796,34 @@ async function relaunchPayment(req, res) {
       Boolean(autoCancelLog) ||
       (cancelReason.includes("automatique") &&
         cancelReason.includes("sans paiement"));
+    const cashClosureCancelLog = order.logs.find(
+      (log) =>
+        String(log.action || "").toUpperCase() === "CANCEL" &&
+        String(log.meta?.source || "").toUpperCase() === "CASH_REGISTER_CLOSURE",
+    );
 
-    if (!isAutoExpiredCancel) {
+    if (!isAutoExpiredCancel && !cashClosureCancelLog) {
       return res.status(400).json({
         message:
-          "Cette relance est réservée aux commandes annulées automatiquement après expiration du délai de paiement.",
+          "Cette relance est réservée aux commandes annulées automatiquement sans paiement (délai expiré ou fermeture de caisse).",
       });
+    }
+
+    // Hors administrateurs globaux : relance seulement agence ouverte et le
+    // jour même de l'annulation (voir payment-followup.service.js).
+    if (!isGlobalAdminRole(req.user?.role)) {
+      const relaunchWindow = await checkRelaunchWindow({
+        countryId: order.countryId,
+        countryCode: order.country?.code || req.country?.code,
+        cancelledAt:
+          order.cancelledAt || (autoCancelLog || cashClosureCancelLog)?.createdAt || null,
+      });
+      if (!relaunchWindow.ok) {
+        return res.status(409).json({
+          code: relaunchWindow.code,
+          message: relaunchWindow.message,
+        });
+      }
     }
 
     if (!String(order.factureReference || "").trim()) {

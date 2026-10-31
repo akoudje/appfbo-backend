@@ -38,6 +38,9 @@ const Permission = {
   INVOICE_CREATE: "INVOICE_CREATE",
   PAYMENT_VALIDATE: "PAYMENT_VALIDATE",
   EXTERNAL_PAYMENT_LINKS_MANAGE: "EXTERNAL_PAYMENT_LINKS_MANAGE",
+  // Suivi et relance des paiements sans droit de facturer (responsable caisse) :
+  // relancer une commande annulée sans paiement, renvoyer la notification.
+  PAYMENT_FOLLOWUP: "PAYMENT_FOLLOWUP",
 
   PREPARATION_UPDATE: "PREPARATION_UPDATE",
 
@@ -148,6 +151,7 @@ const ROLE_PERMISSIONS = {
     Permission.PREORDER_READ,
     Permission.PAYMENT_VALIDATE,
     Permission.EXTERNAL_PAYMENT_LINKS_MANAGE,
+    Permission.PAYMENT_FOLLOWUP,
     Permission.EXPORT_READ,
   ],
 

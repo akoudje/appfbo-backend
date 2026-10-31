@@ -82,7 +82,7 @@ router.patch(
 
 router.post(
   "/:id/relaunch-payment",
-  requirePermission(Permission.INVOICE_CREATE),
+  requireAnyPermission([Permission.INVOICE_CREATE, Permission.PAYMENT_FOLLOWUP]),
   ordersController.relaunchPayment,
 );
 
@@ -100,7 +100,7 @@ router.patch(
 
 router.post(
   "/:id/resend-invoice-sms",
-  requirePermission(Permission.INVOICE_CREATE),
+  requireAnyPermission([Permission.INVOICE_CREATE, Permission.PAYMENT_FOLLOWUP]),
   ordersController.resendInvoiceSms,
 );
 
