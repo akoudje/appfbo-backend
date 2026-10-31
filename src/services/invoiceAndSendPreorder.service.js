@@ -449,6 +449,10 @@ async function invoiceAndSendPreorder({
   // true : pas d'envoi SMS/email ici (ex. achat de parrainage, notifié à part
   // avec le lien de paiement renvoyé dans le résultat).
   skipNotification = false,
+  // Relance : la commande reste au facturier qui l'a traitée à l'origine
+  // (dossier + auteur de la facturation), même si quelqu'un d'autre relance.
+  // L'auteur réel de l'action reste tracé via actorAdminId dans les logs.
+  preserveInvoicerId = null,
 }) {
   if (!preorderId) {
     throw new Error("PREORDER_ID_REQUIRED");
@@ -549,15 +553,16 @@ async function invoiceAndSendPreorder({
     // potentiellement périmé) : le statut ET l'attribution sont revérifiés
     // ici, et cette écriture attribue le dossier au premier qui valide s'il
     // n'était encore à personne.
+    const ownerInvoicerId = preserveInvoicerId || actorAdminId;
     const claimed = await tx.preorder.updateMany({
       where: {
         id: existingPreorder.id,
         status: "SUBMITTED",
-        OR: [{ assignedInvoicerId: null }, { assignedInvoicerId: actorAdminId }],
+        OR: [{ assignedInvoicerId: null }, { assignedInvoicerId: ownerInvoicerId }],
       },
       data: {
-        assignedInvoicerId: actorAdminId || existingPreorder.assignedInvoicerId || null,
-        assignedAt: existingPreorder.assignedAt || (actorAdminId ? now : existingPreorder.assignedAt),
+        assignedInvoicerId: ownerInvoicerId || existingPreorder.assignedInvoicerId || null,
+        assignedAt: existingPreorder.assignedAt || (ownerInvoicerId ? now : existingPreorder.assignedAt),
         billingLastActivityAt: now,
       },
     });
@@ -630,7 +635,7 @@ async function invoiceAndSendPreorder({
         billingAdjustmentReason: null,
         invoicedAt: now,
         paymentExpiresAt,
-        invoicedById: actorAdminId || existingPreorder.invoicedById || null,
+        invoicedById: preserveInvoicerId || actorAdminId || existingPreorder.invoicedById || null,
         totalCc: String(Number(pricingSummary.totals.totalCc || 0).toFixed(3)),
         totalPoidsKg: String(
           Number(pricingSummary.totals.totalPoidsKg || 0).toFixed(3),

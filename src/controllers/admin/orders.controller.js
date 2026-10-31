@@ -1828,7 +1828,22 @@ async function relaunchPayment(req, res) {
       billingCompletedAt: order.billingCompletedAt,
       activePaymentId: order.activePaymentId,
       paidAt: order.paidAt,
+      assignedInvoicerId: order.assignedInvoicerId,
+      assignedAt: order.assignedAt,
     };
+
+    // Une commande relancée reste toujours chez le facturier qui l'a traitée
+    // à l'origine (bilans, performance, encaissements), quel que soit l'admin
+    // qui relance.
+    const originalInvoicerId = order.invoicedById || order.assignedInvoicerId || null;
+
+    // as400InvoiceTotalFcfa/totalFcfa incluent déjà livraison et emballage,
+    // qu'invoiceAndSendPreorder rajoute par-dessus le montant AS400 : on lui
+    // repasse donc le montant AS400 seul, sinon l'emballage est compté deux fois.
+    const invoicedTotalFcfa = Number(order.as400InvoiceTotalFcfa || order.totalFcfa || 0);
+    const as400BaseAmountFcfa = invoicedTotalFcfa
+      ? invoicedTotalFcfa - Number(order.fraisLivraisonFcfa || 0) - Number(order.emballageFcfa || 0)
+      : "";
 
     await prisma.$transaction(async (tx) => {
       await tx.payment.updateMany({
@@ -1860,13 +1875,12 @@ async function relaunchPayment(req, res) {
                 paymentProvider: "MANUAL",
               }
             : {}),
-          // Remis dans la file (QUEUED) : l'ancienne attribution (avant
-          // l'annulation auto) doit être effacée, sinon la garde atomique de
-          // invoiceAndSendPreorder refuse la relance dès que l'admin qui
-          // relance n'est pas le facturier d'origine (PREORDER_ALREADY_ASSIGNED).
-          assignedInvoicerId: null,
-          assignedAt: null,
-          billingWorkStatus: "QUEUED",
+          // Le dossier reste attribué au facturier d'origine : pas de retour
+          // en file QUEUED, où la répartition automatique pourrait le donner
+          // à un autre facturier avant la refacturation ci-dessous.
+          assignedInvoicerId: originalInvoicerId,
+          assignedAt: originalInvoicerId ? order.assignedAt || new Date() : null,
+          billingWorkStatus: originalInvoicerId ? "IN_PROGRESS" : "QUEUED",
           billingQueueEnteredAt: new Date(),
           billingCompletedAt: null,
           billingLastActivityAt: new Date(),
@@ -1889,6 +1903,7 @@ async function relaunchPayment(req, res) {
           previousPaymentProvider: order.paymentProvider || null,
           nextPreorderPaymentMode: switchToCash ? "ESPECES" : order.preorderPaymentMode || null,
           nextPaymentProvider: switchToCash ? "MANUAL" : order.paymentProvider || null,
+          originalInvoicerId,
           note: note || null,
         },
         actorAdminId,
@@ -1906,9 +1921,9 @@ async function relaunchPayment(req, res) {
         notificationEmailInput: order.fboEmail,
         invoiceNote: note || "Relance du délai de paiement.",
         billingGradeInput: order.billingGrade || order.fboGrade,
-        invoiceAmountOverrideInput:
-          order.as400InvoiceTotalFcfa || order.totalFcfa || "",
+        invoiceAmountOverrideInput: as400BaseAmountFcfa,
         paymentExpiresAtInput: paymentExpiresAt,
+        preserveInvoicerId: originalInvoicerId,
       });
 
       publishRealtimeEvent({
@@ -1942,6 +1957,8 @@ async function relaunchPayment(req, res) {
           billingCompletedAt: previousSnapshot.billingCompletedAt,
           activePaymentId: previousSnapshot.activePaymentId,
           paidAt: previousSnapshot.paidAt,
+          assignedInvoicerId: previousSnapshot.assignedInvoicerId,
+          assignedAt: previousSnapshot.assignedAt,
           paymentExpiresAt: order.paymentExpiresAt || null,
         },
       });
