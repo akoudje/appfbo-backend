@@ -46,4 +46,4 @@ async function checkRelaunchWindow({ countryId, countryCode, cancelledAt, now = 
   return { ok: true };
 }
 
-module.exports = { checkRelaunchWindow };
+module.exports = { checkRelaunchWindow, localDate };
