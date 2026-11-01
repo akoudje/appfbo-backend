@@ -38,6 +38,8 @@ function fixture(patch = {}, env) {
     '../utils/phone': require('./src/utils/phone'),
     './shipping.service': shipping,
     './mobile-push.service': { sendPreorderMobilePush: async () => ({ sent: false, reason: 'NO_PUSH_TOKEN' }) },
+    // WhatsApp non configuré : le SMS reste le canal téléphone.
+    './whatsapp.service': { canSendPreorderWhatsAppTemplate: () => false },
   });
   const api = moduleFrom('./src/services/shipping-notifications.service.js', {
     '../prisma': db, './shipping.service': shipping,
@@ -176,6 +178,7 @@ test('handover notification carries the actual reference in email and queues a c
     './shipping.service':shipping,'./sms.orange.service':{MAX_SMS_LENGTH:160},'./notification-template-defaults':{getPaymentExpiryHours:()=>2},
     './email.service':{normalizeEmail:value=>value,sendEmail:async args=>{f.emails.push(args);return {accepted:true};}},'./email-templates/layout':require('./src/services/email-templates/layout'),'../utils/phone':require('./src/utils/phone'),
     './mobile-push.service':{sendPreorderMobilePush:async()=>({sent:false})},
+    './whatsapp.service':{canSendPreorderWhatsAppTemplate:()=>false},
   });
   const result=await generic.sendPreorderNotification({preorder:f.order,purpose:'ORDER_FULFILLED',message:sms});
   assert.equal(result.smsQueued,true);assert.equal(result.emailSent,true);assert.ok(sms.length<=160);assert.match(f.emails[0].body,/CODI-ISSIA-001/);assert.match(f.emails[0].body,/ISSIA/);assert.equal(f.emails[0].body.includes('Code de retrait'),false);

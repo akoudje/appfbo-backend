@@ -130,10 +130,25 @@ test('purposes without a template never borrow another one', () => {
 async function withEnv(env, fn) {
   const saved = { ...process.env };
   const savedFetch = global.fetch;
-  for (const key of Object.keys(process.env)) if (key.startsWith('MAILERSEND_')) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (key.startsWith('MAILERSEND_') || key === 'WHATSAPP_PRIMARY_ENABLED') delete process.env[key];
   Object.assign(process.env, env);
   try { return await fn(); } finally { process.env = saved; global.fetch = savedFetch; }
 }
+
+test('WhatsApp can be the primary channel only when configured, templated and not switched off', async () => {
+  const ctx = context(CASES.INVOICE_WAVE[1]);
+  const configured = { MAILERSEND_WHATSAPP_API_KEY: 'k', MAILERSEND_WHATSAPP_SENDER: '+2250100000000' };
+  await withEnv({}, () => assert.equal(whatsapp.canSendPreorderWhatsAppTemplate('INVOICE', ctx), false));
+  await withEnv(configured, () => assert.equal(whatsapp.canSendPreorderWhatsAppTemplate('INVOICE', ctx), false));
+  await withEnv({ ...configured, MAILERSEND_WHATSAPP_TEMPLATE_INVOICE_WAVE: 'tpl' }, () => {
+    assert.equal(whatsapp.canSendPreorderWhatsAppTemplate('INVOICE', ctx), true);
+    assert.equal(whatsapp.canSendPreorderWhatsAppTemplate('INVOICE', { ...ctx, paymentLink: 'https://x.test/autre' }), false);
+    assert.equal(whatsapp.canSendPreorderWhatsAppTemplate('AUTO_CANCEL', ctx), false);
+  });
+  await withEnv({ ...configured, MAILERSEND_WHATSAPP_TEMPLATE_INVOICE_WAVE: 'tpl', WHATSAPP_PRIMARY_ENABLED: 'false' }, () => {
+    assert.equal(whatsapp.canSendPreorderWhatsAppTemplate('INVOICE', ctx), false);
+  });
+});
 
 test('without MailerSend configuration the channel stays simulated', async () => {
   await withEnv({}, async () => {

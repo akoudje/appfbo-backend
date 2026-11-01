@@ -542,6 +542,25 @@ function buildPreorderTemplateVariables(templateKey, context = {}, { countryCode
   }
 }
 
+// Interrupteur d'urgence : WhatsApp est le canal principal des FBO dès que
+// MailerSend et le modèle sont configurés, sauf WHATSAPP_PRIMARY_ENABLED=false.
+function isWhatsAppPrimaryEnabled() {
+  return String(process.env.WHATSAPP_PRIMARY_ENABLED ?? "true").trim().toLowerCase() !== "false";
+}
+
+/**
+ * Vrai si ce message peut réellement partir en WhatsApp : MailerSend
+ * configuré, modèle approuvé renseigné pour ce cas, variables constructibles.
+ * Sert à choisir WhatsApp en canal principal (SMS en secours) sans jamais
+ * l'essayer quand l'échec est certain.
+ */
+function canSendPreorderWhatsAppTemplate(purpose, context = {}, { countryCode = "CIV" } = {}) {
+  if (!isWhatsAppPrimaryEnabled() || !mailerSendWhatsAppConfigured()) return false;
+  const templateKey = resolveWhatsAppTemplateKey(purpose, context);
+  if (!templateKey || !getWhatsAppTemplateId(templateKey)) return false;
+  return !buildPreorderTemplateVariables(templateKey, context, { countryCode }).errorCode;
+}
+
 function whatsappFailure(errorCode, errorMessage, metadata = {}) {
   return {
     accepted: false,
@@ -673,6 +692,8 @@ module.exports = {
   mailerSendWhatsAppConfigured,
   getWhatsAppTemplateId,
   resolveWhatsAppTemplateKey,
+  isWhatsAppPrimaryEnabled,
+  canSendPreorderWhatsAppTemplate,
   sanitizeTemplateValue,
   extractButtonSuffix,
   sendMailerSendWhatsAppTemplate,
