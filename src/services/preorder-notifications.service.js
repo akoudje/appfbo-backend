@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const { sendSms } = require("./sms.service");
+const { normalizeForCountry } = require("../utils/phone");
 const whatsappService = require("./whatsapp.service");
 const { normalizeEmail, sendEmail } = require("./email.service");
 const { MAX_SMS_LENGTH } = require("./sms.orange.service");
@@ -83,6 +84,17 @@ function resolveNotificationPhone(preorder) {
     preorder?.messages?.find((message) => message?.toPhone)?.toPhone ||
     null
   );
+}
+
+async function resolvePreorderCountryCode(preorder) {
+  const known = preorder?.country?.code || preorder?.countryCode;
+  if (known) return known;
+  if (!preorder?.countryId) return "CIV";
+  const country = await prisma.country.findUnique({
+    where: { id: preorder.countryId },
+    select: { code: true },
+  });
+  return country?.code || "CIV";
 }
 
 function resolveNotificationEmail(preorder, explicitEmail = null) {
@@ -1110,8 +1122,12 @@ async function sendPreorderNotification({
   const persistedPurpose = resolvePersistedOrderMessagePurpose(purpose);
   const pushPurpose = String(purpose).toUpperCase() === "SHIPPING_PAYMENT_LINK" ? "SHIPPING_PAYMENT_LINK" : persistedPurpose;
 
-  const resolvedPhone = toPhone || resolveNotificationPhone(preorder);
-  const resolvedWhatsapp = toWhatsapp || resolvedPhone;
+  const contactPhone = toPhone || resolveNotificationPhone(preorder);
+  const resolvedWhatsapp = toWhatsapp || preorder?.contactWhatsapp || contactPhone;
+  // Le SMS passe par l'opérateur du pays : un numéro étranger n'est joignable
+  // que sur WhatsApp (ou par email).
+  const smsCountryCode = await resolvePreorderCountryCode(preorder);
+  const resolvedPhone = contactPhone && normalizeForCountry(contactPhone, smsCountryCode) ? contactPhone : null;
   const resolvedEmail = resolveNotificationEmail(preorder, toEmail);
   const defaultEmailSubject =
     String(emailSubject || "").trim() ||

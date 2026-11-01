@@ -1,6 +1,6 @@
 // backend/src/services/whatsapp.service.js
 
-const { normalizeForCountry } = require("../utils/phone");
+const { normalizeInternationalPhone } = require("../utils/phone");
 
 /**
  * Formate un montant FCFA
@@ -251,9 +251,9 @@ async function sendMailerSendWhatsAppTemplate({
 }) {
   const cfg = getMailerSendWhatsAppConfig();
   // L'API MailerSend attend un numéro E.164 avec "+" (ex: "+2250506025071"),
-  // contrairement à normalizePhone() (digits seuls, pensé pour les liens
+  // de n'importe quel pays, contrairement à normalizePhone() (digits seuls, pensé pour les liens
   // wa.me) utilisé ailleurs dans ce fichier.
-  const normalizedTo = normalizeForCountry(to, countryCode);
+  const normalizedTo = normalizeInternationalPhone(to, countryCode);
 
   if (!cfg.apiKey || !cfg.sender) {
     return {

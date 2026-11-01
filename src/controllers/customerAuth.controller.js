@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma");
 const { normalizeEmail, sendEmail } = require("../services/email.service");
+const { resolveContactPhones } = require("../utils/phone");
 const { renderLayout, renderHighlightBox } = require("../services/email-templates/layout");
 const {
   buildNotificationSummaryForCustomer,
@@ -441,6 +442,8 @@ async function me(req, res) {
         numeroFbo: true,
         nomComplet: true,
         email: true,
+        phone: true,
+        whatsappPhone: true,
       },
     });
     if (!fbo) {
@@ -452,6 +455,8 @@ async function me(req, res) {
       numeroFbo: fbo.numeroFbo,
       nomComplet: fbo.nomComplet,
       email: fbo.email || null,
+      phone: fbo.phone || null,
+      whatsappPhone: fbo.whatsappPhone || null,
       countryCode: req.country?.code || null,
     });
   } catch (e) {
@@ -471,6 +476,8 @@ async function dashboard(req, res) {
         numeroFbo: true,
         nomComplet: true,
         email: true,
+        phone: true,
+        whatsappPhone: true,
         grade: true,
         pointDeVente: true,
       },
@@ -571,6 +578,8 @@ async function dashboard(req, res) {
         numeroFbo: fbo.numeroFbo,
         nomComplet: fbo.nomComplet,
         email: fbo.email || null,
+        phone: fbo.phone || null,
+        whatsappPhone: fbo.whatsappPhone || null,
         grade: fbo.grade,
         pointDeVente: fbo.pointDeVente,
         countryCode: req.country?.code || null,
@@ -604,10 +613,42 @@ async function dashboard(req, res) {
   }
 }
 
+// PUT /customer/me/contact : téléphone et WhatsApp réutilisés à chaque commande.
+async function updateMyContact(req, res) {
+  try {
+    const contact = resolveContactPhones(
+      {
+        phone: req.body?.phone,
+        whatsapp: req.body?.whatsappPhone,
+        whatsappSameAsPhone: req.body?.whatsappSameAsPhone,
+      },
+      req.country?.code || "CIV",
+    );
+    if (!contact.ok) {
+      return res.status(400).json({ message: contact.error, code: contact.code });
+    }
+    const now = new Date();
+    const fbo = await prisma.fbo.update({
+      where: { id: req.customer.fboId },
+      data: {
+        phone: contact.phone,
+        whatsappPhone: contact.whatsapp,
+        whatsappOptInAt: contact.whatsapp ? now : null,
+      },
+      select: { phone: true, whatsappPhone: true },
+    });
+    return res.json({ phone: fbo.phone, whatsappPhone: fbo.whatsappPhone || null });
+  } catch (e) {
+    console.error("customer update contact error:", e);
+    return res.status(500).json({ message: "Impossible d'enregistrer vos numéros." });
+  }
+}
+
 module.exports = {
   requestOtp,
   verifyOtp,
   logout,
   me,
+  updateMyContact,
   dashboard,
 };

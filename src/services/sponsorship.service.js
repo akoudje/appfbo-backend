@@ -9,7 +9,8 @@ const os = require("os");
 const multer = require("multer");
 const prisma = require("../prisma");
 const { cloudinary, uploadFile } = require("./cloudinary");
-const { sendSms, normalizePhoneForCountry } = require("./sms.service");
+const { sendSms } = require("./sms.service");
+const { normalizeInternationalPhone, resolveContactPhones } = require("../utils/phone");
 
 const MIN_RECRUIT_AGE = 18;
 const SPONSOR_ALLOWED_GRADES = new Set(["ANIMATEUR_ADJOINT", "ANIMATEUR", "MANAGER_ADJOINT", "MANAGER"]);
@@ -131,11 +132,18 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     else if (age < MIN_RECRUIT_AGE) errors.push(`Le filleul doit avoir au moins ${MIN_RECRUIT_AGE} ans (âge actuel : ${age} ans).`);
   }
 
-  const mobile = mobileRaw ? normalizePhoneForCountry(mobileRaw, countryCode) : null;
-  if (mobileRaw && !mobile) errors.push("Le numéro de téléphone mobile est invalide.");
+  // Tout pays accepté ; un numéro étranger est aussi le WhatsApp du filleul.
+  const contact = mobileRaw
+    ? resolveContactPhones({ phone: mobileRaw, whatsapp: raw.whatsapp, whatsappSameAsPhone: raw.whatsappSameAsPhone }, countryCode)
+    : null;
+  if (contact && !contact.ok) {
+    errors.push(contact.code === "WHATSAPP_INVALID" ? "Le numéro WhatsApp est invalide." : "Le numéro de téléphone mobile est invalide.");
+  }
+  const mobile = contact?.ok ? contact.phone : null;
+  const whatsapp = contact?.ok ? contact.whatsapp : null;
 
   const sponsorPhoneRaw = required("sponsorPhone", "Votre téléphone (parrain)");
-  const sponsorPhone = sponsorPhoneRaw ? normalizePhoneForCountry(sponsorPhoneRaw, countryCode) : null;
+  const sponsorPhone = sponsorPhoneRaw ? normalizeInternationalPhone(sponsorPhoneRaw, countryCode) : null;
   if (sponsorPhoneRaw && !sponsorPhone) errors.push("Votre numéro de téléphone (parrain) est invalide.");
 
   // Email obligatoire : canal de contact du filleul (notifications de commande).
@@ -158,6 +166,7 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
     idDocumentNumber: idDocumentNumber.toUpperCase().replace(/\s+/g, ""),
     passportNumber: text(raw.passportNumber)?.toUpperCase() || null,
     mobile,
+    whatsapp,
     email,
     addressArea: text(raw.addressArea),
     city,

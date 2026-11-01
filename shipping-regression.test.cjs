@@ -44,7 +44,7 @@ test('the submit endpoint persists each selected carrier with home delivery disa
   for (const deliveryMode of ['EXPEDITION_CODITRANS', 'EXPEDITION_POSTE']) {
     const draft = { ...order, status: 'DRAFT', fboNumero: '225-000-111-222', fboGrade: 'MANAGER', personalDataConsentAccepted: true,
       deliveryMode: 'RETRAIT_SITE_FLP', country: { id: 'ci', code: 'CIV', settings: { enableDelivery: false, enablePickup: true, enableWave: true } },
-      items: [{ productId: 'product', qty: 1, product: { countryProducts: [{ maxQtyPerOrder: 10 }] } }],
+      items: [{ productId: 'product', qty: 1, product: { countryProducts: [{ maxQtyPerOrder: 10, stockQty: 10 }] } }],
     };
     const writes = [];
     const db = {
@@ -64,6 +64,9 @@ test('the submit endpoint persists each selected carrier with home delivery disa
         if (name === '../services/sms.service') return { normalizePhoneForCountry: phone => phone, buildPreorderSmsMessage: () => 'Notification simulée' };
         if (name === '../services/preorder-notifications.service') return { sendPreorderNotification: async () => ({ smsQueued: true, sent: false, attempts: [] }) };
         if (name === '../services/realtime-events.service') return { publishRealtimeEvent() {} };
+        if (name === '../services/submission-schedule.service') return { computeSubmissionWindow: () => ({}), canSubmitNow: () => true, serializeWindow: () => ({}) };
+        if (name === '../utils/phone') return require('./src/utils/phone');
+        if (name === '../services/billingQueue.service') return { dispatchBillingQueue: async () => {} };
         return {};
       },
     });

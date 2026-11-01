@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const { pickCountryId } = require("../helpers/countryScope");
+const { normalizeInternationalPhone } = require("../utils/phone");
 const {
   buildOrderReadySmsMessage,
   sendPreorderNotification,
@@ -12,10 +13,10 @@ function digitsOnly(value = "") {
   return String(value || "").replace(/\D/g, "");
 }
 
-function normalizeLocalPhone(value = "") {
-  const digits = digitsOnly(value);
-  if (digits.startsWith("225") && digits.length >= 13) return digits.slice(-10);
-  return digits.slice(-10);
+// Numéro de contact (E.164, tout pays) : les anciens numéros enregistrés
+// sans indicatif sont lus comme des numéros du pays.
+function normalizeContactPhone(value = "", countryCode = "CIV") {
+  return normalizeInternationalPhone(value, countryCode);
 }
 
 function normalizeFboNumber(value = "") {
@@ -27,9 +28,9 @@ function normalizePreorderNumber(value = "") {
 }
 
 function maskPhone(value = "") {
-  const digits = normalizeLocalPhone(value);
-  if (digits.length < 6) return digits || "";
-  return `${digits.slice(0, 2)}***${digits.slice(-3)}`;
+  const digits = digitsOnly(value);
+  if (digits.length < 8) return digits || "";
+  return `+${digits.slice(0, 5)}***${digits.slice(-3)}`;
 }
 
 function normalizeStatus(value = "") {
@@ -42,8 +43,9 @@ async function createPaymentLinkResendRequest(req, res) {
     const countryId = pickCountryId(req);
     const preorderNumber = normalizePreorderNumber(req.body?.preorderNumber);
     const fboNumero = normalizeFboNumber(req.body?.fboNumero);
-    const originalPhone = normalizeLocalPhone(req.body?.originalPhone);
-    const requestedWhatsappPhone = normalizeLocalPhone(req.body?.requestedWhatsappPhone);
+    const countryCode = req.country?.code || "CIV";
+    const originalPhone = normalizeContactPhone(req.body?.originalPhone, countryCode);
+    const requestedWhatsappPhone = normalizeContactPhone(req.body?.requestedWhatsappPhone, countryCode);
     const note = String(req.body?.note || "").trim().slice(0, 500);
 
     if (!preorderNumber || !fboNumero || !originalPhone) {
@@ -113,7 +115,7 @@ async function createPaymentLinkResendRequest(req, res) {
       return res.status(403).json({ message: "Les informations saisies ne correspondent pas." });
     }
 
-    const orderPhone = normalizeLocalPhone(preorder.factureWhatsappTo);
+    const orderPhone = normalizeContactPhone(preorder.factureWhatsappTo, countryCode);
     if (orderPhone && orderPhone !== originalPhone) {
       return res.status(403).json({ message: "Le téléphone saisi ne correspond pas à la commande." });
     }
@@ -278,8 +280,9 @@ async function createPickupCodeResendRequest(req, res) {
     const countryId = pickCountryId(req);
     const preorderNumber = normalizePreorderNumber(req.body?.preorderNumber);
     const fboNumero = normalizeFboNumber(req.body?.fboNumero);
-    const originalPhone = normalizeLocalPhone(req.body?.originalPhone);
-    const requestedWhatsappPhone = normalizeLocalPhone(req.body?.requestedWhatsappPhone);
+    const countryCode = req.country?.code || "CIV";
+    const originalPhone = normalizeContactPhone(req.body?.originalPhone, countryCode);
+    const requestedWhatsappPhone = normalizeContactPhone(req.body?.requestedWhatsappPhone, countryCode);
     const note = String(req.body?.note || "").trim().slice(0, 500);
 
     if (!preorderNumber || !fboNumero || !originalPhone) {
@@ -312,7 +315,7 @@ async function createPickupCodeResendRequest(req, res) {
       return res.status(403).json({ message: "Les informations saisies ne correspondent pas." });
     }
 
-    const orderPhone = normalizeLocalPhone(preorder.factureWhatsappTo);
+    const orderPhone = normalizeContactPhone(preorder.factureWhatsappTo, countryCode);
     if (orderPhone && orderPhone !== originalPhone) {
       return res.status(403).json({ message: "Le téléphone saisi ne correspond pas à la commande." });
     }

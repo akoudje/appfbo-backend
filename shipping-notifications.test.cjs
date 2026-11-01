@@ -35,6 +35,7 @@ function fixture(patch = {}, env) {
     './email.service': { normalizeEmail: value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '')) ? value : '', sendEmail: async args => { emails.push(args); return { accepted: emailAccepted, provider: 'MOCK', providerMessageId: 'mail-' + emails.length, errorCode: emailErrorCode, errorMessage: 'Private provider response: secret' }; } },
     './notification-template-defaults': { getPaymentExpiryHours: () => 2 },
     './email-templates/layout': require('./src/services/email-templates/layout'),
+    '../utils/phone': require('./src/utils/phone'),
     './shipping.service': shipping,
     './mobile-push.service': { sendPreorderMobilePush: async () => ({ sent: false, reason: 'NO_PUSH_TOKEN' }) },
   });
@@ -173,7 +174,7 @@ test('handover notification carries the actual reference in email and queues a c
   const generic=moduleFrom('./src/services/preorder-notifications.service.js',{
     '../prisma':{countrySettings:{findUnique:async()=>null},orderMessage:{findFirst:async()=>null,create:async({data})=>({...data,id:'message'}),update:async({data})=>({...data,id:'message'})},orderMessageEvent:{create:async()=>({})}},
     './shipping.service':shipping,'./sms.orange.service':{MAX_SMS_LENGTH:160},'./notification-template-defaults':{getPaymentExpiryHours:()=>2},
-    './email.service':{normalizeEmail:value=>value,sendEmail:async args=>{f.emails.push(args);return {accepted:true};}},'./email-templates/layout':require('./src/services/email-templates/layout'),
+    './email.service':{normalizeEmail:value=>value,sendEmail:async args=>{f.emails.push(args);return {accepted:true};}},'./email-templates/layout':require('./src/services/email-templates/layout'),'../utils/phone':require('./src/utils/phone'),
     './mobile-push.service':{sendPreorderMobilePush:async()=>({sent:false})},
   });
   const result=await generic.sendPreorderNotification({preorder:f.order,purpose:'ORDER_FULFILLED',message:sms});
