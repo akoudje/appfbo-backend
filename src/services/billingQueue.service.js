@@ -464,7 +464,7 @@ async function dispatchOnce(countryId) {
           userId: target.id,
           actorAdminId: null,
           mode: "AUTO_DISPATCH",
-          note: "Précommande attribuée automatiquement (répartition entre facturiers caissiers connectés)",
+          note: "Précommande attribuée automatiquement (répartition entre agents de vente connectés)",
           maxActive,
         }),
       { timeout: 15000, maxWait: 10000 },
