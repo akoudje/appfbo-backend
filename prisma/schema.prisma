@@ -466,6 +466,12 @@ model Fbo {
   grade        Grade
   pointDeVente String
 
+  // Coordonnées saisies par le client et réutilisées d'une commande à l'autre
+  // (E.164, tout pays). Une même valeur peut figurer sur plusieurs FBO.
+  phone           String?
+  whatsappPhone   String?
+  whatsappOptInAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1118,6 +1124,9 @@ model Preorder {
   factureReference  String?
   paymentCollectionCode String?
   factureWhatsappTo String?
+  // Numéro WhatsApp du client au moment de la commande (E.164, tout pays).
+  // Un numéro étranger est forcément un numéro WhatsApp (pas de SMS possible).
+  contactWhatsapp   String?
   billingAdjustmentReason String? @db.Text
   parcelNumber      String? @unique
   invoicedAt        DateTime?

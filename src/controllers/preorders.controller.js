@@ -9,7 +9,6 @@ const {
 } = require("../services/pricing.service");
 const {
   buildPreorderSmsMessage,
-  normalizePhoneForCountry,
   fetchSmsStatus,
 } = require("../services/sms.service");
 const {
@@ -33,6 +32,11 @@ const {
   isFboDirectoryTemporarilyUnavailable,
   normalizeGrade,
 } = require("../services/fboDirectory.service");
+const {
+  isNationalPhone,
+  normalizeInternationalPhone,
+  resolveContactPhones,
+} = require("../utils/phone");
 
 const BILLING_WHATSAPPS = [process.env.BILLING_WA_1]
   .map((phone) => String(phone || "").trim())
@@ -205,6 +209,14 @@ function normalizeFboDirectoryProfile(payload) {
         "",
     ).trim(),
     grade: normalizeGrade(payload.grade),
+  };
+}
+
+function buildFboContactUpdate(contact, now = new Date()) {
+  return {
+    phone: contact.phone,
+    whatsappPhone: contact.whatsapp,
+    whatsappOptInAt: contact.whatsapp ? now : null,
   };
 }
 
@@ -1024,6 +1036,8 @@ async function submit(req, res) {
   const {
     phoneRaw,
     phoneNormalized,
+    whatsappPhone,
+    whatsappSameAsPhone,
     email,
     paymentMode,
     deliveryMode,
@@ -1255,14 +1269,15 @@ async function submit(req, res) {
       preorder.personalDataConsentAccepted = updatedPreorder.personalDataConsentAccepted;
     }
 
-    const smsTo = normalizePhoneForCountry(
-      phoneNormalized || phoneRaw,
+    const contact = resolveContactPhones(
+      { phone: phoneNormalized || phoneRaw, whatsapp: whatsappPhone, whatsappSameAsPhone },
       preorder.country?.code || req.country?.code || "CIV",
     );
-    if (!smsTo) {
-      return res.status(400).json({ error: "Le numéro de téléphone est obligatoire." });
+    if (!contact.ok) {
+      return res.status(400).json({ error: contact.error, code: contact.code });
     }
-    if (isBillingNumber(smsTo)) {
+    const smsTo = contact.phone;
+    if (isBillingNumber(smsTo) || isBillingNumber(contact.whatsapp)) {
       return res.status(400).json({
         error:
           "Le numéro de téléphone client est invalide. Veuillez saisir le numéro de l'utilisateur.",
@@ -1305,6 +1320,7 @@ async function submit(req, res) {
       message: smsMessage,
       actorName: "SYSTEM",
       toPhone: smsTo,
+      toWhatsapp: contact.whatsapp,
     });
     const smsDispatched = Boolean(notificationResult?.smsSent);
     const smsQueued = Boolean(notificationResult?.smsQueued);
@@ -1371,6 +1387,7 @@ async function submit(req, res) {
           emballageFcfa: summary.totals.emballageFcfa || 0,
           totalFcfa: summary.totals.totalFcfa || 0,
           factureWhatsappTo: smsTo,
+          contactWhatsapp: contact.whatsapp,
           whatsappMessage: smsMessage,
           lastWhatsappStatus: persistedMessageStatus,
           lastWhatsappStatusAt: now,
@@ -1378,6 +1395,15 @@ async function submit(req, res) {
           submittedAt: now,
         },
       });
+
+      // Coordonnées réutilisées à la prochaine commande, sauf si un autre FBO
+      // commande pour ce client (ses numéros ne sont pas ceux du client).
+      if (preorder.fboId && !preorder.placedByFboNumero) {
+        await tx.fbo.update({
+          where: { id: preorder.fboId },
+          data: buildFboContactUpdate(contact, now),
+        });
+      }
 
       await tx.preorderLog.create({
         data: {
@@ -1490,13 +1516,16 @@ async function notifySms(req, res) {
       return res.status(400).json({ error: "Précommande non éligible au renvoi SMS." });
     }
 
-    const smsTo = normalizePhoneForCountry(
+    const smsTo = normalizeInternationalPhone(
       phoneNormalized || phoneRaw || preorder.factureWhatsappTo,
       preorder.country?.code || req.country?.code || "CIV",
     );
     if (!smsTo) {
       return res.status(400).json({ error: "Aucun numéro disponible pour le SMS." });
     }
+    const whatsappTo = isNationalPhone(smsTo, preorder.country?.code || req.country?.code || "CIV")
+      ? preorder.contactWhatsapp || null
+      : smsTo;
     if (isBillingNumber(smsTo)) {
       return res.status(400).json({
         error:
@@ -1523,6 +1552,7 @@ async function notifySms(req, res) {
       message: smsMessage,
       actorName: "SYSTEM",
       toPhone: smsTo,
+      toWhatsapp: whatsappTo,
     });
     const smsDispatched = Boolean(notificationResult?.smsSent);
     const smsQueued = Boolean(notificationResult?.smsQueued);
@@ -1671,14 +1701,14 @@ async function getSmsStatus(req, res) {
 async function createCustomerDraft(req, res) {
   try {
     if (!req.customer?.fboId) return res.status(401).json({ error: "Session expirée. Reconnectez-vous." });
-    const profile = await prisma.fbo.findUnique({ where: { id: req.customer.fboId }, select: { id: true, numeroFbo: true, nomComplet: true, email: true } });
+    const profile = await prisma.fbo.findUnique({ where: { id: req.customer.fboId }, select: { id: true, numeroFbo: true, nomComplet: true, email: true, phone: true, whatsappPhone: true } });
     if (!profile || (req.customer.email && normalizeEmail(req.customer.email) !== normalizeEmail(profile.email))) return res.status(401).json({ error: "Session expirée. Reconnectez-vous." });
     if (req.body?.sessionFboNumero && String(req.body.sessionFboNumero).replace(/\D/g, "") !== profile.numeroFbo.replace(/\D/g, "")) return res.status(409).json({ error: "La session client a changé. Reconnectez-vous avant de commander.", code: "CUSTOMER_SESSION_CHANGED" });
     const key = getClientIdempotencyKey(req, "clientDraftKey");
     if (!key) return res.status(400).json({ error: "Identifiant de brouillon requis." });
     const beneficiary = String(req.body?.numeroFbo || profile.numeroFbo).trim();
     const self = beneficiary.replace(/\D/g, "") === profile.numeroFbo.replace(/\D/g, "");
-    const latest = self ? await prisma.preorder.findFirst({ where: { fboId: profile.id, countryId: req.countryId, status: { not: "DRAFT" } }, orderBy: { createdAt: "desc" }, select: { factureWhatsappTo: true } }) : null;
+    const latest = self ? await prisma.preorder.findFirst({ where: { fboId: profile.id, countryId: req.countryId, status: { not: "DRAFT" } }, orderBy: { createdAt: "desc" }, select: { factureWhatsappTo: true, contactWhatsapp: true } }) : null;
     const draftReq = Object.create(req);
     draftReq.requireVerifiedFbo = true;
     draftReq.trustedCustomerNumeroFbo = self ? profile.numeroFbo : null;
@@ -1696,7 +1726,7 @@ async function createCustomerDraft(req, res) {
     };
     draftReq.headers = { ...req.headers, "x-idempotency-key": draftReq.body.clientDraftKey };
     const json = res.json.bind(res);
-    res.json = body => json(body?.preorderId ? { ...body, contact: { email: self ? profile.email : "", phone: latest?.factureWhatsappTo || "" }, orderFor: self ? "SELF" : "OTHER" } : body);
+    res.json = body => json(body?.preorderId ? { ...body, contact: { email: self ? profile.email : "", phone: self ? profile.phone || latest?.factureWhatsappTo || "" : "", whatsapp: self ? profile.whatsappPhone || latest?.contactWhatsapp || "" : "" }, orderFor: self ? "SELF" : "OTHER" } : body);
     return await createDraft(draftReq, res);
   } catch (error) {
     console.error("createCustomerDraft:", error);
