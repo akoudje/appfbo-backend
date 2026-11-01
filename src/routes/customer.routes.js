@@ -47,6 +47,7 @@ router.post("/auth/otp/verify", otpVerifyLimiter, customerAuthController.verifyO
 router.post("/auth/logout", customerAuthController.logout);
 
 router.get("/me", requireCustomerAuth, customerAuthController.me);
+router.put("/me/contact", requireCustomerAuth, customerAuthController.updateMyContact);
 router.post("/me/preorders", requireCustomerAuth, createRateLimiter({ keyPrefix: "customer_draft", windowMs: 60000, max: 10, keyFn: req => ({ ip: req.ip, fboId: req.customer.fboId, country: req.countryId }) }), createCustomerDraft);
 router.get("/me/dashboard", requireCustomerAuth, customerAuthController.dashboard);
 router.get("/me/orders", requireCustomerAuth, customerOrdersController.listMyOrders);

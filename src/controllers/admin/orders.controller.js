@@ -20,7 +20,8 @@ const {
   buildOrderFulfilledSmsMessage,
   sendPreorderNotification,
 } = require("../../services/preorder-notifications.service");
-const { normalizePhone, sendSms } = require("../../services/sms.service");
+const { sendSms } = require("../../services/sms.service");
+const { isNationalPhone, normalizeInternationalPhone } = require("../../utils/phone");
 const { normalizeEmail, sendEmail } = require("../../services/email.service");
 const { publishRealtimeEvent } = require("../../services/realtime-events.service");
 const billingQueueService = require("../../services/billingQueue.service");
@@ -310,11 +311,12 @@ function canRegularizeFulfillment(role) {
   );
 }
 
-function normalizeOptionalNotificationPhone(value) {
+// Numéro de n'importe quel pays ; sans indicatif, numéro du pays de la commande.
+function normalizeOptionalNotificationPhone(value, countryCode = "CIV") {
   if (value === undefined) return undefined;
   const raw = String(value || "").trim();
   if (!raw) return null;
-  return normalizePhone(raw) || "__INVALID_PHONE__";
+  return normalizeInternationalPhone(raw, countryCode) || "__INVALID_PHONE__";
 }
 
 function normalizeOptionalNotificationEmail(value) {
@@ -2228,19 +2230,27 @@ async function updateNotificationContacts(req, res) {
     const { id } = req.params;
     const hasPhone = Object.prototype.hasOwnProperty.call(req.body || {}, "phone");
     const hasEmail = Object.prototype.hasOwnProperty.call(req.body || {}, "email");
+    const hasWhatsapp = Object.prototype.hasOwnProperty.call(req.body || {}, "whatsapp");
 
-    if (!hasPhone && !hasEmail) {
+    if (!hasPhone && !hasEmail && !hasWhatsapp) {
       return res.status(400).json({
         message: "Renseignez au moins un numéro ou un email de notification.",
       });
     }
 
-    const phone = normalizeOptionalNotificationPhone(req.body?.phone);
+    const phone = normalizeOptionalNotificationPhone(req.body?.phone, req.country?.code);
     const email = normalizeOptionalNotificationEmail(req.body?.email);
+    const whatsapp = normalizeOptionalNotificationPhone(req.body?.whatsapp, req.country?.code);
 
     if (phone === "__INVALID_PHONE__") {
       return res.status(400).json({
         message: "Numéro de notification invalide.",
+      });
+    }
+
+    if (whatsapp === "__INVALID_PHONE__") {
+      return res.status(400).json({
+        message: "Numéro WhatsApp invalide.",
       });
     }
 
@@ -2256,6 +2266,7 @@ async function updateNotificationContacts(req, res) {
         id: true,
         status: true,
         factureWhatsappTo: true,
+        contactWhatsapp: true,
         fboEmail: true,
       },
     });
@@ -2272,7 +2283,10 @@ async function updateNotificationContacts(req, res) {
 
     const data = {};
     if (hasPhone) data.factureWhatsappTo = phone;
+    if (hasWhatsapp) data.contactWhatsapp = whatsapp;
     if (hasEmail) data.fboEmail = email;
+    // Un numéro étranger n'est joignable que sur WhatsApp.
+    if (phone && !isNationalPhone(phone, req.country?.code || "CIV")) data.contactWhatsapp = phone;
 
     const updated = await prisma.$transaction(async (tx) => {
       const saved = await tx.preorder.update({
@@ -2291,6 +2305,8 @@ async function updateNotificationContacts(req, res) {
         {
           previousPhone: order.factureWhatsappTo || null,
           nextPhone: hasPhone ? phone : order.factureWhatsappTo || null,
+          previousWhatsapp: order.contactWhatsapp || null,
+          nextWhatsapp: data.contactWhatsapp !== undefined ? data.contactWhatsapp : order.contactWhatsapp || null,
           previousEmail: order.fboEmail || null,
           nextEmail: hasEmail ? email : order.fboEmail || null,
         },
@@ -2304,6 +2320,7 @@ async function updateNotificationContacts(req, res) {
       ok: true,
       order: updated,
       factureWhatsappTo: updated.factureWhatsappTo || null,
+      contactWhatsapp: updated.contactWhatsapp || null,
       fboEmail: updated.fboEmail || null,
     });
   } catch (e) {
@@ -2318,7 +2335,7 @@ async function resendInvoiceSms(req, res) {
   try {
     const { id } = req.params;
     const requestedChannel = String(req.body?.channel || "").trim().toUpperCase();
-    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone);
+    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone, req.country?.code);
     const emailOverride = normalizeOptionalNotificationEmail(req.body?.email);
 
     if (phoneOverride === "__INVALID_PHONE__") {
@@ -2518,7 +2535,7 @@ async function resendConfirmationSms(req, res) {
     const { id } = req.params;
     const globalAdmin = isGlobalAdminRole(req.user?.role);
     const requestedChannel = String(req.body?.channel || "").trim().toUpperCase();
-    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone);
+    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone, req.country?.code);
     const emailOverride = normalizeOptionalNotificationEmail(req.body?.email);
 
     if (phoneOverride === "__INVALID_PHONE__") {
@@ -2855,7 +2872,7 @@ async function switchWaveToManualPayment(req, res) {
 async function switchManualToWavePayment(req, res) {
   try {
     const { id } = req.params;
-    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone);
+    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone, req.country?.code);
 
     if (!isGlobalAdminRole(req.user?.role)) {
       return res.status(403).json({

@@ -2647,6 +2647,7 @@ model Sponsorship {
   idDocumentNumber  String
   passportNumber    String?
   mobile            String
+  whatsapp          String?
   email             String?
   addressArea       String?
   city              String
