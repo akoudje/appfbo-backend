@@ -1321,7 +1321,9 @@ async function sendPreorderNotification({
       preorderId: preorder.id,
       countryCode: preorderCountryCode,
       maxSmsRetries,
-      whatsappPurpose: item.channel === "WHATSAPP" ? persistedPurpose : null,
+      // Purpose brut : SHIPPING_PAYMENT_LINK ou AUTO_CANCEL n'ont pas le même
+      // modèle WhatsApp que leur équivalent enum (PAYMENT_LINK, REMINDER).
+      whatsappPurpose: item.channel === "WHATSAPP" ? purpose : null,
       whatsappContext: item.channel === "WHATSAPP" ? context : null,
     });
 
