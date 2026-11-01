@@ -102,7 +102,22 @@ async function mailerSendWhatsAppEventsWebhook(req, res) {
       });
     });
 
-    return res.status(200).json({ ok: true, processed: 1 });
+    // Hors transaction : un échec du secours ne doit pas faire rejouer le
+    // webhook (MailerSend renverrait l'événement), il est seulement journalisé.
+    let smsFallbackQueued = false;
+    if (mappedStatus === "FAILED") {
+      try {
+        const { queueSmsFallbackForFailedWhatsApp } = require("../services/preorder-notifications.service");
+        smsFallbackQueued = Boolean(await queueSmsFallbackForFailedWhatsApp(message.id));
+      } catch (fallbackError) {
+        console.error("[whatsapp][mailersend][webhook] sms fallback error", {
+          orderMessageId: message.id,
+          message: fallbackError?.message,
+        });
+      }
+    }
+
+    return res.status(200).json({ ok: true, processed: 1, smsFallbackQueued });
   } catch (error) {
     console.error("[whatsapp][mailersend][webhook] error", error);
     return res.status(500).json({ ok: false, error: error.message || "Erreur webhook WhatsApp MailerSend" });

@@ -993,6 +993,65 @@ async function queueSmsNotification({
   return queuedMessage;
 }
 
+const WHATSAPP_SMS_FALLBACK_EVENT = "SMS_FALLBACK_QUEUED";
+// Au-delà, le SMS arriverait trop tard pour être utile (ou contredirait un
+// message plus récent) : on n'en envoie pas.
+const WHATSAPP_SMS_FALLBACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Secours SMS pour un WhatsApp accepté par MailerSend puis signalé en échec
+ * par webhook (numéro sans WhatsApp, message non distribuable...). Une seule
+ * fois par message, dans les 24 h, et uniquement pour les messages que la
+ * politique SMS autorise. Renvoie le message SMS mis en file, ou null.
+ */
+async function queueSmsFallbackForFailedWhatsApp(orderMessageId) {
+  const message = await prisma.orderMessage.findUnique({
+    where: { id: orderMessageId },
+    include: {
+      events: { where: { status: WHATSAPP_SMS_FALLBACK_EVENT }, select: { id: true } },
+      preorder: {
+        select: {
+          id: true,
+          deliveryMode: true,
+          factureWhatsappTo: true,
+          country: { select: { code: true } },
+        },
+      },
+    },
+  });
+  if (!message || message.channel !== "WHATSAPP" || message.events.length > 0) return null;
+  if (!message.body || Date.now() - new Date(message.createdAt).getTime() > WHATSAPP_SMS_FALLBACK_MAX_AGE_MS) {
+    return null;
+  }
+
+  const preorder = message.preorder;
+  const smsAllowed =
+    shouldSendSmsForPurpose(message.purpose) ||
+    (message.purpose === "ORDER_FULFILLED" && require("./shipping.service").isShipping(preorder?.deliveryMode));
+  const smsPhone = resolveNotificationPhone(preorder);
+  if (!smsAllowed || !smsPhone || !normalizeForCountry(smsPhone, preorder?.country?.code || "CIV")) {
+    return null;
+  }
+
+  const fallbackMessage = await queueSmsNotification({
+    preorderId: message.preorderId,
+    purpose: message.purpose,
+    toPhone: smsPhone,
+    message: message.body,
+    paymentLinkTarget: message.paymentLinkTarget,
+    paymentLinkTracked: message.paymentLinkTracked,
+    actorName: "SYSTEM",
+  });
+  await prisma.orderMessageEvent.create({
+    data: {
+      orderMessageId: message.id,
+      status: WHATSAPP_SMS_FALLBACK_EVENT,
+      note: `WhatsApp non distribué : SMS de secours mis en file (${fallbackMessage.id}).`,
+    },
+  });
+  return fallbackMessage;
+}
+
 async function sendSmsWithRetry({
   to,
   message,
@@ -1174,8 +1233,22 @@ async function sendPreorderNotification({
   const smsAllowed = shouldSendSmsForPurpose(purpose) || (persistedPurpose === 'ORDER_FULFILLED' && require('./shipping.service').isShipping(preorder?.deliveryMode));
   const forcedChannel = String(forceChannel || "").trim().toUpperCase();
   const channels = [];
+  const whatsappPrimary =
+    !forcedChannel &&
+    Boolean(resolvedWhatsapp) &&
+    whatsappService.canSendPreorderWhatsAppTemplate(purpose, context, {
+      countryCode: preorderCountryCode,
+    });
 
-  if (smsAllowed) {
+  if (whatsappPrimary) {
+    // WhatsApp canal principal des FBO. Le SMS reste en secours, seulement
+    // pour les messages que la politique SMS autorise déjà (pas de surcoût).
+    channels.push({
+      channel: "WHATSAPP",
+      to: resolvedWhatsapp,
+      smsFallbackTo: smsAllowed ? resolvedPhone : null,
+    });
+  } else if (smsAllowed) {
     if (forcedChannel === "WHATSAPP" && resolvedWhatsapp) {
       channels.push({ channel: "WHATSAPP", to: resolvedWhatsapp });
     } else if (resolvedPhone) {
@@ -1363,6 +1436,50 @@ async function sendPreorderNotification({
         providerMessageId: sendResult.providerMessageId || null,
       };
     }
+
+    // WhatsApp refusé immédiatement : secours SMS. Les échecs signalés plus
+    // tard par MailerSend passent par queueSmsFallbackForFailedWhatsApp.
+    if (item.channel === "WHATSAPP" && !sendResult.accepted && item.smsFallbackTo) {
+      const fallbackMessage = await queueSmsNotification({
+        preorderId: preorder.id,
+        purpose: persistedPurpose,
+        toPhone: item.smsFallbackTo,
+        message: resolvedSmsMessage,
+        paymentLinkTarget,
+        paymentLinkTracked,
+        actorName,
+        maxAttempts: Math.max(1, Number(maxSmsRetries) + 1),
+      });
+      await prisma.orderMessageEvent.create({
+        data: {
+          orderMessageId: savedMessage.id,
+          status: WHATSAPP_SMS_FALLBACK_EVENT,
+          note: `Échec WhatsApp : SMS de secours mis en file (${fallbackMessage.id}).`,
+        },
+      });
+      attempts.push({
+        channel: "SMS",
+        sent: false,
+        queued: true,
+        to: item.smsFallbackTo,
+        messageId: fallbackMessage.id,
+        provider: fallbackMessage.provider || "ORANGE",
+        providerMessageId: null,
+        errorCode: null,
+        errorMessage: null,
+        fallbackFrom: "WHATSAPP",
+      });
+      if (!firstSuccess) {
+        firstSuccess = {
+          channel: "SMS",
+          toPhone: item.smsFallbackTo,
+          toEmail: null,
+          messageId: fallbackMessage.id,
+          provider: fallbackMessage.provider || "ORANGE",
+          providerMessageId: null,
+        };
+      }
+    }
   }
 
   const smsSent = attempts.some((a) => a.channel === "SMS" && a.sent);
@@ -1429,4 +1546,5 @@ module.exports = {
   buildOrderReadySmsMessage,
   buildOrderFulfilledSmsMessage,
   sendPreorderNotification,
+  queueSmsFallbackForFailedWhatsApp,
 };

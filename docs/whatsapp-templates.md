@@ -442,6 +442,28 @@ pas de lien → `CASH` ; pour colis prêt / clôturé, mode de livraison expédi
 → `SHIPPING`, sinon `PICKUP`. Un purpose sans modèle (ex. `PREORDER_SUBMITTED`,
 `AUTO_CANCEL`) échoue sur WhatsApp au lieu d'emprunter un texte inadapté.
 
+## Canal principal et secours SMS
+
+Décision du 2026-11-01 : WhatsApp est le **canal principal des FBO**, le SMS
+sert de secours.
+
+| Situation | Envoi |
+|---|---|
+| MailerSend configuré + modèle du message renseigné + numéro WhatsApp connu | WhatsApp (+ email) |
+| Modèle absent, non configuré, ou `WHATSAPP_PRIMARY_ENABLED=false` | Comportement historique : SMS si la politique SMS l'autorise |
+| WhatsApp refusé immédiatement par MailerSend | SMS de secours mis en file aussitôt |
+| WhatsApp accepté puis signalé `failed` par webhook (ex. numéro sans WhatsApp, erreur 131026) | SMS de secours mis en file à réception, une seule fois, si l'envoi date de moins de 24 h |
+| Envoi forcé par un agent (`forceChannel`) | Le canal choisi, sans bascule |
+
+Le secours SMS ne concerne que les messages déjà autorisés en SMS (facture,
+relance, colis prêt, frais et remise d'expédition) : les messages informatifs
+(paiement confirmé, préparation lancée, retrait confirmé) partent sur WhatsApp
+mais ne coûtent jamais de SMS. Chaque bascule est tracée dans l'historique du
+message WhatsApp (événement `SMS_FALLBACK_QUEUED`).
+
+Le modèle « validé » est détecté par la présence de son ID dans la
+configuration : ne renseigner l'ID qu'**après** approbation Meta.
+
 ## Point ouvert
 
 - **Surveillance** : suivre la note de qualité du numéro dans MailerSend / Meta
