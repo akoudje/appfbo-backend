@@ -190,9 +190,11 @@ function buildInvoiceWhatsAppMessage({
  * positionnelles {{1}}, {{2}}...) — impossible d'envoyer du texte libre comme
  * pour SMS/email. Chaque "purpose" ci-dessous correspond donc à un modèle à
  * créer et faire approuver manuellement dans le dashboard MailerSend
- * (aucune API pour ça). Tant que MAILERSEND_WHATSAPP_API_KEY/_SENDER ou le
- * template d'un purpose donné ne sont pas configurés, on retombe sur
- * sendTextMessage() (simulé) pour ne rien casser.
+ * (aucune API pour ça). Texte exact de chaque modèle et ordre des variables :
+ * docs/whatsapp-templates.md (source de vérité, à garder en phase).
+ * Tant que MAILERSEND_WHATSAPP_API_KEY/_SENDER ne sont pas configurés, on
+ * retombe sur sendTextMessage() (simulé). Une fois configurés, un modèle
+ * manquant est un échec explicite (jamais un faux "envoyé").
  */
 
 function getMailerSendWhatsAppConfig() {
@@ -212,25 +214,113 @@ function mailerSendWhatsAppConfigured() {
   return Boolean(cfg.apiKey && cfg.sender);
 }
 
-// Un modèle approuvé par purpose (variables http://developers.mailersend.com/api/v1/whatsapp#template-variables).
-// Clés alignées sur OrderMessagePurpose (PAYMENT_LINK -> même modèle qu'INVOICE)
-// + 2 purposes dédiés au rappel billet (hors OrderMessage, cf ticket-sms-reminder.service.js).
-const WHATSAPP_TEMPLATE_ENV_BY_PURPOSE = {
-  INVOICE: "MAILERSEND_WHATSAPP_TEMPLATE_INVOICE",
-  PAYMENT_LINK: "MAILERSEND_WHATSAPP_TEMPLATE_INVOICE",
-  REMINDER: "MAILERSEND_WHATSAPP_TEMPLATE_REMINDER",
+// Un modèle approuvé par clé (numéros = docs/whatsapp-templates.md). La
+// billetterie (modèles 14-15) reste en SMS seul tant que le consentement des
+// acheteurs n'est pas recueilli.
+const WHATSAPP_TEMPLATE_ENV_BY_KEY = {
+  INVOICE_WAVE: "MAILERSEND_WHATSAPP_TEMPLATE_INVOICE_WAVE",
+  INVOICE_CASH: "MAILERSEND_WHATSAPP_TEMPLATE_INVOICE_CASH",
+  INVOICE_BANK: "MAILERSEND_WHATSAPP_TEMPLATE_INVOICE_BANK",
+  REMINDER_WAVE: "MAILERSEND_WHATSAPP_TEMPLATE_REMINDER_WAVE",
+  REMINDER_CASH: "MAILERSEND_WHATSAPP_TEMPLATE_REMINDER_CASH",
+  REMINDER_BANK: "MAILERSEND_WHATSAPP_TEMPLATE_REMINDER_BANK",
   PAYMENT_CONFIRMED: "MAILERSEND_WHATSAPP_TEMPLATE_PAYMENT_CONFIRMED",
   PREPARATION_STARTED: "MAILERSEND_WHATSAPP_TEMPLATE_PREPARATION_STARTED",
-  ORDER_READY: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_READY",
-  ORDER_FULFILLED: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_FULFILLED",
-  TICKET_REMINDER: "MAILERSEND_WHATSAPP_TEMPLATE_TICKET_REMINDER",
-  TICKET_PORTAL_HINT: "MAILERSEND_WHATSAPP_TEMPLATE_TICKET_PORTAL_HINT",
+  ORDER_READY_PICKUP: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_READY_PICKUP",
+  ORDER_READY_SHIPPING: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_READY_SHIPPING",
+  SHIPPING_PAYMENT: "MAILERSEND_WHATSAPP_TEMPLATE_SHIPPING_PAYMENT",
+  ORDER_FULFILLED_PICKUP: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_FULFILLED_PICKUP",
+  ORDER_FULFILLED_SHIPPING: "MAILERSEND_WHATSAPP_TEMPLATE_ORDER_FULFILLED_SHIPPING",
 };
 
-function getWhatsAppTemplateId(purposeKey) {
-  const envName = WHATSAPP_TEMPLATE_ENV_BY_PURPOSE[String(purposeKey || "").toUpperCase()];
+const BANK_PAYMENT_FLOWS = new Set(["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"]);
+
+const BANK_PAYMENT_FLOW_LABELS = {
+  BANK_TRANSFER: "Virement bancaire",
+  ECOBANK_PAY: "Ecobank Pay",
+  PI_SPI: "PI SPI",
+};
+
+// Ville de retrait par défaut quand l'adresse n'est pas renseignée dans les
+// réglages du pays.
+const PICKUP_CITY_BY_COUNTRY = {
+  CIV: "ABIDJAN",
+  BFA: "OUAGADOUGOU",
+  BEN: "COTONOU",
+  NER: "NIAMEY",
+  TGO: "LOME",
+};
+
+function getWhatsAppTemplateId(templateKey) {
+  const envName = WHATSAPP_TEMPLATE_ENV_BY_KEY[String(templateKey || "").toUpperCase()];
   if (!envName) return null;
   return String(process.env[envName] || "").trim() || null;
+}
+
+function isShippingContext(context = {}) {
+  return require("./shipping.service").isShipping(context.preorder?.deliveryMode);
+}
+
+// Suffixe du modèle de paiement : le lien (et donc le bouton) décide du texte.
+// Sans lien, le FBO règle au comptoir avec son code, quel que soit le mode.
+function resolvePaymentTemplateSuffix(context = {}) {
+  if (!context.paymentLink) return "CASH";
+  const flow = String(context.paymentFlow || "").toUpperCase();
+  if (BANK_PAYMENT_FLOWS.has(flow)) return "BANK";
+  return "WAVE";
+}
+
+/**
+ * Choisit le modèle WhatsApp à partir du purpose brut (avant mapping vers
+ * l'enum OrderMessagePurpose) et du contexte. null = aucun modèle prévu
+ * (ex. PREORDER_SUBMITTED, AUTO_CANCEL) : mieux vaut ne rien envoyer sur
+ * WhatsApp qu'un modèle au texte inadapté.
+ */
+function resolveWhatsAppTemplateKey(purpose, context = {}) {
+  const key = String(purpose || "").trim().toUpperCase();
+
+  if (key === "INVOICE" || key === "PAYMENT_LINK") {
+    return `INVOICE_${resolvePaymentTemplateSuffix(context)}`;
+  }
+  if (key === "REMINDER") return `REMINDER_${resolvePaymentTemplateSuffix(context)}`;
+  if (key === "PAYMENT_CONFIRMED" || key === "PREPARATION_STARTED") return key;
+  if (key === "ORDER_READY" || key === "ORDER_FULFILLED") {
+    return `${key}_${isShippingContext(context) ? "SHIPPING" : "PICKUP"}`;
+  }
+  if (key === "SHIPPING_PAYMENT_LINK") return "SHIPPING_PAYMENT";
+  return null;
+}
+
+// Contraintes Meta sur une valeur de variable : jamais vide, pas de retour à
+// la ligne ni de tabulation, pas plus de 4 espaces consécutifs.
+function sanitizeTemplateValue(value, fallback = "-") {
+  const clean = String(value ?? "")
+    .replace(/\s*[\r\n]+\s*/g, ", ")
+    .replace(/\t/g, " ")
+    .replace(/ {2,}/g, " ")
+    .trim();
+  return clean || fallback;
+}
+
+// Fin d'URL à injecter dans un bouton URL dynamique dont la partie fixe est
+// "{BASE}/<segment>/" (ex. "/payment/" couvre /payment/w/<jeton> comme
+// /payment/wave/<id>?country=CIV). null si le lien ne contient pas le segment.
+function extractButtonSuffix(link, segment) {
+  try {
+    const url = new URL(String(link || ""));
+    const marker = `/${segment}/`;
+    const index = url.pathname.indexOf(marker);
+    if (index < 0) return null;
+    const suffix = `${url.pathname.slice(index + marker.length)}${url.search}`;
+    return suffix || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePickupLocation(context = {}, countryCode = "CIV") {
+  const code = String(countryCode || "CIV").toUpperCase();
+  return sanitizeTemplateValue(context.pickupAddress, PICKUP_CITY_BY_COUNTRY[code] || "-");
 }
 
 /**
@@ -357,58 +447,119 @@ async function sendMailerSendWhatsAppTemplate({
 }
 
 /**
- * Construit les variables positionnelles pour un purpose de précommande, à
- * partir du même `context` déjà construit pour SMS/email
- * (preorder-notifications.service.js#buildTemplateContext). Doit rester en
- * phase avec le texte réellement soumis à Meta pour chaque modèle — voir
- * commentaire en tête de section pour la correspondance attendue.
+ * Construit les variables positionnelles d'un modèle (clé issue de
+ * resolveWhatsAppTemplateKey), à partir du même `context` que SMS/email
+ * (preorder-notifications.service.js#buildTemplateContext). L'ordre doit
+ * rester celui de docs/whatsapp-templates.md : MailerSend rejette (422) tout
+ * écart de nombre de variables avec le modèle approuvé.
+ * Renvoie { body, buttons } ou { errorCode, errorMessage } si un bouton
+ * attendu n'a pas de lien exploitable.
  */
-function buildPreorderTemplateVariables(purposeKey, context = {}) {
-  const key = String(purposeKey || "").toUpperCase();
-  const customerName = context.customerName || "Client";
-  const paymentInstructionLine = context.paymentLink
-    ? `Lien de paiement sécurisé : ${context.paymentLink}`
-    : "Présentez ce code au comptoir pour régler.";
+function buildPreorderTemplateVariables(templateKey, context = {}, { countryCode = "CIV" } = {}) {
+  const key = String(templateKey || "").toUpperCase();
+  const v = (value) => sanitizeTemplateValue(value);
+  const customerName = v(context.customerName || "Client");
+  const preorderNumber = v(context.preorderNumber);
+  const parcelNumber = v(context.parcelNumber);
+  const collectionCode = v(context.paymentCollectionCode);
+  const total = v(context.totalFcfaLabel);
+  const expiryHours = v(context.paymentExpiryHours);
+  const preorder = context.preorder || {};
+  const carrier = v(require("./shipping.service").carrierLabel(preorder.deliveryMode));
 
-  if (key === "INVOICE" || key === "PAYMENT_LINK") {
-    return {
-      body: [customerName, context.paymentCollectionCode || "-", context.totalFcfaLabel || "-", paymentInstructionLine],
-    };
+  const withButton = (body, link, segment) => {
+    const suffix = extractButtonSuffix(link, segment);
+    if (!suffix) {
+      return {
+        errorCode: "WHATSAPP_BUTTON_LINK_INVALID",
+        errorMessage: `Lien inexploitable pour le bouton WhatsApp (segment /${segment}/ attendu).`,
+      };
+    }
+    return { body, buttons: [suffix] };
+  };
+
+  const paymentHead = [customerName, preorderNumber, collectionCode, total];
+  const bankModeLabel = v(BANK_PAYMENT_FLOW_LABELS[String(context.paymentFlow || "").toUpperCase()]);
+
+  switch (key) {
+    case "INVOICE_WAVE":
+      return withButton([...paymentHead, expiryHours], context.paymentLink, "payment");
+    case "INVOICE_CASH":
+      return { body: [...paymentHead, expiryHours] };
+    case "INVOICE_BANK":
+      return withButton(
+        [
+          ...paymentHead,
+          bankModeLabel,
+          sanitizeTemplateValue(context.bankAccountDetails, "affiché sur la page de dépôt de preuve"),
+          expiryHours,
+        ],
+        context.paymentLink,
+        "payment",
+      );
+    case "REMINDER_WAVE":
+      return withButton(paymentHead, context.paymentLink, "payment");
+    case "REMINDER_CASH":
+      return { body: paymentHead };
+    case "REMINDER_BANK":
+      return withButton([...paymentHead, bankModeLabel], context.paymentLink, "payment");
+    case "PAYMENT_CONFIRMED":
+      return { body: [customerName, preorderNumber, total] };
+    case "PREPARATION_STARTED":
+      return { body: [customerName, parcelNumber] };
+    case "ORDER_READY_PICKUP":
+      return {
+        body: [customerName, parcelNumber, v(context.pickupCode), resolvePickupLocation(context, countryCode)],
+      };
+    case "ORDER_READY_SHIPPING":
+      return { body: [customerName, parcelNumber, carrier] };
+    case "SHIPPING_PAYMENT": {
+      const link = preorder.shippingPaymentLink || {};
+      return withButton(
+        [
+          customerName,
+          carrier,
+          preorderNumber,
+          formatFcfa(link.baseAmountFcfa),
+          formatFcfa(link.serviceFeeFcfa),
+          formatFcfa(link.amountFcfa),
+        ],
+        context.paymentLink,
+        "external-payment",
+      );
+    }
+    case "ORDER_FULFILLED_PICKUP":
+      return { body: [customerName, parcelNumber, preorderNumber] };
+    case "ORDER_FULFILLED_SHIPPING":
+      return {
+        body: [customerName, parcelNumber, carrier, sanitizeTemplateValue(preorder.deliveryTracking, "non renseigné")],
+      };
+    default:
+      return {
+        errorCode: "MAILERSEND_WHATSAPP_TEMPLATE_MISSING",
+        errorMessage: "Aucun modèle WhatsApp prévu pour ce type de message.",
+      };
   }
-  if (key === "REMINDER") {
-    return {
-      body: [customerName, context.paymentCollectionCode || "-", context.totalFcfaLabel || "-", paymentInstructionLine],
-    };
-  }
-  if (key === "PAYMENT_CONFIRMED") {
-    return {
-      body: [customerName, context.preorderNumber || "-", context.totalFcfaLabel || "-"],
-    };
-  }
-  if (key === "PREPARATION_STARTED") {
-    return {
-      body: [customerName, context.parcelNumber || "-"],
-    };
-  }
-  if (key === "ORDER_READY") {
-    return {
-      body: [customerName, context.parcelNumber || "-", context.pickupCode || "-"],
-    };
-  }
-  if (key === "ORDER_FULFILLED") {
-    return {
-      body: [customerName, context.preorderNumber || "-", context.parcelNumber || "-"],
-    };
-  }
-  return { body: [customerName] };
+}
+
+function whatsappFailure(errorCode, errorMessage, metadata = {}) {
+  return {
+    accepted: false,
+    provider: "MAILERSEND_WHATSAPP",
+    providerMessageId: null,
+    rawPayload: { metadata },
+    errorCode,
+    errorMessage,
+  };
 }
 
 /**
  * Point d'entrée utilisé par preorder-notifications.service.js pour le canal
- * WHATSAPP. Essaie l'envoi réel MailerSend si configuré pour ce purpose,
- * sinon retombe sur le mode simulé existant (sendTextMessage) avec le texte
- * SMS/WhatsApp déjà préparé par l'appelant, pour ne jamais régresser avant la
- * fin de la configuration MailerSend (add-on, WABA, modèles approuvés).
+ * WHATSAPP. `purpose` est le purpose brut (ex. SHIPPING_PAYMENT_LINK), pas sa
+ * version enum. Sans configuration MailerSend, on reste en mode simulé
+ * (sendTextMessage) avec le texte SMS déjà préparé par l'appelant ; avec, un
+ * modèle absent ou non configuré est un échec explicite, pour que l'historique
+ * ne montre jamais "envoyé" alors que rien n'est parti.
  */
 async function sendPreorderWhatsAppNotification({
   to,
@@ -418,23 +569,36 @@ async function sendPreorderWhatsAppNotification({
   metadata = {},
   countryCode = "CIV",
 }) {
-  const purposeKey = String(purpose || "").toUpperCase();
-  const templateId = getWhatsAppTemplateId(purposeKey);
-
-  if (mailerSendWhatsAppConfigured() && templateId) {
-    const variables = buildPreorderTemplateVariables(purposeKey, context);
-    return sendMailerSendWhatsAppTemplate({
-      to,
-      templateId,
-      header: variables.header || [],
-      body: variables.body || [],
-      buttons: variables.buttons || [],
-      metadata,
-      countryCode,
-    });
+  if (!mailerSendWhatsAppConfigured()) {
+    return sendTextMessage({ to, body: fallbackMessage, metadata });
   }
 
-  return sendTextMessage({ to, body: fallbackMessage, metadata });
+  const templateKey = resolveWhatsAppTemplateKey(purpose, context);
+  const templateId = getWhatsAppTemplateId(templateKey);
+  if (!templateKey || !templateId) {
+    return whatsappFailure(
+      "MAILERSEND_WHATSAPP_TEMPLATE_MISSING",
+      templateKey
+        ? `Modèle WhatsApp ${templateKey} non configuré (${WHATSAPP_TEMPLATE_ENV_BY_KEY[templateKey]}).`
+        : `Aucun modèle WhatsApp prévu pour ${String(purpose || "-").toUpperCase()}.`,
+      { ...metadata, templateKey },
+    );
+  }
+
+  const variables = buildPreorderTemplateVariables(templateKey, context, { countryCode });
+  if (variables.errorCode) {
+    return whatsappFailure(variables.errorCode, variables.errorMessage, { ...metadata, templateKey });
+  }
+
+  return sendMailerSendWhatsAppTemplate({
+    to,
+    templateId,
+    header: variables.header || [],
+    body: variables.body || [],
+    buttons: variables.buttons || [],
+    metadata: { ...metadata, templateKey },
+    countryCode,
+  });
 }
 
 /**
@@ -508,6 +672,9 @@ module.exports = {
   mapProviderStatus,
   mailerSendWhatsAppConfigured,
   getWhatsAppTemplateId,
+  resolveWhatsAppTemplateKey,
+  sanitizeTemplateValue,
+  extractButtonSuffix,
   sendMailerSendWhatsAppTemplate,
   buildPreorderTemplateVariables,
   sendPreorderWhatsAppNotification,
