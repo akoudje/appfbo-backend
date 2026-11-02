@@ -9,6 +9,7 @@ const {
   uploadBankProofMiddleware,
   createBankProofSubmission,
 } = require("../customerBankProof.controller");
+const { settlementLabel } = require("../../services/settlement.service");
 
 const ALLOWED = {
   DRAFT: ["CANCELLED"],
@@ -66,6 +67,18 @@ function extractPayerPhone(order) {
   );
 }
 
+// Commande réglée au siège d'une autre filiale (cf. settlement.service.js) :
+// elle passe en PAID à la facturation, hors caisse. Tant qu'elle ne l'est
+// pas encore, aucun encaissement ne doit pouvoir être saisi au comptoir.
+function rejectSettledOrder(res, order) {
+  if (!order?.settlementEntity) return false;
+  res.status(409).json({
+    code: "ORDER_SETTLED_BY_ENTITY",
+    message: `Commande réglée par ${settlementLabel(order.settlementEntity)} : ne pas encaisser au comptoir.`,
+  });
+  return true;
+}
+
 async function upsertCashierTransaction(tx, order, data) {
   const existing = await tx.cashierTransaction.findFirst({
     where: { preorderId: order.id },
@@ -118,6 +131,8 @@ async function markManualPaymentPending(req, res) {
         order,
       });
     }
+
+    if (rejectSettledOrder(res, order)) return;
 
     assertTransition(order.status, "PAYMENT_PENDING");
 
@@ -219,6 +234,8 @@ async function validateManualPayment(req, res) {
         order,
       });
     }
+
+    if (rejectSettledOrder(res, order)) return;
 
     assertTransition(order.status, "PAID");
 
@@ -327,12 +344,15 @@ async function uploadAdminBankProof(req, res) {
         fboId: true,
         preorderPaymentMode: true,
         totalFcfa: true,
+        settlementEntity: true,
       },
     });
 
     if (!order) {
       return res.status(404).json({ message: "Commande introuvable" });
     }
+
+    if (rejectSettledOrder(res, order)) return;
 
     const paymentMode = String(order.preorderPaymentMode || "").trim().toUpperCase();
     if (!["BANK_TRANSFER", "ECOBANK_PAY", "PI_SPI"].includes(paymentMode)) {
@@ -406,6 +426,8 @@ async function markCashPayment(req, res) {
         order,
       });
     }
+
+    if (rejectSettledOrder(res, order)) return;
 
     const allowedFrom = ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"];
     if (!allowedFrom.includes(order.status)) {

@@ -83,6 +83,10 @@ function buildOrderSummary(order) {
     paymentStatus: order.paymentStatus,
     paymentProvider: order.paymentProvider,
     preorderPaymentMode: order.preorderPaymentMode,
+    // Réglée au siège d'une autre filiale (cf. settlement.service.js) :
+    // affichée en badge pour que l'agent de vente ne l'encaisse pas.
+    settlementEntity: order.settlementEntity || null,
+    settlementReference: order.settlementReference || null,
     fboNomComplet: order.fboNomComplet,
     fboNumero: order.fboNumero,
     totalFcfa: order.totalFcfa,
