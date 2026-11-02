@@ -102,3 +102,15 @@ test('an invalid number is refused before anything is saved', async () => {
   assert.equal(res.body.code, 'PHONE_INVALID');
   assert.equal(h.draft.status, 'DRAFT');
 });
+
+// Régression du 2026-11-01 : le site envoyait phoneNormalized = "+" (regex
+// abîmée). Le serveur se rabat sur phoneRaw, saisi en même temps.
+test("pickPhoneInput ignore une forme normalisée abîmée et garde la saisie brute", () => {
+  const { pickPhoneInput } = require("./src/utils/phone");
+  assert.equal(pickPhoneInput(["+", "+226 72 26 76 86"], "CIV"), "+226 72 26 76 86");
+  assert.equal(pickPhoneInput(["+22672267686", "autre"], "CIV"), "+22672267686");
+  assert.equal(pickPhoneInput(["", "0707070707"], "CIV"), "0707070707");
+  assert.equal(pickPhoneInput(["+", "12"], "CIV"), "+");
+  assert.equal(pickPhoneInput(["", null, undefined], "CIV"), "");
+  assert.equal(phone.resolveContactPhones({ phone: pickPhoneInput(["+", "+226 72 26 76 86"], "CIV") }, "CIV").phone, "+22672267686");
+});
