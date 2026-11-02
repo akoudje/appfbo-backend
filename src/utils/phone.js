@@ -90,6 +90,17 @@ function normalizeInternationalPhone(number, countryCode = "CIV") {
   return parsed ? parsed.number : "";
 }
 
+/**
+ * Premier numéro exploitable parmi plusieurs saisies du même champ (ex.
+ * phoneNormalized puis phoneRaw). Si aucun n'est valide, renvoie la première
+ * saisie non vide pour que l'erreur reste « invalide » et non « obligatoire ».
+ * Protège contre un client qui enverrait une forme normalisée abîmée.
+ */
+function pickPhoneInput(candidates, countryCode = "CIV") {
+  const filled = candidates.map((value) => String(value || "").trim()).filter(Boolean);
+  return filled.find((value) => normalizeInternationalPhone(value, countryCode)) || filled[0] || "";
+}
+
 /** Vrai si le numéro (E.164) est un numéro du pays, donc joignable par SMS. */
 function isNationalPhone(e164, countryCode = "CIV") {
   return Boolean(e164) && normalizeForCountry(e164, countryCode) === e164;
@@ -142,6 +153,7 @@ module.exports = {
   normalizeBFA,
   normalizeForCountry,
   normalizeInternationalPhone,
+  pickPhoneInput,
   isNationalPhone,
   phoneRegion,
   regionForCountry,

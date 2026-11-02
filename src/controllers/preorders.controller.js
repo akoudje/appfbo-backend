@@ -35,6 +35,7 @@ const {
 const {
   isNationalPhone,
   normalizeInternationalPhone,
+  pickPhoneInput,
   resolveContactPhones,
 } = require("../utils/phone");
 
@@ -1269,9 +1270,14 @@ async function submit(req, res) {
       preorder.personalDataConsentAccepted = updatedPreorder.personalDataConsentAccepted;
     }
 
+    const contactCountry = preorder.country?.code || req.country?.code || "CIV";
     const contact = resolveContactPhones(
-      { phone: phoneNormalized || phoneRaw, whatsapp: whatsappPhone, whatsappSameAsPhone },
-      preorder.country?.code || req.country?.code || "CIV",
+      {
+        phone: pickPhoneInput([phoneNormalized, phoneRaw], contactCountry),
+        whatsapp: whatsappPhone,
+        whatsappSameAsPhone,
+      },
+      contactCountry,
     );
     if (!contact.ok) {
       return res.status(400).json({ error: contact.error, code: contact.code });
@@ -1516,9 +1522,10 @@ async function notifySms(req, res) {
       return res.status(400).json({ error: "Précommande non éligible au renvoi SMS." });
     }
 
+    const smsCountry = preorder.country?.code || req.country?.code || "CIV";
     const smsTo = normalizeInternationalPhone(
-      phoneNormalized || phoneRaw || preorder.factureWhatsappTo,
-      preorder.country?.code || req.country?.code || "CIV",
+      pickPhoneInput([phoneNormalized, phoneRaw, preorder.factureWhatsappTo], smsCountry),
+      smsCountry,
     );
     if (!smsTo) {
       return res.status(400).json({ error: "Aucun numéro disponible pour le SMS." });
