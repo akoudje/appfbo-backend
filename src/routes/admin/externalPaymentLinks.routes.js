@@ -46,6 +46,12 @@ router.post(
   controller.attachToOrder,
 );
 
+router.post(
+  "/:id/attach-orders",
+  requireExternalPaymentLinksManage,
+  controller.attachToOrders,
+);
+
 router.patch(
   "/:id/status",
   requireExternalPaymentLinksManage,
