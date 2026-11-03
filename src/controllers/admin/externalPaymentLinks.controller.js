@@ -4,6 +4,7 @@ const { sendSms } = require("../../services/sms.service");
 const externalWavePaymentService = require("../../services/external-wave-payment.service");
 const { Prisma } = require("@prisma/client");
 const { resolveOrderSearchIds } = require("../../helpers/preorder-search");
+const { parsePreorderNumbers } = require("../../services/settlement.service");
 
 const ALLOWED_STATUSES = new Set(["DRAFT", "ACTIVE", "PAID", "CANCELLED", "EXPIRED"]);
 const ALLOWED_SOURCES = new Set(["ADMIN", "QR_FORM"]);
@@ -190,6 +191,14 @@ function serialize(link, req) {
   };
 }
 
+// Un paiement groupé (un QR réglant plusieurs commandes) crée un Payment par
+// commande : la clé `external:<link>` du rattachement simple ne pouvant être
+// portée qu'une fois (@@unique provider/clientReference), chaque part reçoit
+// `external:<link>:<commande>`.
+function groupClientReferencePrefix(link) {
+  return `external:${link.id}:`;
+}
+
 async function nextReference(countryId) {
   const today = new Date();
   const ymd = today.toISOString().slice(0, 10).replace(/-/g, "");
@@ -276,8 +285,28 @@ async function listLinks(req, res) {
       select: { clientReference: true, preorder: { select: { id: true, preorderNumber: true } } },
     });
     const attachedByReference = new Map(attachedPayments.map((payment) => [payment.clientReference, payment.preorder]));
+    const groupPayments = links.length
+      ? await prisma.payment.findMany({
+          where: {
+            countryId: req.countryId,
+            provider: "WAVE",
+            OR: links.map((link) => ({ clientReference: { startsWith: groupClientReferencePrefix(link) } })),
+          },
+          select: { clientReference: true, preorder: { select: { id: true, preorderNumber: true } } },
+        })
+      : [];
+    const groupByLink = new Map();
+    for (const payment of groupPayments) {
+      const linkId = String(payment.clientReference).split(":")[1];
+      if (!groupByLink.has(linkId)) groupByLink.set(linkId, []);
+      groupByLink.get(linkId).push(payment.preorder);
+    }
     return res.json({
-      data: links.map((link) => serialize({ ...link, attachedOrder: attachedByReference.get(`external:${link.id}`) || null }, req)),
+      data: links.map((link) => serialize({
+        ...link,
+        attachedOrder: attachedByReference.get(`external:${link.id}`) || null,
+        attachedOrders: groupByLink.get(link.id) || [],
+      }, req)),
       total,
       page,
       pageSize,
@@ -556,10 +585,17 @@ async function attachToOrder(req, res) {
             ? [{ providerTxnId: link.providerTransactionId }]
             : []),
           { clientReference: `external:${link.id}` },
+          { clientReference: { startsWith: groupClientReferencePrefix(link) } },
         ],
       },
-      select: { id: true, preorderId: true },
+      select: { id: true, preorderId: true, clientReference: true },
     });
+
+    if (existingPayment?.clientReference?.startsWith(groupClientReferencePrefix(link))) {
+      return res.status(409).json({
+        message: "Ce paiement est déjà réparti sur plusieurs commandes.",
+      });
+    }
 
     if (existingPayment && existingPayment.preorderId !== order.id) {
       return res.status(409).json({
@@ -713,6 +749,234 @@ async function attachToOrder(req, res) {
   }
 }
 
+const MAX_GROUP_ORDERS = 100;
+
+// Contrôles du rattachement groupé, partagés par l'aperçu (dryRun) et la
+// confirmation : chaque commande doit exister, être non soldée et non réglée
+// par une filiale, et la somme des factures doit égaler le paiement hors frais.
+async function checkGroupAttach(db, req, link, numbers) {
+  const orders = await db.preorder.findMany({
+    where: { countryId: req.countryId, preorderNumber: { in: numbers } },
+    select: {
+      id: true,
+      countryId: true,
+      preorderNumber: true,
+      factureReference: true,
+      fboNomComplet: true,
+      fboNumero: true,
+      status: true,
+      paymentStatus: true,
+      preorderPaymentMode: true,
+      paymentProvider: true,
+      settlementEntity: true,
+      totalFcfa: true,
+      billingCompletedAt: true,
+    },
+  });
+  const byNumber = new Map(orders.map((order) => [order.preorderNumber, order]));
+  const issues = [];
+  for (const number of numbers) {
+    const order = byNumber.get(number);
+    const status = String(order?.status || "").toUpperCase();
+    if (!order) issues.push(`${number} : commande introuvable.`);
+    else if (status === "CANCELLED") issues.push(`${number} : commande annulée.`);
+    else if (order.paymentStatus === "PAID" || ["PAID", "READY", "FULFILLED"].includes(status)) issues.push(`${number} : déjà soldée.`);
+    else if (order.settlementEntity) issues.push(`${number} : réglée par une autre filiale.`);
+  }
+  const ordersTotalFcfa = orders.reduce((sum, order) => sum + Number(order.totalFcfa || 0), 0);
+  const invoiceAmountFcfa = Number(link.baseAmountFcfa || (Number(link.amountFcfa || 0) - Number(link.serviceFeeFcfa || 0)));
+  if (!issues.length && ordersTotalFcfa !== invoiceAmountFcfa) {
+    issues.push(`Montant incompatible : total des factures ${formatAmount(ordersTotalFcfa)}, paiement hors frais ${formatAmount(invoiceAmountFcfa)} (écart ${formatAmount(invoiceAmountFcfa - ordersTotalFcfa)}).`);
+  }
+  return {
+    orders: numbers.map((number) => byNumber.get(number)).filter(Boolean),
+    issues,
+    ordersTotalFcfa,
+    invoiceAmountFcfa,
+  };
+}
+
+// POST /:id/attach-orders { text, dryRun } : un paiement QR réglant plusieurs
+// commandes d'un coup (ex. un parrain qui paie pour son groupe à la caisse).
+// `text` est la liste de n° de précommande collée telle quelle.
+async function attachToOrders(req, res) {
+  try {
+    const { numbers, unrecognized } = parsePreorderNumbers(req.body?.text);
+    const dryRun = req.body?.dryRun === true;
+    if (!numbers.length) {
+      return res.status(400).json({ message: "Aucun numéro de commande reconnu (format PO-CIV-AAAAMMJJ-0000)." });
+    }
+    if (numbers.length > MAX_GROUP_ORDERS) {
+      return res.status(400).json({ message: `${MAX_GROUP_ORDERS} commandes maximum par paiement.` });
+    }
+
+    const link = await prisma.externalPaymentLink.findFirst({
+      where: { id: req.params.id, countryId: req.countryId },
+    });
+    if (!link) return res.status(404).json({ message: "Lien externe introuvable." });
+    if (link.source === "SHIPPING") return res.status(409).json({ message: "Ce paiement est réservé aux frais d’expédition et ne peut pas régler des produits." });
+    if (link.status !== "PAID") {
+      return res.status(400).json({ message: "Seul un lien externe payé peut être rattaché à des commandes." });
+    }
+
+    const alreadyAttached = await prisma.payment.findFirst({
+      where: {
+        provider: "WAVE",
+        OR: [
+          ...(link.providerTransactionId ? [{ providerTxnId: link.providerTransactionId }] : []),
+          { clientReference: `external:${link.id}` },
+          { clientReference: { startsWith: groupClientReferencePrefix(link) } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (alreadyAttached) {
+      return res.status(409).json({ message: "Ce paiement est déjà rattaché à une ou plusieurs commandes." });
+    }
+
+    const check = await checkGroupAttach(prisma, req, link, numbers);
+    const preview = {
+      reference: link.reference,
+      orders: check.orders,
+      ordersTotalFcfa: check.ordersTotalFcfa,
+      invoiceAmountFcfa: check.invoiceAmountFcfa,
+      issues: check.issues,
+      unrecognized,
+    };
+    if (dryRun || check.issues.length) {
+      return res.status(dryRun ? 200 : 409).json({
+        ok: !check.issues.length,
+        ...preview,
+        ...(check.issues.length && !dryRun ? { message: check.issues[0] } : {}),
+      });
+    }
+
+    const paidAt = link.paidAt || new Date();
+    const now = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      const currentLink = await tx.externalPaymentLink.findFirst({ where: { id: link.id, countryId: req.countryId } });
+      const current = await checkGroupAttach(tx, req, link, numbers);
+      if (!currentLink || currentLink.status !== "PAID" || current.issues.length) {
+        throw Object.assign(new Error("Une commande ou le paiement a changé. Actualisez avant de rattacher."), { statusCode: 409 });
+      }
+
+      for (const order of current.orders) {
+        const amountFcfa = Number(order.totalFcfa || 0);
+        const payment = await tx.payment.create({
+          data: {
+            preorderId: order.id,
+            countryId: order.countryId,
+            provider: "WAVE",
+            methodType: "MOBILE_MONEY",
+            status: "SUCCEEDED",
+            amountExpectedFcfa: amountFcfa,
+            amountPaidFcfa: amountFcfa,
+            currencyCode: link.currencyCode || "XOF",
+            providerReference: link.providerSessionId || link.reference,
+            // La transaction Wave est unique par Payment : elle reste sur le
+            // lien et dans la tentative, pas sur chaque part.
+            providerTxnId: null,
+            clientReference: `${groupClientReferencePrefix(link)}${order.id}`,
+            initiatedAt: link.createdAt || now,
+            paidAt,
+          },
+        });
+
+        const attempt = await tx.paymentAttempt.create({
+          data: {
+            paymentId: payment.id,
+            provider: "WAVE",
+            status: "SUCCEEDED",
+            providerSessionId: link.providerSessionId || null,
+            providerTransactionId: link.providerTransactionId || null,
+            providerPayerPhone: link.providerPayerPhone || link.customerPhone || null,
+            providerStatusLabel: link.providerStatusLabel || null,
+            requestPayloadJson: {
+              source: "EXTERNAL_PAYMENT_LINK_GROUP_ATTACH",
+              externalPaymentLinkId: link.id,
+              externalPaymentReference: link.reference,
+              groupSize: current.orders.length,
+            },
+            normalizedPayloadJson: {
+              externalPaymentLinkId: link.id,
+              reference: link.reference,
+              providerTransactionId: link.providerTransactionId || null,
+              amountPaidFcfa: amountFcfa,
+              paidAt,
+            },
+            completedAt: paidAt,
+          },
+        });
+
+        await tx.payment.update({ where: { id: payment.id }, data: { lastAttemptId: attempt.id } });
+
+        await tx.preorder.update({
+          where: { id: order.id },
+          data: {
+            status: "PAID",
+            paymentStatus: "PAID",
+            preorderPaymentMode: "WAVE",
+            paymentProvider: "WAVE",
+            paidAt,
+            activePaymentId: payment.id,
+            billingWorkStatus: "COMPLETED",
+            billingCompletedAt: order.billingCompletedAt || now,
+            billingLastActivityAt: now,
+          },
+        });
+
+        await tx.preorderLog.create({
+          data: {
+            preorderId: order.id,
+            action: "PAYMENT_CONFIRMED",
+            note: `Paiement groupé ${link.reference} (${current.orders.length} commandes) rattaché à la commande`,
+            actorAdminId: req.user?.id || null,
+            meta: {
+              source: "EXTERNAL_PAYMENT_LINK_GROUP_ATTACH",
+              externalPaymentLinkId: link.id,
+              externalPaymentReference: link.reference,
+              providerTransactionId: link.providerTransactionId || null,
+              groupSize: current.orders.length,
+              groupTotalFcfa: current.ordersTotalFcfa,
+              orderTotalFcfa: amountFcfa,
+              previousPreorderPaymentMode: order.preorderPaymentMode || null,
+              previousPaymentProvider: order.paymentProvider || null,
+              paymentId: payment.id,
+              paymentAttemptId: attempt.id,
+            },
+          },
+        });
+      }
+
+      await tx.externalPaymentLink.update({
+        where: { id: link.id },
+        data: {
+          updatedById: req.user?.id || null,
+          description: [
+            link.description,
+            `Réparti sur ${current.orders.length} commandes le ${now.toISOString()} : ${current.orders.map((order) => order.preorderNumber).join(", ")}.`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      });
+    }, { isolationLevel: "Serializable", maxWait: 10000, timeout: 60000 });
+
+    return res.json({
+      ok: true,
+      ...preview,
+      message: `Paiement ${link.reference} rattaché à ${check.orders.length} commandes.`,
+    });
+  } catch (error) {
+    console.error("externalPaymentLinks.attachToOrders error:", error);
+    if (["P2034", "P2002"].includes(error.code)) return res.status(409).json({ message: "Ce paiement ou une commande vient d’être modifié. Actualisez avant de réessayer." });
+    return res.status(error.statusCode || 500).json({
+      message: error.message || "Erreur serveur (attachToOrders)",
+    });
+  }
+}
+
 module.exports = {
   findAttachOrders,
   getQrConfig,
@@ -722,4 +986,5 @@ module.exports = {
   syncWave,
   updateStatus,
   attachToOrder,
+  attachToOrders,
 };
