@@ -1,4 +1,9 @@
-const { validateSchedule, MAX_GRACE_MINUTES } = require("./submission-schedule.service");
+const {
+  validateSchedule,
+  normalizeSchedule,
+  hasOpening,
+  MAX_GRACE_MINUTES,
+} = require("./submission-schedule.service");
 
 function validateCountrySettings(patch, existing = {}) {
   const errors = {};
@@ -127,9 +132,9 @@ function validateCountrySettings(patch, existing = {}) {
     ("submissionScheduleEnabled" in patch || "submissionSchedule" in patch) &&
     all.submissionScheduleEnabled &&
     !errors.submissionSchedule &&
-    !Object.values(all.submissionSchedule || {}).some(Boolean)
+    !hasOpening(normalizeSchedule(all.submissionSchedule))
   )
-    errors.submissionSchedule = "Ouvrez au moins un jour, ou désactivez l’horaire automatique.";
+    errors.submissionSchedule = "Laissez au moins un moment d’ouverture dans la semaine, ou désactivez l’horaire automatique.";
   if (
     "preorderSubmissionEnabled" in patch &&
     !all.preorderSubmissionEnabled &&

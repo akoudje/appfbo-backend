@@ -5,6 +5,7 @@ const {
   computeSubmissionWindow,
   serializeWindow,
 } = require("../services/submission-schedule.service");
+const { describeCommercialMonth, addMonths } = require("../services/commercial-month.service");
 
 // Cache en mémoire, même principe que le cache pays de resolveCountry.js :
 // cette config change rarement (réglages admin, contenu marketing) mais est
@@ -24,19 +25,21 @@ function getCachedStorefrontConfig(countryId) {
   return cached;
 }
 
-function setCachedStorefrontConfig(countryId, payload, submissionSettings) {
+function setCachedStorefrontConfig(countryId, payload, submissionSettings, monthClosings) {
   storefrontConfigCache.set(countryId, {
     payload,
     submissionSettings,
+    monthClosings,
     expiresAt: Date.now() + STOREFRONT_CONFIG_CACHE_TTL_MS,
   });
 }
 
-// Ouverture recalculée à chaque appel, même depuis le cache : l'heure de
-// fermeture doit s'appliquer à la minute près, pas 30 s plus tard.
-// preorderSubmissionEnabled et son message restent pour les clients déjà
-// déployés ; submissionWindow ajoute horaires, tolérance et compte à rebours.
-function withSubmissionWindow(payload, submissionSettings, countryCode) {
+// Ouverture et mois commercial recalculés à chaque appel, même depuis le
+// cache : l'heure de fermeture doit s'appliquer à la minute près, pas 30 s
+// plus tard. preorderSubmissionEnabled et son message restent pour les
+// clients déjà déployés ; submissionWindow ajoute horaires, tolérance et
+// compte à rebours.
+function withSubmissionWindow(payload, submissionSettings, countryCode, monthClosings = []) {
   const window = serializeWindow(
     computeSubmissionWindow({ settings: submissionSettings, countryCode }),
     submissionSettings,
@@ -46,6 +49,7 @@ function withSubmissionWindow(payload, submissionSettings, countryCode) {
     preorderSubmissionEnabled: window.open,
     preorderSubmissionDisabledMessage: window.message || payload.preorderSubmissionDisabledMessage,
     submissionWindow: window,
+    commercialMonth: describeCommercialMonth(monthClosings, countryCode),
   };
 }
 
@@ -184,10 +188,15 @@ async function getStorefrontConfig(req, res) {
 
     const cached = getCachedStorefrontConfig(countryId);
     if (cached) {
-      return res.json(withSubmissionWindow(cached.payload, cached.submissionSettings, req.country?.code));
+      return res.json(
+        withSubmissionWindow(cached.payload, cached.submissionSettings, req.country?.code, cached.monthClosings),
+      );
     }
 
-    const [settings, marketing] = await Promise.all([
+    // Clôtures utiles : du mois précédent au mois suivant (calendaire, UTC à
+    // un jour près ; describeCommercialMonth n'utilise que ces trois mois).
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const [settings, marketing, monthClosings] = await Promise.all([
       prisma.countrySettings.findUnique({
         where: { countryId },
         select: {
@@ -249,6 +258,13 @@ async function getStorefrontConfig(req, res) {
           publishingJson: true,
           homeFeaturedJson: true,
         },
+      }),
+      prisma.commercialMonthClosing.findMany({
+        where: {
+          countryId,
+          month: { in: [-2, -1, 0, 1].map((offset) => addMonths(thisMonth, offset)) },
+        },
+        select: { month: true, closesAt: true, submitBy: true },
       }),
     ]);
 
@@ -348,8 +364,8 @@ async function getStorefrontConfig(req, res) {
       submissionGraceMinutes: settings?.submissionGraceMinutes,
       submissionOverride: settings?.submissionOverride ?? null,
     };
-    setCachedStorefrontConfig(countryId, payload, submissionSettings);
-    return res.json(withSubmissionWindow(payload, submissionSettings, countryCode));
+    setCachedStorefrontConfig(countryId, payload, submissionSettings, monthClosings);
+    return res.json(withSubmissionWindow(payload, submissionSettings, countryCode, monthClosings));
   } catch (e) {
     console.error("getStorefrontConfig error:", e);
     return res.status(500).json({ message: "Erreur serveur (getStorefrontConfig)" });
