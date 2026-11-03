@@ -541,6 +541,7 @@ model Country {
   memorials Memorial[]
   memorialTributes MemorialTribute[]
   cashRegisterStatuses CashRegisterStatus[]
+  commercialMonthClosings CommercialMonthClosing[]
 }
 
 model MobilePushToken {
@@ -2552,6 +2553,25 @@ model TicketCredit {
   @@index([holderEmail])
   @@index([originEventId])
   @@index([redeemedEventId])
+}
+
+// Clôture du mois commercial d'un pays (voir services/commercial-month.service.js).
+// Les achats FACTURÉS avant closesAt comptent pour `month` (ex. "2026-10"
+// jusqu'au 3 novembre 13:00) ; submitBy est l'heure limite d'envoi conseillée
+// aux clients pour laisser le temps de facturer. Sans ligne, le mois se
+// termine à minuit le dernier jour du mois calendaire.
+model CommercialMonthClosing {
+  id         String   @id @default(cuid())
+  countryId  String
+  country    Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  month      String
+  closesAt   DateTime
+  submitBy   DateTime?
+  updatedByLabel String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([countryId, month])
 }
 
 model CountrySettingsChange {

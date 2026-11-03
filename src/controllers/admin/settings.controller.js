@@ -7,9 +7,7 @@ const {
   DEFAULT_GRACE_MINUTES,
   computeSubmissionWindow,
   serializeWindow,
-  localParts,
-  minutesOf,
-  zoneOf,
+  buildOverride,
 } = require("../../services/submission-schedule.service");
 
 function submissionWindowOf(settings, countryCode) {
@@ -855,36 +853,24 @@ async function getCountrySettingsHistory(req,res) {
  catch(error){console.error('settings history error:',error);return res.status(500).json({message:"Impossible de charger l’historique des paramètres."});}
 }
 
-// Exception du jour : « Fermer maintenant », « Ouvrir jusqu'à HH:MM »
-// (prolongation ou réouverture manuelle) ou retour à l'horaire normal
-// (mode null). La date est celle du pays, calculée ici : l'exception expire
-// d'elle-même à minuit, heure locale. Tracée dans l'historique des réglages.
+// Exception en cours : « Rouvrir maintenant » / « Prolonger l'ouverture »
+// (mode OPEN), « Fermer maintenant » / « Prolonger la pause » (mode CLOSED),
+// toujours jusqu'à une heure du jour (heure du pays, 24:00 = minuit), ou
+// retour à l'horaire normal (mode null). L'exception s'arrête d'elle-même à
+// son heure de fin. Tracée dans l'historique des réglages.
 async function setSubmissionOverride(req, res) {
   try {
     const countryId = pickCountryId(req);
-    const countryCode = req.country?.code;
     const { mode = null, until = null } = req.body || {};
-    if (mode !== null && mode !== "OPEN" && mode !== "CLOSED")
-      return res.status(400).json({ message: "Action inconnue." });
-    const now = new Date();
-    const local = localParts(now, zoneOf(countryCode));
-    if (mode === "OPEN") {
-      const untilMinutes = minutesOf(until);
-      if (untilMinutes === null)
-        return res.status(400).json({ message: "Saisissez l’heure de fin au format HH:MM." });
-      if (untilMinutes <= local.minutes)
-        return res.status(400).json({ message: "L’heure de fin doit être postérieure à l’heure actuelle." });
-    }
+    const built = buildOverride({
+      mode,
+      until,
+      countryCode: req.country?.code,
+      actorLabel: req.user?.email || "Administrateur",
+    });
+    if (built.error) return res.status(400).json({ message: built.error });
     const existing = await prisma.countrySettings.findUnique({ where: { countryId } });
-    const override = mode
-      ? {
-          date: local.date,
-          mode,
-          ...(mode === "OPEN" ? { until } : {}),
-          at: now.toISOString(),
-          actorLabel: req.user?.email || "Administrateur",
-        }
-      : null;
+    const override = built.override;
     const updated = await persistCountrySettings(
       prisma,
       req,
