@@ -334,7 +334,8 @@ const RESEND_CHANNELS = ["SMS", "EMAIL"];
 
 // Renvoi depuis l'admin de la notification du statut en cours : approbation
 // (n° FBO, commande à payer et lien) tant que l'achat attend, validation une
-// fois l'achat payé. Le lien de paiement est recalculé depuis la commande.
+// fois l'achat payé ; demande de complément (nouveau lien de correction) ou
+// refus, avec le motif. Le lien de paiement est recalculé depuis la commande.
 async function resendSponsorshipNotification({ sponsorship: s, channels, resentBy, actorAdminId = null }) {
   const httpError = (status, message) => Object.assign(new Error(message), { statusCode: status });
   const wanted = (Array.isArray(channels) ? channels : RESEND_CHANNELS)
@@ -397,12 +398,21 @@ async function resendSponsorshipNotification({ sponsorship: s, channels, resentB
     return { kind: "VALIDATION", results };
   }
 
-  throw httpError(409, "Seules les notifications d'un parrainage approuvé ou validé peuvent être renvoyées.");
+  // Complément demandé : nouveau lien de correction (30 jours) avec le motif
+  // enregistré. Refus : motif du refus.
+  if (s.status === "CHANGES_REQUESTED" || s.status === "REJECTED") {
+    const kind = s.status;
+    const note = kind === "REJECTED" ? s.rejectionReason : s.reviewNote;
+    const results = await notifySponsorshipReview({ sponsorshipId: s.id, kind, note, channels: wanted, resentBy, actorAdminId });
+    return { kind, results };
+  }
+
+  throw httpError(409, "Aucune notification à renvoyer pour ce statut (seuls les parrainages à compléter, refusés, approuvés ou validés en ont une).");
 }
 
 // Demande de complément ou refus : motif envoyé au filleul ET au parrain (SMS +
 // email), résultat des envois journalisé. `kind` : "CHANGES_REQUESTED" | "REJECTED".
-async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
+async function notifySponsorshipReview({ sponsorshipId, kind, note, channels = null, resentBy = null, actorAdminId = null }) {
   const s = await prisma.sponsorship.findUnique({ where: { id: sponsorshipId } });
   if (!s) return [];
   const { countryCode } = await countryInfo(s.countryId);
@@ -462,12 +472,15 @@ async function notifySponsorshipReview({ sponsorshipId, kind, note }) {
     { who: "parrain", channel: "SMS", send: () => safeSms({ to: sponsorPhone, countryCode, message: sponsorSms }) },
     { who: "filleul", channel: "EMAIL", send: () => safeEmail({ to: s.email, subject, html: emailHtml(recruitContent), body: emailText(recruitContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "RECRUIT" } }, `recruit-${kind}`) },
     { who: "parrain", channel: "EMAIL", send: () => safeEmail({ to: s.sponsorEmail, subject, html: emailHtml(sponsorContent), body: emailText(sponsorContent), metadata: { type: `SPONSORSHIP_${kind}`, sponsorshipId: s.id, recipient: "SPONSOR" } }, `sponsor-${kind}`) },
-  ]);
+  ], channels);
   await addSponsorshipLog(null, {
     sponsorshipId: s.id,
-    action: changes ? "CHANGES_REQUESTED_NOTIFIED" : "REJECTION_NOTIFIED",
-    note: `Notification ${changes ? "de demande de complément" : "de refus"} : ${summarizeResults(results)}.`,
-    meta: { results },
+    action: changes
+      ? resentBy ? "CHANGES_REQUESTED_NOTIFICATION_RESENT" : "CHANGES_REQUESTED_NOTIFIED"
+      : resentBy ? "REJECTION_NOTIFICATION_RESENT" : "REJECTION_NOTIFIED",
+    note: logNote(changes ? "de demande de complément" : "de refus", results, resentBy),
+    meta: { results, channels },
+    actorAdminId,
   }).catch(() => {});
   return results;
 }
