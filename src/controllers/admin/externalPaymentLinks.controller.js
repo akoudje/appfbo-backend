@@ -935,11 +935,15 @@ async function attachToOrders(req, res) {
             provider: "WAVE",
             status: "SUCCEEDED",
             providerSessionId: link.providerSessionId || null,
-            providerTransactionId: link.providerTransactionId || null,
+            // Unique par (provider, providerTransactionId) : la transaction Wave
+            // ne peut figurer que sur une seule tentative. Elle reste sur le
+            // lien et dans les payloads ci-dessous pour chaque part.
+            providerTransactionId: null,
             providerPayerPhone: link.providerPayerPhone || link.customerPhone || null,
             providerStatusLabel: link.providerStatusLabel || null,
             requestPayloadJson: {
               source: "EXTERNAL_PAYMENT_LINK_GROUP_ATTACH",
+              providerTransactionId: link.providerTransactionId || null,
               externalPaymentLinkId: link.id,
               externalPaymentReference: link.reference,
               groupSize: current.orders.length,

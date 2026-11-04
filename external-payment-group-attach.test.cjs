@@ -30,7 +30,7 @@ const orders = [
 const text = 'PO-CIV-20261103-0201\nPO-CIV-20261103-0202';
 
 function database(overrides = {}) {
-  const writes = { payments: [], orders: [], logs: 0, transactions: 0 };
+  const writes = { payments: [], orders: [], logs: 0, transactions: 0, attemptTxns: new Set() };
   const db = {
     externalPaymentLink: { findFirst: async () => link, update: async () => link },
     payment: {
@@ -38,7 +38,17 @@ function database(overrides = {}) {
       create: async ({ data }) => { writes.payments.push(data); return { id: `pay-${writes.payments.length}` }; },
       update: async () => ({}),
     },
-    paymentAttempt: { create: async () => ({ id: 'attempt' }) },
+    paymentAttempt: {
+      // Reproduit @@unique([provider, providerTransactionId]) du schéma.
+      create: async ({ data }) => {
+        if (data.providerTransactionId) {
+          const key = `${data.provider}:${data.providerTransactionId}`;
+          if (writes.attemptTxns.has(key)) throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+          writes.attemptTxns.add(key);
+        }
+        return { id: 'attempt' };
+      },
+    },
     preorder: {
       findMany: async ({ where }) => orders.filter((order) => where.preorderNumber.in.includes(order.preorderNumber)),
       update: async ({ where, data }) => { writes.orders.push({ id: where.id, ...data }); return data; },
