@@ -751,9 +751,30 @@ async function attachToOrder(req, res) {
 
 const MAX_GROUP_ORDERS = 100;
 
+// Même critère que la relance de paiement (orders.controller relaunchPayment) :
+// seule une annulation automatique sans paiement (délai expiré ou fermeture de
+// caisse) peut être levée par un paiement retrouvé. Une annulation manuelle
+// reste bloquante.
+function isAutoCancelledUnpaid(order) {
+  if (String(order?.status || "").toUpperCase() !== "CANCELLED") return false;
+  if (String(order.paymentStatus || "").toUpperCase() === "PAID") return false;
+  const logs = Array.isArray(order.logs) ? order.logs : [];
+  const autoLog = logs.some(
+    (log) =>
+      String(log.action || "").toUpperCase() === "CANCEL" &&
+      (String(log.meta?.mode || "").toUpperCase() === "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW" ||
+        String(log.meta?.source || "").toUpperCase() === "CASH_REGISTER_CLOSURE"),
+  );
+  const reason = String(order.cancelReason || "").toLowerCase();
+  return autoLog || (reason.includes("automatique") && reason.includes("sans paiement"));
+}
+
 // Contrôles du rattachement groupé, partagés par l'aperçu (dryRun) et la
 // confirmation : chaque commande doit exister, être non soldée et non réglée
 // par une filiale, et la somme des factures doit égaler le paiement hors frais.
+// Une commande annulée automatiquement faute de paiement est acceptée : le
+// paiement groupé la réactive directement (pas besoin de la relancer, ce qui
+// renverrait une facture et un lien de paiement à un client qui a déjà payé).
 async function checkGroupAttach(db, req, link, numbers) {
   const orders = await db.preorder.findMany({
     where: { countryId: req.countryId, preorderNumber: { in: numbers } },
@@ -771,6 +792,16 @@ async function checkGroupAttach(db, req, link, numbers) {
       settlementEntity: true,
       totalFcfa: true,
       billingCompletedAt: true,
+      cancelReason: true,
+      stockDeductedAt: true,
+      stockRestoredAt: true,
+      _count: { select: { items: true } },
+      logs: {
+        where: { action: "CANCEL" },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: { action: true, meta: true },
+      },
     },
   });
   const byNumber = new Map(orders.map((order) => [order.preorderNumber, order]));
@@ -779,7 +810,8 @@ async function checkGroupAttach(db, req, link, numbers) {
     const order = byNumber.get(number);
     const status = String(order?.status || "").toUpperCase();
     if (!order) issues.push(`${number} : commande introuvable.`);
-    else if (status === "CANCELLED") issues.push(`${number} : commande annulée.`);
+    else if (status === "CANCELLED" && !isAutoCancelledUnpaid(order)) issues.push(`${number} : annulée manuellement, à vérifier avant tout rattachement.`);
+    else if (status === "CANCELLED" && !order._count?.items) issues.push(`${number} : commande annulée sans article.`);
     else if (order.paymentStatus === "PAID" || ["PAID", "READY", "FULFILLED"].includes(status)) issues.push(`${number} : déjà soldée.`);
     else if (order.settlementEntity) issues.push(`${number} : réglée par une autre filiale.`);
   }
@@ -790,6 +822,7 @@ async function checkGroupAttach(db, req, link, numbers) {
   }
   return {
     orders: numbers.map((number) => byNumber.get(number)).filter(Boolean),
+    reactivatedCount: orders.filter((order) => String(order.status || "").toUpperCase() === "CANCELLED").length,
     issues,
     ordersTotalFcfa,
     invoiceAmountFcfa,
@@ -840,6 +873,7 @@ async function attachToOrders(req, res) {
       orders: check.orders,
       ordersTotalFcfa: check.ordersTotalFcfa,
       invoiceAmountFcfa: check.invoiceAmountFcfa,
+      reactivatedCount: check.reactivatedCount,
       issues: check.issues,
       unrecognized,
     };
@@ -863,6 +897,18 @@ async function attachToOrders(req, res) {
 
       for (const order of current.orders) {
         const amountFcfa = Number(order.totalFcfa || 0);
+        const wasCancelled = String(order.status || "").toUpperCase() === "CANCELLED";
+        if (wasCancelled) {
+          // Comme la relance : les anciennes tentatives Wave restées ouvertes
+          // sont closes avant d'enregistrer le paiement retrouvé.
+          await tx.payment.updateMany({
+            where: {
+              preorderId: order.id,
+              status: { notIn: ["SUCCEEDED", "REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED"] },
+            },
+            data: { status: "CANCELLED", cancelledAt: now },
+          });
+        }
         const payment = await tx.payment.create({
           data: {
             preorderId: order.id,
@@ -923,6 +969,14 @@ async function attachToOrders(req, res) {
             billingWorkStatus: "COMPLETED",
             billingCompletedAt: order.billingCompletedAt || now,
             billingLastActivityAt: now,
+            ...(wasCancelled
+              ? { cancelledAt: null, cancelReason: null, cancelledById: null, paymentExpiresAt: null }
+              : {}),
+            // Stock rendu par l'annulation : on efface la trace du débit pour
+            // que « Lancer prep » débite à nouveau (sinon il serait sauté).
+            ...(wasCancelled && order.stockRestoredAt
+              ? { stockDeductedAt: null, stockRestoredAt: null }
+              : {}),
           },
         });
 
@@ -930,7 +984,9 @@ async function attachToOrders(req, res) {
           data: {
             preorderId: order.id,
             action: "PAYMENT_CONFIRMED",
-            note: `Paiement groupé ${link.reference} (${current.orders.length} commandes) rattaché à la commande`,
+            note: wasCancelled
+              ? `Paiement groupé ${link.reference} (${current.orders.length} commandes) rattaché : commande annulée automatiquement réactivée`
+              : `Paiement groupé ${link.reference} (${current.orders.length} commandes) rattaché à la commande`,
             actorAdminId: req.user?.id || null,
             meta: {
               source: "EXTERNAL_PAYMENT_LINK_GROUP_ATTACH",
@@ -942,6 +998,9 @@ async function attachToOrders(req, res) {
               orderTotalFcfa: amountFcfa,
               previousPreorderPaymentMode: order.preorderPaymentMode || null,
               previousPaymentProvider: order.paymentProvider || null,
+              previousStatus: order.status,
+              reactivatedFromAutoCancel: wasCancelled,
+              previousCancelReason: wasCancelled ? order.cancelReason || null : null,
               paymentId: payment.id,
               paymentAttemptId: attempt.id,
             },
