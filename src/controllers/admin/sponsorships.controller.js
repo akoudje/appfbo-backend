@@ -391,10 +391,11 @@ async function evaluateNow(req, res) {
 
 // POST /api/admin/sponsorships/:id/resend-notification { channels: ["SMS", "EMAIL"] }
 // Renvoie au filleul et au parrain la notification du statut en cours :
-// approbation (achat à payer, avec le lien) ou validation (achat payé).
+// complément demandé (lien de correction), refus, approbation (achat à payer,
+// avec le lien) ou validation (achat payé).
 async function resendNotification(req, res) {
   try {
-    const row = await loadForReview(req, ["APPROVED_PENDING_PURCHASE", "VALIDATED"]);
+    const row = await loadForReview(req, ["CHANGES_REQUESTED", "REJECTED", "APPROVED_PENDING_PURCHASE", "VALIDATED"]);
     const { kind, results } = await resendSponsorshipNotification({
       sponsorship: row,
       channels: req.body?.channels,
