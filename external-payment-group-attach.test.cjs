@@ -113,3 +113,53 @@ test('single attach refuses a payment already split across several orders', asyn
   assert.equal(res.code, 409);
   assert.match(res.body.message, /plusieurs commandes/);
 });
+
+const autoCancelled = {
+  ...orders[0],
+  status: 'CANCELLED',
+  paymentStatus: 'UNPAID',
+  cancelReason: 'Annulation automatique sans paiement',
+  stockDeductedAt: new Date('2026-11-03T09:00:00Z'),
+  stockRestoredAt: new Date('2026-11-03T12:00:00Z'),
+  _count: { items: 2 },
+  logs: [{ action: 'CANCEL', meta: { mode: 'AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW' } }],
+};
+
+test('group attach reactivates an order auto-cancelled for non-payment', async () => {
+  const closed = [];
+  const { db, writes } = database({
+    preorder: {
+      findMany: async () => [autoCancelled, orders[1]],
+      update: async ({ where, data }) => ({ id: where.id, ...data }),
+    },
+  });
+  db.preorder.update = async ({ where, data }) => { writes.orders.push({ id: where.id, ...data }); return data; };
+  db.payment.updateMany = async ({ where }) => { closed.push(where.preorderId); return { count: 1 }; };
+  const preview = response();
+  await controller(db).attachToOrders(request({ text, dryRun: true }), preview);
+  assert.equal(preview.body.ok, true);
+  assert.equal(preview.body.reactivatedCount, 1);
+
+  const res = response();
+  await controller(db).attachToOrders(request({ text }), res);
+  assert.equal(res.code, 200);
+  assert.deepEqual(closed, ['o1']);
+  const o1 = writes.orders.find((o) => o.id === 'o1');
+  assert.equal(o1.status, 'PAID');
+  assert.equal(o1.cancelledAt, null);
+  assert.equal(o1.cancelReason, null);
+  assert.equal(o1.stockDeductedAt, null, 'la préparation doit débiter le stock à nouveau');
+  assert.equal(o1.stockRestoredAt, null);
+  const o2 = writes.orders.find((o) => o.id === 'o2');
+  assert.ok(!('cancelledAt' in o2));
+});
+
+test('group attach still blocks a manually cancelled order', async () => {
+  const manual = { ...autoCancelled, cancelReason: 'Annulée à la demande du client', logs: [{ action: 'CANCEL', meta: {} }] };
+  const { db, writes } = database({ preorder: { findMany: async () => [manual, orders[1]] } });
+  const res = response();
+  await controller(db).attachToOrders(request({ text }), res);
+  assert.equal(res.code, 409);
+  assert.match(res.body.message, /annulée manuellement/);
+  assert.equal(writes.transactions, 0);
+});
