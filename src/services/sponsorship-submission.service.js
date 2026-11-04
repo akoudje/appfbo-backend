@@ -13,6 +13,7 @@ const {
   normalizeGrade,
 } = require("./fboDirectory.service");
 const { matchingFboNames } = require("../utils/fboIdentity");
+const { findRecruitPromotion, resolveEffectiveGrade } = require("./sponsorship-promotion.service");
 
 // Profil du parrain dans l'annuaire FBO (nom, grade, grade autorisé) à partir de
 // son seul numéro. Annuaire momentanément indisponible : repli sur la fiche
@@ -41,14 +42,43 @@ async function lookupPublicSponsor({ numeroFbo }) {
     profile = { fullName: local.nomComplet, grade: local.grade };
   }
 
+  // Filleul validé pas encore dans l'annuaire AS400 : sa fiche locale (créée
+  // à l'approbation) suffit s'il a été promu Animateur adjoint.
+  if (!profile) {
+    const local = await prisma.fbo.findUnique({ where: { numeroFbo: canonical }, select: { nomComplet: true, grade: true } });
+    if (local?.nomComplet && (await findRecruitPromotion(canonical))) {
+      profile = { fullName: local.nomComplet, grade: local.grade };
+    }
+  }
+
   if (!profile) throw sponsorship.httpError(404, "Numéro FBO du parrain introuvable. Vérifiez le numéro.", "SPONSOR_FBO_NOT_FOUND");
   if (!profile.fullName || !profile.grade) {
     throw sponsorship.httpError(502, "Profil FBO incomplet. Contactez Forever.", "SPONSOR_PROFILE_INCOMPLETE");
   }
-  if (!sponsorship.isSponsorGradeAllowed(profile.grade)) {
-    throw sponsorship.httpError(403, "Ce FBO ne peut pas parrainer : le parrainage est réservé aux grades Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
+  const grade = await assertSponsorGradeAllowed(canonical, profile.grade, {
+    message: "Ce FBO ne peut pas parrainer : le parrainage est réservé aux grades Animateur adjoint et plus.",
+  });
+  return { numeroFbo: canonical, nomComplet: profile.fullName.toUpperCase(), grade, verified: true };
+}
+
+function formatEligibleDate(date) {
+  return new Date(date).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+}
+
+// Grade effectif du parrain (promotion de filleul comprise) ; bloque s'il ne
+// permet pas de parrainer. Un filleul promu mais dont la promotion ne prend
+// effet que demain reçoit la date à partir de laquelle il pourra parrainer.
+async function assertSponsorGradeAllowed(numeroFbo, grade, { message } = {}) {
+  const effective = await resolveEffectiveGrade(numeroFbo, grade);
+  if (sponsorship.isSponsorGradeAllowed(effective.grade)) return effective.grade;
+  if (effective.promotion && !effective.promotion.active) {
+    throw sponsorship.httpError(
+      403,
+      `Ce FBO pourra parrainer à partir du ${formatEligibleDate(effective.promotion.eligibleFrom)} (Animateur adjoint grâce à son achat de parrainage).`,
+      "SPONSOR_PROMOTION_PENDING",
+    );
   }
-  return { numeroFbo: canonical, nomComplet: profile.fullName.toUpperCase(), grade: profile.grade, verified: true };
+  throw sponsorship.httpError(403, message || "Le parrainage est réservé aux FBO de grade Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
 }
 
 // Contrôle à l'envoi : profil de l'annuaire + nom transmis par le formulaire
@@ -96,9 +126,8 @@ async function upsertSponsorFbo(profile) {
 // de validation est obligatoire.
 async function createSubmittedSponsorship({ sponsorFbo, sponsorVerified = true, settings, countryId, body = {}, files = [], channel = "CUSTOMER_PORTAL" }) {
   if (!settings.enabled) throw sponsorship.httpError(403, "Le parrainage n'est pas encore ouvert dans ce pays.", "SPONSORSHIP_DISABLED");
-  if (!sponsorship.isSponsorGradeAllowed(sponsorFbo.grade)) {
-    throw sponsorship.httpError(403, "Le parrainage est réservé aux FBO de grade Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
-  }
+  // Grade effectif : un filleul promu Animateur adjoint peut parrainer.
+  const sponsorGrade = await assertSponsorGradeAllowed(sponsorFbo.numeroFbo, sponsorFbo.grade);
   if (String(body.consentAccepted) !== "true") {
     throw sponsorship.httpError(400, "Vous devez attester disposer de l'accord et de la procuration du filleul.", "SPONSORSHIP_CONSENT_REQUIRED");
   }
@@ -149,7 +178,7 @@ async function createSubmittedSponsorship({ sponsorFbo, sponsorVerified = true, 
       sponsorFboId: sponsorFbo.id,
       sponsorNumero: sponsorFbo.numeroFbo,
       sponsorNom: sponsorFbo.nomComplet,
-      sponsorGrade: sponsorFbo.grade,
+      sponsorGrade,
       sponsorVerified,
       // Parcours public : c'est le filleul qui remplit et atteste.
       consentText:
@@ -236,4 +265,4 @@ async function applySponsorshipCorrection({ existing, body = {}, files = [], set
   return { id: existing.id, status: "SUBMITTED", statusLabel: sponsorship.STATUS_LABELS.SUBMITTED };
 }
 
-module.exports = { applySponsorshipCorrection, createSubmittedSponsorship, lookupPublicSponsor, upsertSponsorFbo, verifyPublicSponsor };
+module.exports = { applySponsorshipCorrection, assertSponsorGradeAllowed, createSubmittedSponsorship, lookupPublicSponsor, upsertSponsorFbo, verifyPublicSponsor };

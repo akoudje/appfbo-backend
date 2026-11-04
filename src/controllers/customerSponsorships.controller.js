@@ -6,6 +6,7 @@ const sponsorship = require("../services/sponsorship.service");
 const purchase = require("../services/sponsorship-purchase.service");
 const { writeSponsorshipAgreementPdf } = require("../services/sponsorship-agreement-pdf.service");
 const { applySponsorshipCorrection, createSubmittedSponsorship } = require("../services/sponsorship-submission.service");
+const { resolveEffectiveGrade } = require("../services/sponsorship-promotion.service");
 
 // Statuts pour lesquels la fiche porte un n° FBO et le cachet d'approbation.
 const AGREEMENT_STATUSES = new Set(["APPROVED_PENDING_PURCHASE", "VALIDATED", "EXPIRED"]);
@@ -85,17 +86,23 @@ async function listMySponsorships(req, res) {
         purchasePaymentMode: true, purchaseDeliveryMode: true, cancelledAt: true, cancellationReason: true,
       },
     });
+    // Filleul promu Animateur adjoint par son achat de parrainage : peut
+    // parrainer dès le lendemain de la validation.
+    const effective = await resolveEffectiveGrade(fbo.numeroFbo, fbo.grade);
+    const pendingPromotion = effective.promotion && !effective.promotion.active ? effective.promotion : null;
     return res.json({
       eligibility: {
         enabled: settings.enabled,
-        gradeAllowed: sponsorship.isSponsorGradeAllowed(fbo.grade),
-        grade: fbo.grade,
+        gradeAllowed: sponsorship.isSponsorGradeAllowed(effective.grade),
+        grade: effective.grade,
+        promotedFromSponsorship: effective.promoted,
+        promotionEligibleFrom: pendingPromotion ? pendingPromotion.eligibleFrom : null,
         minRecruitAge: sponsorship.MIN_RECRUIT_AGE,
         minPurchaseFcfa: settings.minPurchaseFcfa,
         purchaseWindowHours: settings.purchaseWindowHours,
         consentVersion: sponsorship.CONSENT_VERSION,
       },
-      sponsor: { numeroFbo: fbo.numeroFbo, nomComplet: fbo.nomComplet, grade: fbo.grade, phoneSuggestion: sponsorPhoneSuggestion },
+      sponsor: { numeroFbo: fbo.numeroFbo, nomComplet: fbo.nomComplet, grade: effective.grade, phoneSuggestion: sponsorPhoneSuggestion },
       data: rows.map(serializeForSponsor),
     });
   } catch (error) {

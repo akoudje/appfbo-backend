@@ -5,6 +5,7 @@ const prisma = require("../../prisma");
 const { scopeWhere, pickCountryId } = require("../../helpers/countryScope");
 const sponsorship = require("../../services/sponsorship.service");
 const purchase = require("../../services/sponsorship-purchase.service");
+const { assertSponsorGradeAllowed } = require("../../services/sponsorship-submission.service");
 const { notifySponsorshipApproved, notifySponsorshipReview, resendSponsorshipNotification } = require("../../services/sponsorship-notifications.service");
 const { writeSponsorshipAgreementPdf, buildSponsorshipDossierPdf } = require("../../services/sponsorship-agreement-pdf.service");
 
@@ -584,10 +585,12 @@ async function counterSubmitSponsorship(req, res) {
     const enteredSponsorGrade = String(body.sponsorGrade || "").trim().toUpperCase();
 
     const existingSponsorFbo = await prisma.fbo.findUnique({ where: { numeroFbo: sponsorNumero } });
-    const effectiveSponsorGrade = existingSponsorFbo?.grade || enteredSponsorGrade;
-    if (!sponsorship.isSponsorGradeAllowed(effectiveSponsorGrade)) {
-      throw sponsorship.httpError(403, "Le parrainage est réservé aux FBO de grade Animateur adjoint et plus.", "SPONSOR_GRADE_NOT_ALLOWED");
-    }
+    // Grade de la fiche locale (ou saisi), relevé à Animateur adjoint pour un
+    // filleul promu par son achat de parrainage.
+    const effectiveSponsorGrade = await assertSponsorGradeAllowed(
+      sponsorNumero,
+      existingSponsorFbo?.grade || enteredSponsorGrade,
+    );
 
     if (String(body.consentAccepted) !== "true") {
       throw sponsorship.httpError(400, "Le parrain doit attester disposer de l'accord et de la procuration du filleul.", "SPONSORSHIP_CONSENT_REQUIRED");

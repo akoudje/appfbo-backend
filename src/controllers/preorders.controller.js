@@ -23,6 +23,7 @@ const {
 } = require("../services/submission-schedule.service");
 const { scopeWhere, scopeCreate } = require("../helpers/countryScope");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
+const { resolveEffectiveGrade } = require("../services/sponsorship-promotion.service");
 const {
   resolveDeliveryModeForPayment,
   validateCountryOrderOptions,
@@ -402,8 +403,10 @@ async function createDraft(req, res) {
     const normalizedNomComplet = (
       directoryProfile.exists ? directoryProfile.fullName : clientName
     ).toUpperCase();
+    // Filleul promu Animateur adjoint par son achat de parrainage : prix AA
+    // dès le lendemain de la validation, même si l'annuaire n'est pas à jour.
     const normalizedGrade = directoryProfile.exists
-      ? directoryProfile.grade
+      ? (await resolveEffectiveGrade(normalizedNumeroFbo, directoryProfile.grade)).grade
       : "CLIENT_PRIVILEGIE";
 
     if (!normalizedNomComplet || (!directoryProfile.exists && !clientGrade)) {
@@ -726,7 +729,12 @@ async function checkFboDirectory(req, res) {
     if (!sanitized.exists) {
       // Filleul approuvé (parrainage) pas encore dans l'annuaire : connu de l'app.
       const recruit = await findApprovedRecruitProfile(numero, req.country?.id || req.countryId);
-      if (recruit) return res.json({ exists: true, grade: recruit.grade });
+      if (recruit) {
+        return res.json({ exists: true, grade: (await resolveEffectiveGrade(numero, recruit.grade)).grade });
+      }
+    }
+    if (sanitized.exists && sanitized.grade) {
+      sanitized.grade = (await resolveEffectiveGrade(numero, sanitized.grade)).grade;
     }
     return res.json(sanitized);
   } catch (e) {

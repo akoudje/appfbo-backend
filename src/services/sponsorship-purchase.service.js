@@ -39,6 +39,9 @@ async function getRecruitCatalog({ countryId, countryCode }) {
       imageUrl: product.imageUrl,
       category: product.category,
       prixFcfa: product.prixFinalFcfa,
+      // CC unitaires : affichés au parrain, qui voit si l'achat atteint 2 CC
+      // (promotion du filleul Animateur adjoint, voir sponsorship-promotion.service).
+      cc: Number(product.cc || 0),
       stockQty: product.stockQty,
       maxQty: Math.min(
         product.stockQty,
@@ -95,11 +98,21 @@ async function normalizePurchaseCart(raw, { countryId, countryCode, minPurchaseF
       errors.push(`${product.nom} : ${product.maxQty} au maximum (stock ou limite par commande).`);
       continue;
     }
-    lines.push({ productId, sku: product.sku, nom: product.nom, qty, prixFcfa: product.prixFcfa, lineTotalFcfa: Math.round(product.prixFcfa * qty) });
+    lines.push({
+      productId,
+      sku: product.sku,
+      nom: product.nom,
+      qty,
+      prixFcfa: product.prixFcfa,
+      lineTotalFcfa: Math.round(product.prixFcfa * qty),
+      cc: product.cc,
+      lineTotalCc: Math.round(product.cc * qty * 1000) / 1000,
+    });
   }
   if (errors.length) throw httpError(400, errors.join(" "), "SPONSORSHIP_CART_STOCK");
 
   const totalFcfa = lines.reduce((sum, line) => sum + line.lineTotalFcfa, 0);
+  const totalCc = Math.round(lines.reduce((sum, line) => sum + line.lineTotalCc, 0) * 1000) / 1000;
   if (totalFcfa < minPurchaseFcfa) {
     throw httpError(
       400,
@@ -107,7 +120,7 @@ async function normalizePurchaseCart(raw, { countryId, countryCode, minPurchaseF
       "SPONSORSHIP_CART_BELOW_MINIMUM",
     );
   }
-  return { items: lines, totalFcfa };
+  return { items: lines, totalFcfa, totalCc };
 }
 
 // Crée la commande brouillon du filleul à partir du panier, avec les quantités

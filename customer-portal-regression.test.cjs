@@ -22,6 +22,8 @@ function controller(file, db, extras = {}) {
       if (name === '../utils/customerOrderResponse') return { customerOrderResponse };
       if (name === '../services/notification-template-defaults') return { getPaymentExpiryHours: () => 3 };
       if (name === '../services/email-templates/layout') return require('./src/services/email-templates/layout');
+      // Promotion de filleul (parrainage) : neutre ici, testée dans sponsorship-promotion.test.cjs.
+      if (name === '../services/sponsorship-promotion.service' && !extras[name]) return { resolveEffectiveGrade: async (_numero, grade) => ({ grade, promoted: false, promotion: null }) };
       return extras[name] || {};
     },
   });

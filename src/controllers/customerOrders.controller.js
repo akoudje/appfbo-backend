@@ -1,5 +1,6 @@
 const prisma = require("../prisma");
 const { fetchFboDirectoryProfile, normalizeGrade } = require("../services/fboDirectory.service");
+const { resolveEffectiveGrade } = require("../services/sponsorship-promotion.service");
 const { customerOrderResponse } = require("../utils/customerOrderResponse");
 const { computePreorderTotals, usesDirectGradePricing } = require("../services/pricing.service");
 const { formatDateKey, formatPreorderNumber } = require("../helpers/preorder-number");
@@ -461,7 +462,11 @@ async function reorderMyOrder(req, res) {
     let verified;
     try { verified = await fetchFboDirectoryProfile(sourceOrder.fbo.numeroFbo); } catch { return res.status(503).json({ message: "Impossible de vérifier votre grade actuel. Réessayez avant de recommander." }); }
     const verifiedName = String(verified?.full_name || verified?.fullName || verified?.nomComplet || "").trim().toUpperCase();
-    const verifiedGrade = normalizeGrade(verified?.grade);
+    const directoryGrade = normalizeGrade(verified?.grade);
+    // Filleul promu Animateur adjoint par son achat de parrainage.
+    const verifiedGrade = directoryGrade
+      ? (await resolveEffectiveGrade(sourceOrder.fbo.numeroFbo, directoryGrade)).grade
+      : directoryGrade;
     if (verified?.exists === false || !verifiedName || !verifiedGrade) return res.status(503).json({ message: "Votre profil FBO doit être vérifié avant de recommander." });
 
     if (!Array.isArray(sourceOrder.items) || sourceOrder.items.length === 0) {

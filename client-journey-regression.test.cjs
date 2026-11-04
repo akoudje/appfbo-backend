@@ -29,6 +29,8 @@ function fixture(directoryProfile = { exists:true, full_name:'KONÉ AMENAN', gra
     if(name==='../services/country-order-options.service')return options;
     if(name==='../helpers/countryScope')return{scopeCreate:(_req,data)=>({countryId:'CIV',...data})};
     if(name==='../helpers/preorder-number')return{formatDateKey:()=> '20300101',formatPreorderNumber:()=> 'CIV-001'};
+    // Promotion de filleul (parrainage) : neutre ici, testée dans sponsorship-promotion.test.cjs.
+    if(name==='../services/sponsorship-promotion.service')return{resolveEffectiveGrade:async(_numero,grade)=>({grade,promoted:false,promotion:null})};
     return{};
   }});
   return {api:module.exports,db,actor,writes,lookup};
