@@ -340,6 +340,12 @@ function serializeWindow(window, settings, now = new Date()) {
       ? { mode: window.override.mode, until: iso(window.override.until), actorLabel: window.override.actorLabel }
       : null,
     message: submissionClosedMessage(window, settings, now),
+    // « demain à 08h00 au plus tard » : repris tel quel par le parrainage, qui
+    // reste ouvert pendant les pauses (traitement à la réouverture).
+    reopeningLabel:
+      !window.open && window.opensAt
+        ? `${formatReopening(window.opensAt, window.timeZone, now)}${window.reopenIsLatest ? " au plus tard" : ""}`
+        : null,
     serverNow: now.toISOString(),
   };
 }
