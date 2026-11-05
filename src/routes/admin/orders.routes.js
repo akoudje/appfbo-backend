@@ -207,4 +207,11 @@ router.post(
   ordersController.reactivateCancelledOrder,
 );
 
+router.post(
+  "/:id/regularize-late-cash-payment",
+  // Restriction aux administrateurs globaux faite dans le contrôleur.
+  requirePermission(Permission.PREORDER_UPDATE_STATUS),
+  ordersController.regularizeLateCashPayment,
+);
+
 module.exports = router;
