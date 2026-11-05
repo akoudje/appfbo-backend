@@ -189,3 +189,11 @@ test("construction d'une exception : heure future du jour, minuit accepté", () 
   // Niger (UTC+1) : 18:30 locale = 17:30 UTC.
   assert.equal(buildOverride({ mode: "OPEN", until: "18:30", countryCode: "NER", now }).override.until, "2026-11-03T17:30:00.000Z");
 });
+
+test("libellé de réouverture repris par le parrainage pendant une pause", () => {
+  const label = (iso, extra) => serializeWindow(window(iso, extra), settings(extra), at(iso)).reopeningLabel;
+  assert.equal(label("2026-11-03T10:00:00Z"), null);
+  assert.equal(label("2026-11-03T15:10:00Z"), "aujourd’hui à 18h30 au plus tard");
+  assert.equal(label("2026-11-03T15:10:00Z", { preorderSubmissionEnabled: false }), null);
+  assert.match(label("2026-11-08T10:00:00Z"), /demain à 00h00 au plus tard/);
+});
