@@ -4661,7 +4661,248 @@ async function reactivateCancelledOrder(req, res) {
   }
 }
 
+// Régularisation d'un encaissement espèces reçu APRÈS la fermeture de caisse,
+// pour une commande déjà facturée, servie et remise au client mais annulée
+// automatiquement par l'application (fermeture de caisse ou délai de paiement
+// expiré). Les deux événements gardent chacun leur date :
+//   - la remise au client garde sa date réelle (`deliveredAt`, saisie) ;
+//   - l'encaissement est daté de maintenant et attribué à l'agent de vente qui
+//     a traité la commande (`assignedInvoicerId` -> manualPaymentValidatedById),
+//     donc il tombe dans SA caisse du jour (voir cashClosures.controller
+//     buildPaidOrdersWhere), sans rouvrir la clôture de la veille.
+// Le stock est débité (les produits sont physiquement partis). Aucun SMS.
+// La réactivation simple (reactivateCancelledOrder) ne convient pas à ce cas :
+// le lendemain, la commande réactivée est aussitôt ré-annulée par
+// preorder-expiration.service (délai calculé depuis invoicedAt).
+const LATE_CASH_REGULARIZATION_SOURCE = "CASH_COLLECTED_AFTER_CLOSURE_REGULARIZATION";
+
+function findAutoCancelLog(order) {
+  return (order.logs || []).find(
+    (log) =>
+      String(log.action || "").toUpperCase() === "CANCEL" &&
+      (String(log.meta?.mode || "").toUpperCase() === "AUTO_CANCEL_UNPAID_AFTER_EXPIRY_WINDOW" ||
+        String(log.meta?.source || "").toUpperCase() === "CASH_REGISTER_CLOSURE"),
+  );
+}
+
+function isAutoCancelledWithoutPayment(order) {
+  const reason = String(order.cancelReason || "").toLowerCase();
+  return (
+    Boolean(findAutoCancelLog(order)) ||
+    (reason.includes("automatique") && reason.includes("sans paiement"))
+  );
+}
+
+async function regularizeLateCashPayment(req, res) {
+  try {
+    const { id } = req.params;
+    const { receiptNumber, amountReceivedFcfa, deliveredAt, pickupRecipientName, note } =
+      req.body || {};
+
+    if (!isGlobalAdminRole(req.user?.role)) {
+      return res.status(403).json({
+        message:
+          "Seuls les administrateurs globaux peuvent régulariser un encaissement reçu après fermeture de caisse.",
+      });
+    }
+
+    const order = await prisma.preorder.findFirst({
+      where: scopeWhere(req, { id }),
+      include: {
+        items: true,
+        logs: { where: { action: "CANCEL" }, orderBy: { createdAt: "desc" }, take: 5 },
+        assignedInvoicer: { select: { id: true, fullName: true, email: true, role: true } },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Commande introuvable" });
+    }
+
+    const fail = (message, statusCode = 400) => res.status(statusCode).json({ message });
+
+    if (order.status !== "CANCELLED" || order.paymentStatus === "PAID") {
+      return fail("Seule une commande annulée et non payée peut être régularisée.");
+    }
+    if (!isAutoCancelledWithoutPayment(order)) {
+      return fail(
+        "Régularisation réservée aux commandes annulées automatiquement sans paiement (fermeture de caisse ou délai expiré). Une annulation manuelle doit être vérifiée.",
+      );
+    }
+    if (!order.invoicedAt || !order.factureReference) {
+      return fail("La commande n'a pas été préfacturée : rien à régulariser.");
+    }
+    if (order.stockDeductedAt || order.stockRestoredAt || order.preparationLaunchedAt) {
+      return fail("Le stock ou la préparation de cette commande ont déjà été traités : régularisation impossible, à vérifier manuellement.");
+    }
+    if (!Array.isArray(order.items) || order.items.length === 0) {
+      return fail("Impossible de régulariser une commande vide.");
+    }
+    if (!order.assignedInvoicerId) {
+      return fail("Aucun agent de vente n'est rattaché à cette commande : impossible d'attribuer l'encaissement.");
+    }
+    if (await prisma.cashierTransaction.count({ where: { preorderId: order.id } })) {
+      return fail("Un encaissement est déjà enregistré pour cette commande.", 409);
+    }
+
+    const normalizedReceiptNumber = String(receiptNumber || "").trim();
+    if (!normalizedReceiptNumber) {
+      return fail("Le numéro de reçu caisse est obligatoire.");
+    }
+
+    const expectedAmount = Number(order.as400InvoiceTotalFcfa || order.totalFcfa || 0);
+    const receivedAmount = Math.round(Number(amountReceivedFcfa));
+    if (!Number.isFinite(receivedAmount) || receivedAmount <= 0) {
+      return fail("Le montant reçu en caisse est obligatoire.");
+    }
+    if (receivedAmount !== expectedAmount) {
+      return fail(
+        `Le montant reçu (${receivedAmount} FCFA) doit être égal au montant facturé (${expectedAmount} FCFA).`,
+      );
+    }
+
+    const now = new Date();
+    const deliveredAtDate = new Date(deliveredAt);
+    if (!deliveredAt || Number.isNaN(deliveredAtDate.getTime())) {
+      return fail("La date de remise du colis au client est obligatoire.");
+    }
+    if (deliveredAtDate < new Date(order.invoicedAt) || deliveredAtDate > now) {
+      return fail("La date de remise doit être comprise entre la préfacture et maintenant.");
+    }
+
+    const actorAdminId = req.user?.id || null;
+    const agentId = order.assignedInvoicerId;
+    const parcelNumber = order.parcelNumber || generateParcelNumber(order);
+    const recipientName = String(pickupRecipientName || "").trim() || order.fboNomComplet || null;
+    const isPickupOrder = order.deliveryMode === "RETRAIT_SITE_FLP";
+    const formatDay = (date) => date.toLocaleDateString("fr-FR", { timeZone: "Africa/Abidjan" });
+    const regularizationNote =
+      String(note || "").trim() ||
+      `Régularisation : commande remise le ${formatDay(deliveredAtDate)}, paiement espèces reçu après la fermeture de caisse et encaissé le ${formatDay(now)}.`;
+    const cancelLog = findAutoCancelLog(order);
+    const meta = { source: LATE_CASH_REGULARIZATION_SOURCE, regularizedAt: now.toISOString() };
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await claimOrderSnapshot(tx, order);
+      await ensurePreparationChecklist(tx, order);
+
+      for (const item of order.items) {
+        const updatedStock = await tx.countryProduct.updateMany({
+          where: {
+            countryId: order.countryId,
+            productId: item.productId,
+            stockQty: { gte: item.qty },
+          },
+          data: { stockQty: { decrement: item.qty } },
+        });
+        if (updatedStock.count !== 1) {
+          const err = new Error(`Stock insuffisant pour ${item.productNameSnapshot || item.productId}`);
+          err.statusCode = 409;
+          throw err;
+        }
+        await tx.stockMovement.create({
+          data: {
+            productId: item.productId,
+            countryId: order.countryId,
+            preorderId: order.id,
+            type: "DEBIT",
+            reason: "PREPARE_ORDER",
+            qty: item.qty,
+            note: "Régularisation : sortie de stock pour un colis déjà remis (encaissement reçu après fermeture de caisse)",
+            meta: { preorderId: order.id, productId: item.productId, qty: item.qty, source: LATE_CASH_REGULARIZATION_SOURCE },
+            createdById: actorAdminId,
+          },
+        });
+      }
+
+      const saved = await tx.preorder.update({
+        where: { id: order.id },
+        data: {
+          status: "FULFILLED",
+          paymentStatus: "PAID",
+          paymentProvider: "MANUAL",
+          manualPaymentReference: normalizedReceiptNumber,
+          manualPaymentValidatedAt: now,
+          manualPaymentValidatedById: agentId,
+          paidAt: now,
+          billingWorkStatus: "COMPLETED",
+          billingCompletedAt: order.billingCompletedAt || now,
+          billingLastActivityAt: now,
+          cancelledAt: null,
+          cancelReason: null,
+          cancelledById: null,
+          parcelNumber,
+          stockDeductedAt: now,
+          preparationLaunchedAt: deliveredAtDate,
+          preparationLaunchedById: actorAdminId,
+          preparedAt: deliveredAtDate,
+          preparedById: actorAdminId,
+          fulfilledAt: deliveredAtDate,
+          fulfilledById: actorAdminId,
+          fulfillmentMode: order.fulfillmentMode || (isPickupOrder ? "PICKUP" : "DELIVERY"),
+          pickupRecipientType: isPickupOrder ? order.pickupRecipientType || "CUSTOMER" : order.pickupRecipientType,
+          pickupRecipientName: isPickupOrder ? recipientName : order.pickupRecipientName,
+          pickupConfirmationNote: regularizationNote,
+          internalNote: [order.internalNote, regularizationNote].filter(Boolean).join("\n"),
+        },
+      });
+
+      await tx.cashierTransaction.create({
+        data: {
+          preorderId: order.id,
+          cashierId: agentId,
+          paymentMode: "ESPECES",
+          amountExpectedFcfa: expectedAmount,
+          amountReceivedFcfa: receivedAmount,
+          providerReference: normalizedReceiptNumber,
+          receiptNumber: normalizedReceiptNumber,
+          cashDeskLabel: "Régularisation encaissement après fermeture de caisse",
+          preparationLaunchedAt: deliveredAtDate,
+        },
+      });
+
+      await addLogTx(tx, order.id, "REACTIVATE", "Réactivation : paiement espèces reçu après fermeture de caisse.", {
+        ...meta,
+        fromStatus: "CANCELLED",
+        originalCancelLogId: cancelLog?.id || null,
+        previousCancelReason: order.cancelReason || null,
+        previousCancelledAt: order.cancelledAt ? new Date(order.cancelledAt).toISOString() : null,
+      }, actorAdminId);
+      await addLogTx(tx, order.id, "VALIDATE_MANUAL_PAYMENT", "Encaissement espèces reçu après fermeture de caisse", {
+        ...meta,
+        toStatus: "PAID",
+        paymentProvider: "MANUAL",
+        receiptNumber: normalizedReceiptNumber,
+        amountReceivedFcfa: receivedAmount,
+        cashierId: agentId,
+        cashierName: order.assignedInvoicer?.fullName || order.assignedInvoicer?.email || null,
+      }, actorAdminId);
+      await addLogTx(tx, order.id, "PAYMENT_CONFIRMED", "Paiement confirmé", { ...meta, paymentProvider: "MANUAL", paymentStatus: "PAID" }, actorAdminId);
+      await addLogTx(tx, order.id, "LAUNCH_PREPARATION", "Régularisation : colis préparé avant la remise.", { ...meta, parcelNumber }, actorAdminId);
+      await addLogTx(tx, order.id, "PREPARE", "Régularisation : colis prêt.", { ...meta, toStatus: "READY", stockDeducted: true, parcelNumber }, actorAdminId);
+      await addLogTx(tx, order.id, "FULFILL", regularizationNote, {
+        ...meta,
+        fromStatus: "READY",
+        toStatus: "FULFILLED",
+        parcelNumber,
+        deliveredAt: deliveredAtDate.toISOString(),
+        pickupRecipientName: isPickupOrder ? recipientName : null,
+      }, actorAdminId);
+
+      return saved;
+    });
+
+    return res.json(updated);
+  } catch (e) {
+    console.error("regularizeLateCashPayment error:", e);
+    return res
+      .status(e.statusCode || 500)
+      .json({ message: e.message || "Erreur serveur (regularizeLateCashPayment)" });
+  }
+}
+
 module.exports = {
+  regularizeLateCashPayment,
   resendShippingPaymentNotification,
   updateShippingQuote,
   syncShippingPayment,
