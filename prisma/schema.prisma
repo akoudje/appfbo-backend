@@ -1056,6 +1056,10 @@ model Preorder {
   fboEmail      String?
   fboGrade      Grade
   billingGrade  Grade?
+  // Grade déclaré par le client quand son numéro est inconnu de FBO Service.
+  // Non vérifié : fboGrade reste CLIENT_PRIVILEGIE (aucune remise) ; il sert
+  // à l'agent de vente pour vérifier dans AS400 et facturer au bon grade.
+  fboGradeDeclared Grade?
   pointDeVente  String
 
   // FBO qui a passé la commande lorsqu'il agit pour un autre FBO.

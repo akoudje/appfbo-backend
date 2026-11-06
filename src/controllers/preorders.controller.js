@@ -590,6 +590,9 @@ async function createDraft(req, res) {
           fboNomComplet: normalizedNomComplet,
           fboEmail: normalizedEmail || null,
           fboGrade: normalizedGrade,
+          // Numéro inconnu : le grade déclaré ne donne aucune remise, mais il
+          // est conservé pour que l'agent de vente le vérifie à la facturation.
+          fboGradeDeclared: directoryProfile.exists ? null : clientGrade,
           pointDeVente: fbo.pointDeVente,
           placedByFboNumero:
             normalizedPlacedByFboNumero &&
@@ -672,6 +675,7 @@ async function createDraft(req, res) {
       directoryLookupWarning,
       fboNomComplet: preorder.fboNomComplet,
       fboGrade: preorder.fboGrade,
+      fboGradeDeclared: preorder.fboGradeDeclared || null,
       identityVerified: directoryProfile.exists,
     });
   } catch (e) {
