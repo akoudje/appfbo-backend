@@ -18,6 +18,8 @@ function fixture(directoryProfile = { exists:true, full_name:'KONÉ AMENAN', gra
       create:async({data})=>{writes.push({type:'draft',data});return{id:'draft',...data};},
     },
     preorderLog: { create:async()=>({}) },
+    // Aucun filleul approuvé : un numéro inconnu reste non vérifié.
+    sponsorship: { findFirst:async()=>null },
   };
   db.$transaction=async callback=>callback(db);
   const module={exports:{}};
@@ -113,6 +115,9 @@ test('public requests cannot expose a mismatching known name or persist a manual
   const known=fixture(),r=res();await known.api.createDraft(req({numeroFbo:'225-000-111-222',nomComplet:'Wrong',grade:'MANAGER'},null),r);assert.equal(r.code,400);assert.equal(known.writes.length,0);
   const unknown=fixture({exists:false}),s=res();await unknown.api.createDraft(req({numeroFbo:'225-000-111-222',nomComplet:'Déclaré',grade:'MANAGER',email:'new@example.test'},null),s);
   assert.equal(s.code,200);assert.equal(s.body.identityVerified,false);assert.equal(s.body.fboGrade,'CLIENT_PRIVILEGIE');
+  // Le grade déclaré est conservé à part, pour vérification par l'agent de vente.
+  const declaredDraft=unknown.writes.find(w=>w.type==='draft').data;assert.equal(declaredDraft.fboGrade,'CLIENT_PRIVILEGIE');assert.equal(declaredDraft.fboGradeDeclared,'MANAGER');assert.equal(s.body.fboGradeDeclared,'MANAGER');
+  const knownDraft=fixture(),k=res();await knownDraft.api.createDraft(req({numeroFbo:'225-000-111-222'},null),k);assert.equal(k.code,200);assert.equal(knownDraft.writes.find(w=>w.type==='draft').data.fboGradeDeclared,null);
   assert.equal(unknown.writes.find(w=>w.type==='fbo').update.email,undefined);assert.equal(unknown.writes.find(w=>w.type==='fbo').update.grade,undefined);
 });
 
