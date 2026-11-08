@@ -22,6 +22,10 @@ function validateCountrySettings(patch, existing = {}) {
     preinvoicedAutoReminderAfterMinutes: [1, 43199],
     sponsorshipMinPurchaseFcfa: [0, 100000000],
     submissionGraceMinutes: [0, MAX_GRACE_MINUTES],
+    cashierLaunchWarnAfterMinutes: [1, 1440],
+    cashierLaunchAlertAfterMinutes: [1, 1440],
+    cashierLaunchReminderIntervalMinutes: [1, 240],
+    cashierLaunchMaxReminders: [0, 20],
   };
   for (const [key, [min, max]] of Object.entries(numbers))
     if (
@@ -65,6 +69,16 @@ function validateCountrySettings(patch, existing = {}) {
     if (reminder >= cancel)
       errors.preinvoicedAutoReminderAfterMinutes =
         "Le rappel doit précéder l’annulation.";
+  }
+  if (
+    "cashierLaunchWarnAfterMinutes" in patch ||
+    "cashierLaunchAlertAfterMinutes" in patch
+  ) {
+    const warn = all.cashierLaunchWarnAfterMinutes ?? 15;
+    const alert = all.cashierLaunchAlertAfterMinutes ?? 25;
+    if (warn >= alert)
+      errors.cashierLaunchWarnAfterMinutes =
+        "L’alerte visuelle doit précéder le seuil d’alerte.";
   }
   for (const key of [
     "themePrimaryColor",

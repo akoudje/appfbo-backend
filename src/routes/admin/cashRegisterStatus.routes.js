@@ -7,6 +7,7 @@ const router = express.Router();
 const requireCashRegisterAccess = requirePermission(Permission.PAYMENT_VALIDATE);
 
 router.get("/", requireCashRegisterAccess, controller.getStatus);
+router.get("/close-preview", requireCashRegisterAccess, controller.getPreview);
 router.post("/close", requireCashRegisterAccess, controller.closeRegister);
 router.post("/open", requireCashRegisterAccess, controller.openRegister);
 

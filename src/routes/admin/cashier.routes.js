@@ -27,6 +27,12 @@ router.get(
 );
 
 router.get(
+  "/launch-alerts",
+  requirePermission(Permission.PAYMENT_VALIDATE),
+  cashierController.getLaunchAlerts,
+);
+
+router.get(
   "/paid-today",
   requirePermission(Permission.PAYMENT_VALIDATE),
   cashierController.getPaidToday,
