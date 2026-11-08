@@ -1,4 +1,5 @@
 const prisma = require("../prisma");
+const { listPendingLaunches } = require("./cashier-launch-alerts.service");
 
 // Annulation en masse des précommandes préfacturées (INVOICED / PAYMENT_PENDING)
 // à la fermeture de caisse — voir cashRegisterStatus.controller.js. Ce sont
@@ -67,6 +68,7 @@ async function cancelPendingInvoicedPreordersForCountry({
   reason,
   actorAdminId = null,
   assignedInvoicerId = null,
+  logMeta = {},
 }) {
   const orders = await tx.preorder.findMany({
     where: {
@@ -132,6 +134,7 @@ async function cancelPendingInvoicedPreordersForCountry({
         meta: {
           fromStatus: order.status,
           toStatus: "CANCELLED",
+          ...logMeta,
           source: "CASH_REGISTER_CLOSURE",
         },
         actorAdminId,
@@ -142,8 +145,66 @@ async function cancelPendingInvoicedPreordersForCountry({
   return orders.length;
 }
 
+// Ce que la fermeture va faire, montré à l'agent AVANT de fermer :
+//  - les préfactures non payées qui seront annulées. Une commande payée en
+//    espèces mais pas encore saisie serait annulée à tort (incident du
+//    04/11/2026 : 23 commandes servies puis annulées, espèces arrivées après
+//    la fermeture) ; d'où la confirmation exigée par closeRegister ;
+//  - les colis payés pas encore lancés en préparation, qui ne sont pas
+//    annulés mais restent à traiter (simple rappel).
+// Même périmètre que cancelPendingInvoicedPreordersForCountry.
+async function getClosurePreview(db, { countryId, assignedInvoicerId = null }) {
+  const [toCancel, paidNotLaunched] = await Promise.all([
+    db.preorder.findMany({
+      where: {
+        countryId,
+        status: { in: CANCELLABLE_STATUSES },
+        ...(assignedInvoicerId ? { assignedInvoicerId } : {}),
+      },
+      select: {
+        id: true,
+        status: true,
+        preorderNumber: true,
+        parcelNumber: true,
+        factureReference: true,
+        fboNomComplet: true,
+        fboNumero: true,
+        preorderPaymentMode: true,
+        totalFcfa: true,
+        as400InvoiceTotalFcfa: true,
+        invoicedAt: true,
+      },
+      orderBy: [{ invoicedAt: "asc" }, { createdAt: "asc" }],
+      take: 500,
+    }),
+    listPendingLaunches(db, countryId, { ownerId: assignedInvoicerId }),
+  ]);
+
+  const rows = toCancel.map((order) => ({
+    id: order.id,
+    status: order.status,
+    label: order.parcelNumber || order.preorderNumber || order.factureReference || order.id,
+    factureReference: order.factureReference || null,
+    fboNomComplet: order.fboNomComplet || null,
+    fboNumero: order.fboNumero || null,
+    preorderPaymentMode: order.preorderPaymentMode || null,
+    amountFcfa: Number(order.as400InvoiceTotalFcfa || order.totalFcfa || 0) || 0,
+    invoicedAt: order.invoicedAt,
+  }));
+
+  return {
+    toCancel: rows,
+    toCancelCount: rows.length,
+    toCancelCashCount: rows.filter((row) => row.preorderPaymentMode === "ESPECES").length,
+    toCancelAmountFcfa: rows.reduce((sum, row) => sum + row.amountFcfa, 0),
+    paidNotLaunched,
+    paidNotLaunchedCount: paidNotLaunched.length,
+  };
+}
+
 module.exports = {
   CANCELLABLE_STATUSES,
+  getClosurePreview,
   DEFAULT_CLOSED_MESSAGE,
   resolveRegisterUserId,
   getCashRegisterStatus,

@@ -209,6 +209,10 @@ async function getCountrySettings(req, res) {
         preinvoicedAutoReminderAfterHours: true,
         preinvoicedAutoCancelAfterMinutes: true,
         preinvoicedAutoReminderAfterMinutes: true,
+        cashierLaunchWarnAfterMinutes: true,
+        cashierLaunchAlertAfterMinutes: true,
+        cashierLaunchReminderIntervalMinutes: true,
+        cashierLaunchMaxReminders: true,
         sponsorshipEnabled: true,
         sponsorshipMinPurchaseFcfa: true,
         createdAt: true,
@@ -279,6 +283,10 @@ async function getCountrySettings(req, res) {
         preinvoicedAutoReminderAfterHours: 1,
         preinvoicedAutoCancelAfterMinutes: 120,
         preinvoicedAutoReminderAfterMinutes: 60,
+        cashierLaunchWarnAfterMinutes: 15,
+        cashierLaunchAlertAfterMinutes: 25,
+        cashierLaunchReminderIntervalMinutes: 10,
+        cashierLaunchMaxReminders: 3,
         sponsorshipEnabled: false,
         sponsorshipMinPurchaseFcfa: 53000,
         createdAt: null,
@@ -298,6 +306,13 @@ async function getCountrySettings(req, res) {
       .json({ message: "Erreur serveur (getCountrySettings)" });
   }
 }
+
+const CASHIER_LAUNCH_ALERT_KEYS = [
+  "cashierLaunchWarnAfterMinutes",
+  "cashierLaunchAlertAfterMinutes",
+  "cashierLaunchReminderIntervalMinutes",
+  "cashierLaunchMaxReminders",
+];
 
 async function updateCountrySettings(req, res) {
   try {
@@ -512,6 +527,11 @@ async function updateCountrySettings(req, res) {
           "Le délai de rappel doit être strictement inférieur au délai d'annulation.",
       });
     }
+
+    // Rappels « colis payés à lancer » : bornes et cohérence vérifiées par
+    // validateCountrySettings.
+    for (const key of CASHIER_LAUNCH_ALERT_KEYS)
+      if ((req.body || {})[key] !== undefined) data[key] = req.body[key];
 
     if (bankPaymentDueHours !== undefined) {
       const parsed = Number.parseInt(bankPaymentDueHours, 10);
@@ -764,6 +784,10 @@ async function updateCountrySettings(req, res) {
             data.preinvoicedAutoReminderAfterMinutes !== undefined
               ? data.preinvoicedAutoReminderAfterMinutes
               : 60,
+          cashierLaunchWarnAfterMinutes: data.cashierLaunchWarnAfterMinutes ?? 15,
+          cashierLaunchAlertAfterMinutes: data.cashierLaunchAlertAfterMinutes ?? 25,
+          cashierLaunchReminderIntervalMinutes: data.cashierLaunchReminderIntervalMinutes ?? 10,
+          cashierLaunchMaxReminders: data.cashierLaunchMaxReminders ?? 3,
           sponsorshipEnabled: data.sponsorshipEnabled ?? false,
           sponsorshipMinPurchaseFcfa: data.sponsorshipMinPurchaseFcfa ?? 53000,
       },
@@ -827,6 +851,10 @@ async function updateCountrySettings(req, res) {
         preinvoicedAutoReminderAfterHours: true,
         preinvoicedAutoCancelAfterMinutes: true,
         preinvoicedAutoReminderAfterMinutes: true,
+        cashierLaunchWarnAfterMinutes: true,
+        cashierLaunchAlertAfterMinutes: true,
+        cashierLaunchReminderIntervalMinutes: true,
+        cashierLaunchMaxReminders: true,
         sponsorshipEnabled: true,
         sponsorshipMinPurchaseFcfa: true,
         createdAt: true,

@@ -3,6 +3,7 @@ const {
   resolveRegisterUserId,
   getOrCreateCashRegisterStatus,
   cancelPendingInvoicedPreordersForCountry,
+  getClosurePreview,
 } = require("../../services/cash-register-closure.service");
 
 // Interrupteur temporaire "précommandes payables en ligne / non" par pays —
@@ -46,12 +47,49 @@ async function getStatus(req, res) {
   }
 }
 
+// Aperçu montré avant la fermeture : préfactures qui seront annulées, colis
+// payés pas encore lancés (voir getClosurePreview).
+async function getPreview(req, res) {
+  try {
+    const userId = resolveRegisterUserId({ role: req.user?.role, userId: req.user?.id });
+    const preview = await getClosurePreview(prisma, {
+      countryId: req.countryId,
+      assignedInvoicerId: userId,
+    });
+    return res.json({ ok: true, scope: userId ? "personal" : "global", preview });
+  } catch (error) {
+    console.error("cashRegisterStatus.getPreview error:", error);
+    return res.status(500).json({ message: "Erreur serveur (aperçu fermeture caisse)" });
+  }
+}
+
 async function closeRegister(req, res) {
   try {
     const closedMessage =
       String(req.body?.message || "").trim() || DEFAULT_CLOSED_MESSAGE;
     const actorAdminId = req.user?.id || null;
     const userId = resolveRegisterUserId({ role: req.user?.role, userId: actorAdminId });
+    const confirmedNoUnrecordedCash = req.body?.confirmNoUnrecordedCash === true;
+
+    // Fermer annule les préfactures non payées. Si l'une d'elles a en fait
+    // été payée en espèces sans être saisie, elle serait annulée à tort : on
+    // exige donc que l'agent ait vu la liste et confirmé n'avoir aucun
+    // encaissement en attente de saisie. Sans préfacture à annuler, rien à
+    // confirmer.
+    if (!confirmedNoUnrecordedCash) {
+      const preview = await getClosurePreview(prisma, {
+        countryId: req.countryId,
+        assignedInvoicerId: userId,
+      });
+      if (preview.toCancelCount > 0) {
+        return res.status(409).json({
+          code: "CLOSURE_CONFIRMATION_REQUIRED",
+          message:
+            "Vérifiez les préfactures qui seront annulées et confirmez qu'aucun encaissement n'est en attente de saisie avant de fermer la caisse.",
+          preview,
+        });
+      }
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       const existing = await tx.cashRegisterStatus.findFirst({
@@ -89,6 +127,7 @@ async function closeRegister(req, res) {
           : "Paiement non reçu : précommande annulée à la fermeture de caisse.",
         actorAdminId,
         assignedInvoicerId: userId,
+        logMeta: confirmedNoUnrecordedCash ? { confirmedNoUnrecordedCash: true } : {},
       });
 
       return { status, cancelledPreordersCount };
@@ -137,6 +176,7 @@ async function openRegister(req, res) {
 
 module.exports = {
   getStatus,
+  getPreview,
   closeRegister,
   openRegister,
 };

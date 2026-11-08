@@ -642,6 +642,13 @@ model CountrySettings {
   preinvoicedAutoCancelAfterMinutes Int @default(120)
   preinvoicedAutoReminderAfterMinutes Int @default(60)
 
+  // Rappels « colis payés à lancer » de l'espace agent de vente, comptés
+  // depuis la confirmation du paiement (paidAt).
+  cashierLaunchWarnAfterMinutes        Int @default(15)
+  cashierLaunchAlertAfterMinutes       Int @default(25)
+  cashierLaunchReminderIntervalMinutes Int @default(10)
+  cashierLaunchMaxReminders            Int @default(3)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

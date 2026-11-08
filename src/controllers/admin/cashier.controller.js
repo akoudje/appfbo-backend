@@ -11,6 +11,14 @@ const { publishRealtimeEvent } = require("../../services/realtime-events.service
 const billingQueueService = require("../../services/billingQueue.service");
 const { Prisma } = require("@prisma/client");
 const { resolveOrderSearchIds } = require("../../helpers/preorder-search");
+const {
+  loadLaunchAlertSettings,
+  listPendingLaunches,
+} = require("../../services/cashier-launch-alerts.service");
+const {
+  getCashRegisterStatus,
+  resolveRegisterUserId,
+} = require("../../services/cash-register-closure.service");
 
 function normalizeDateStart(value) {
   if (!value) return null;
@@ -553,6 +561,8 @@ async function getWorkspace(req, res) {
       permissions: {
         canViewConsolidated: allowConsolidated,
       },
+      serverNow: new Date().toISOString(),
+      launchAlertSettings: await loadLaunchAlertSettings(prisma, pickCountryId(req)),
     });
   } catch (error) {
     console.error("cashier workspace error:", error);
@@ -927,8 +937,46 @@ async function reportAs400CertificationMissing(req, res) {
 }
 
 
+// Liste légère des colis payés à lancer, interrogée toutes les minutes par
+// l'interface (sur toutes les pages, pas seulement l'espace caisse : un agent
+// de vente qui facture dans la file de facturation doit aussi être rappelé).
+// `remindUser` : les rappels sonores et notifications ne visent que les
+// agents qui traitent eux-mêmes la file ; les responsables (vue consolidée)
+// voient l'ancienneté sans être sonnés pour les commandes des autres.
+async function getLaunchAlerts(req, res) {
+  try {
+    const countryId = pickCountryId(req);
+    const ownerId = isOwnershipScopedCashier(req.user?.role)
+      ? req.user?.id || "__no_user__"
+      : null;
+    const [settings, pending, register] = await Promise.all([
+      loadLaunchAlertSettings(prisma, countryId),
+      listPendingLaunches(prisma, countryId, { ownerId }),
+      getCashRegisterStatus(
+        countryId,
+        resolveRegisterUserId({ role: req.user?.role, userId: req.user?.id }),
+      ),
+    ]);
+    return res.json({
+      ok: true,
+      serverNow: new Date().toISOString(),
+      settings,
+      // Caisse fermée : plus de son ni de notification (le bandeau reste).
+      registerOpen: register?.isOpen !== false,
+      remindUser: !canViewConsolidated(req.user?.role),
+      pending,
+    });
+  } catch (error) {
+    console.error("cashier launch alerts error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: "Erreur serveur (rappels colis à lancer)",
+    });
+  }
+}
+
 module.exports = {
   getWorkspace,
+  getLaunchAlerts,
   getPaidToday,
   launchPreparation,
   reportAs400CertificationMissing,
