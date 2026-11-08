@@ -74,7 +74,9 @@ function preorderRow(order) {
     id: order.id,
     reference: order.preorderNumber,
     customer: [order.fboNumero, order.fboNomComplet].filter(Boolean).join(" · ") || null,
-    detail: order.factureReference ? `Facture AS400 ${order.factureReference}` : null,
+    // Référence de la facture AS400 : colonne à part dans le journal de caisse.
+    as400Reference: order.factureReference || null,
+    detail: null,
     paymentMode: resolveOrderPaymentMode(order),
     paidAt:
       order.manualPaymentValidatedAt ||
@@ -97,6 +99,7 @@ function ticketRow(order) {
     id: order.id,
     reference: order.orderNumber,
     customer: [order.buyerFboNumber, order.buyerFullName].filter(Boolean).join(" · ") || null,
+    as400Reference: null,
     detail: [order.event?.title, order.quantity ? `${order.quantity} billet(s)` : null]
       .filter(Boolean)
       .join(" · "),
@@ -122,9 +125,12 @@ function linkRow(link) {
     id: link.id,
     reference: isShipping ? link.shippingOrder.preorderNumber : link.reference,
     customer: [link.customerFboNumber, link.customerName].filter(Boolean).join(" · ") || null,
+    // Frais d'expédition : facture de la commande expédiée ; lien hors précommande :
+    // facture AS400 saisie sur le lien.
+    as400Reference: (isShipping ? link.shippingOrder.factureReference : link.invoiceReference) || null,
     detail: isShipping
       ? `Expédition ${link.shippingOrder.shippingDestinationCity || ""}`.trim()
-      : [link.source === "QR_FORM" ? "Paiement QR" : "Lien admin", link.invoiceReference || link.title]
+      : [link.source === "QR_FORM" ? "Paiement QR" : "Lien admin", link.invoiceReference ? null : link.title]
           .filter(Boolean)
           .join(" · "),
     paymentMode: normalizeMode(link.paymentMethod || link.provider),
@@ -238,7 +244,7 @@ async function loadRows(req, { start, end }, filters) {
           provider: true,
           paidAt: true,
           createdBy: adminSelect,
-          shippingOrder: { select: { preorderNumber: true, shippingDestinationCity: true } },
+          shippingOrder: { select: { preorderNumber: true, shippingDestinationCity: true, factureReference: true } },
         },
         take: DETAIL_ROWS_LIMIT,
       })
