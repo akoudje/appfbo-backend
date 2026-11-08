@@ -42,6 +42,12 @@ router.get(
 );
 
 router.get(
+  "/cash-supervision/launch-delays",
+  requirePermission(Permission.EXPORT_READ),
+  reportsController.getCashSupervisionLaunchDelays,
+);
+
+router.get(
   "/cash-supervision/recovery",
   requirePermission(Permission.EXPORT_READ),
   reportsController.getCashRecoveryReport,

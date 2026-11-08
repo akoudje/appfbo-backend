@@ -4,6 +4,7 @@ const { csvCell } = require("../../helpers/order-query");
 const { settlementLabel } = require("../../services/settlement.service");
 const cashSupervision = require("../../services/cash-supervision.service");
 const cashRecovery = require("../../services/cash-recovery.service");
+const { buildLaunchDelaysReport } = require("../../services/cashier-launch-delays.service");
 
 // Plafond du détail par commande (tableaux, export, répartitions) par
 // section. Les totaux (count/amountFcfa) ne dépendent jamais de ce plafond,
@@ -1124,6 +1125,31 @@ async function getCashSupervisionPulse(req, res) {
   }
 }
 
+// Délais paiement → lancement de préparation, par agent et par jour, et
+// colis payés encore en attente (voir cashier-launch-delays.service.js).
+async function getCashSupervisionLaunchDelays(req, res) {
+  try {
+    noStore(res);
+    const reportPeriod = resolveReportPeriod(req.query || {});
+    const report = await buildLaunchDelaysReport(prisma, req, reportPeriod);
+    return res.json({
+      ok: true,
+      period: {
+        type: reportPeriod.type,
+        label: reportPeriod.label,
+        start: reportPeriod.start.toISOString(),
+        end: reportPeriod.end.toISOString(),
+      },
+      ...report,
+    });
+  } catch (error) {
+    if (!error.statusCode) console.error("getCashSupervisionLaunchDelays error:", error);
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Erreur serveur (délais de lancement)",
+    });
+  }
+}
+
 // Clôtures de caisse de la période : attendu / déclaré / écart par caissier
 // et par jour, clôtures manquantes, état des caisses.
 async function getCashSupervisionClosures(req, res) {
@@ -1152,6 +1178,7 @@ async function getCashSupervisionClosures(req, res) {
 module.exports = {
   getCashSupervisionPulse,
   getCashSupervisionClosures,
+  getCashSupervisionLaunchDelays,
   getCashRecoveryReport,
   getDailySalesReport,
   getPackagingSummaryReport,

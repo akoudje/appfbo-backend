@@ -17,6 +17,10 @@ const DEFAULT_LAUNCH_ALERT_SETTINGS = Object.freeze({
   maxReminders: 3,
 });
 
+// Remontée au responsable de comptoir : un colis toujours pas lancé au bout
+// de 2 × le seuil d'alerte (50 min par défaut) apparaît dans la supervision.
+const ESCALATION_FACTOR = 2;
+
 function positiveInt(value, fallback, { min = 1 } = {}) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= min ? parsed : fallback;
@@ -40,6 +44,7 @@ function normalizeLaunchAlertSettings(settings) {
   return {
     warnAfterMinutes,
     alertAfterMinutes,
+    escalateAfterMinutes: alertAfterMinutes * ESCALATION_FACTOR,
     reminderIntervalMinutes: positiveInt(
       settings?.cashierLaunchReminderIntervalMinutes,
       defaults.reminderIntervalMinutes,
@@ -96,6 +101,7 @@ async function listPendingLaunches(db, countryId, { ownerId = null } = {}) {
       factureReference: true,
       fboNomComplet: true,
       preorderPaymentMode: true,
+      assignedInvoicer: { select: { id: true, fullName: true, email: true } },
     },
     orderBy: [{ paidAt: "asc" }],
     take: 200,
@@ -107,11 +113,18 @@ async function listPendingLaunches(db, countryId, { ownerId = null } = {}) {
     factureReference: row.factureReference || null,
     fboNomComplet: row.fboNomComplet || null,
     preorderPaymentMode: row.preorderPaymentMode || null,
+    agent: row.assignedInvoicer
+      ? {
+          id: row.assignedInvoicer.id,
+          label: row.assignedInvoicer.fullName || row.assignedInvoicer.email || "Agent",
+        }
+      : null,
   }));
 }
 
 module.exports = {
   DEFAULT_LAUNCH_ALERT_SETTINGS,
+  ESCALATION_FACTOR,
   normalizeLaunchAlertSettings,
   loadLaunchAlertSettings,
   buildPendingLaunchWhere,
