@@ -54,7 +54,7 @@ const otherAgent = { id: 'p3', status: 'INVOICED', assignedInvoicerId: 'other', 
 const paidOrder = { id: 'paid', paidAt: new Date('2026-11-08T09:00:00Z'), parcelNumber: 'COL-1', assignedInvoicerId: 'agent' };
 
 test('réglages : valeurs par défaut 15 / 25 / 10 / 3', () => {
-  assert.deepEqual(alerts.normalizeLaunchAlertSettings(null), { warnAfterMinutes: 15, alertAfterMinutes: 25, reminderIntervalMinutes: 10, maxReminders: 3 });
+  assert.deepEqual(alerts.normalizeLaunchAlertSettings(null), { warnAfterMinutes: 15, alertAfterMinutes: 25, escalateAfterMinutes: 50, reminderIntervalMinutes: 10, maxReminders: 3 });
 });
 
 test('réglages : 0 rappel accepté, alerte visuelle ramenée sous le seuil si incohérente', () => {

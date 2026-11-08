@@ -943,6 +943,8 @@ async function reportAs400CertificationMissing(req, res) {
 // `remindUser` : les rappels sonores et notifications ne visent que les
 // agents qui traitent eux-mêmes la file ; les responsables (vue consolidée)
 // voient l'ancienneté sans être sonnés pour les commandes des autres.
+const ESCALATION_ROLES = new Set([AdminRole.COUNTER_MANAGER, AdminRole.OPERATIONS_DIRECTOR]);
+
 async function getLaunchAlerts(req, res) {
   try {
     const countryId = pickCountryId(req);
@@ -964,6 +966,9 @@ async function getLaunchAlerts(req, res) {
       // Caisse fermée : plus de son ni de notification (le bandeau reste).
       registerOpen: register?.isOpen !== false,
       remindUser: !canViewConsolidated(req.user?.role),
+      // Responsables de comptoir : bandeau d'escalade (colis en attente
+      // depuis plus de settings.escalateAfterMinutes), sans son.
+      escalateToUser: ESCALATION_ROLES.has(String(req.user?.role || "").trim().toUpperCase()),
       pending,
     });
   } catch (error) {
