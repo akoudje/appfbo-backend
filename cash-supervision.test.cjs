@@ -43,6 +43,8 @@ test('précommande Wave : encaissé = facture + frais Wave, attribuée au factur
   assert.equal(row.packagingFcfa, 100);
   assert.equal(row.paymentMode, 'WAVE');
   assert.equal(row.invoicer.label, 'Désirée');
+  assert.equal(row.as400Reference, '123');
+  assert.equal(row.detail, null);
 });
 
 test('précommande en caisse : montant reçu au comptoir et caissier', () => {
@@ -63,16 +65,24 @@ test('lien : frais d\'expédition à part des liens hors précommande', () => {
   const s = service();
   const shipping = s.linkRow({
     id: 'l1', reference: 'SHIP-1', amountFcfa: 12423, baseAmountFcfa: 12300, serviceFeeFcfa: 123, paymentMethod: 'WAVE',
-    paidAt: new Date(), source: 'SHIPPING', shippingOrder: { preorderNumber: 'PO-9', shippingDestinationCity: 'Bouaké' },
+    paidAt: new Date(), source: 'SHIPPING', shippingOrder: { preorderNumber: 'PO-9', shippingDestinationCity: 'Bouaké', factureReference: '128900' },
   });
   assert.equal(shipping.source, 'SHIPPING');
   assert.equal(shipping.reference, 'PO-9');
+  assert.equal(shipping.as400Reference, '128900');
   const qr = s.linkRow({
     id: 'l2', reference: 'QR-1', amountFcfa: 39390, baseAmountFcfa: 39000, serviceFeeFcfa: 390, paymentMethod: 'WAVE',
     paidAt: new Date(), source: 'QR_FORM', invoiceReference: '126646', shippingOrder: null, createdBy: null,
   });
   assert.equal(qr.source, 'EXTERNAL_LINK');
-  assert.equal(qr.detail, 'Paiement QR · 126646');
+  assert.equal(qr.detail, 'Paiement QR');
+  assert.equal(qr.as400Reference, '126646');
+  const admin = s.linkRow({
+    id: 'l3', reference: 'LNK-1', amountFcfa: 5000, paymentMethod: 'WAVE', paidAt: new Date(),
+    source: 'ADMIN', title: 'Acompte', shippingOrder: null, createdBy: null,
+  });
+  assert.equal(admin.detail, 'Lien admin · Acompte');
+  assert.equal(admin.as400Reference, null);
   assert.equal(qr.invoicer, null);
 });
 

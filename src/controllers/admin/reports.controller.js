@@ -1032,6 +1032,7 @@ async function exportCashSupervisionReport(req, res) {
       "Date d'encaissement",
       "Source",
       "Référence",
+      "Réf. AS400",
       "Client",
       "Détail",
       "Moyen de paiement",
@@ -1046,6 +1047,7 @@ async function exportCashSupervisionReport(req, res) {
       row.paidAt ? new Date(row.paidAt).toISOString().replace("T", " ").slice(0, 16) : "",
       cashSupervision.SOURCES[row.source],
       row.reference,
+      row.as400Reference || "",
       row.customer,
       row.detail,
       cashSupervision.paymentModeLabel(row.paymentMode),
@@ -1058,7 +1060,7 @@ async function exportCashSupervisionReport(req, res) {
     ]);
     const { totals } = report;
     lines.push([
-      "TOTAL", `${totals.count} encaissement(s)`, "", "", "", "", "", "",
+      "TOTAL", `${totals.count} encaissement(s)`, "", "", "", "", "", "", "",
       totals.baseAmountFcfa, totals.serviceFeeFcfa, totals.amountFcfa, report.packaging.amountFcfa,
     ]);
 
