@@ -1072,6 +1072,36 @@ async function fetchWaveCheckoutDetails({
   }
 }
 
+// Un paiement Wave confirmé ne revient jamais en arrière. Quand un client
+// ouvre plusieurs liens Wave pour la même commande (relances, lien renvoyé),
+// la page de paiement continue d'interroger les anciennes sessions, encore
+// « processing » ou expirées : appliquer leur statut remettait le paiement
+// « en attente » alors que la commande restait « Payée ». La commande
+// disparaissait alors de l'espace caisse (ni à encaisser, ni à lancer).
+function shouldIgnoreWaveStatusAfterPaid({ currentPayment, currentPreorder, mapped }) {
+  if (mapped?.markOrderPaid) return false;
+  return (
+    String(currentPayment?.status || "").toUpperCase() === "SUCCEEDED" ||
+    String(currentPreorder?.paymentStatus || "").toUpperCase() === "PAID"
+  );
+}
+
+const WAVE_SYNC_PREORDER_INCLUDE = {
+  activePayment: {
+    include: {
+      attempts: { orderBy: { createdAt: "desc" } },
+      refunds: { orderBy: { createdAt: "desc" } },
+    },
+  },
+  payments: {
+    include: {
+      attempts: { orderBy: { createdAt: "desc" } },
+      refunds: { orderBy: { createdAt: "desc" } },
+    },
+    orderBy: { createdAt: "desc" },
+  },
+};
+
 async function applyWaveMappedStateTx({
   tx,
   preorder,
@@ -1119,6 +1149,32 @@ async function applyWaveMappedStateTx({
     const err = new Error("Paiement ou commande introuvable pendant la sync Wave");
     err.statusCode = 404;
     throw err;
+  }
+
+  if (shouldIgnoreWaveStatusAfterPaid({ currentPayment, currentPreorder, mapped })) {
+    await addPaymentTransactionLogTx(tx, {
+      preorderId: preorder.id,
+      paymentId: payment.id,
+      paymentAttemptId: lastAttempt?.id || null,
+      provider: "WAVE",
+      eventType: "STATUS_SYNCED",
+      source: providerStatusRaw?.simulated === true ? "SIMULATION" : "SYNC",
+      status: currentPayment.status,
+      attemptStatus: mapped.attemptStatus,
+      providerStatus: providerStatusRaw?.payment_status || providerStatusRaw?.checkout_status || null,
+      providerSessionId: lastAttempt?.providerSessionId || null,
+      providerTransactionId: lastAttempt?.providerTransactionId || null,
+      amountFcfa: payment.amountExpectedFcfa,
+      currencyCode: payment.currencyCode,
+      note: "Statut ignoré : paiement déjà confirmé (autre session Wave)",
+      payloadJson: { mapped, ignoredBecause: "PAYMENT_ALREADY_SUCCEEDED" },
+      actorAdminId,
+    });
+    const unchangedPreorder = await tx.preorder.findUnique({
+      where: { id: preorder.id },
+      include: WAVE_SYNC_PREORDER_INCLUDE,
+    });
+    return { payment: currentPayment, paymentAttempt: null, preorder: unchangedPreorder, ignored: true };
   }
 
   const metadata = extractWaveProviderMetadata(providerStatusRaw);
@@ -2895,6 +2951,9 @@ module.exports = {
   resolveShortWavePaymentLink,
   syncWavePaymentStatus,
   simulateWaveStatus,
+  shouldIgnoreWaveStatusAfterPaid,
+  // Exporté pour les tests (wave-paid-no-downgrade.test.cjs).
+  applyWaveMappedStateTx,
   handleWaveWebhook,
   listPaymentTransactionLogs,
 };
