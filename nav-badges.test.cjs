@@ -25,6 +25,7 @@ function fixture({ orders = [], sponsorships = 0 } = {}) {
   const calls = [];
   const matches = (o, where) => {
     if (where.assignedInvoicerId && o.assignedInvoicerId !== where.assignedInvoicerId) return false;
+    if (where.billingWorkStatus === 'ESCALATED') return o.billingWorkStatus === 'ESCALATED';
     if (where.status?.in) return where.status.in.includes(o.status);
     if (where.status === 'SUBMITTED') return o.status === 'SUBMITTED';
     if (where.status === 'PAID') return o.status === 'PAID' && !o.launched;
@@ -71,6 +72,7 @@ test("agent de vente : seulement ses dossiers, détail caisse et urgence", async
       { status: 'PAID', assignedInvoicerId: 'agent-1', paidAt: minutesAgo(40) },
       { status: 'PAID', assignedInvoicerId: 'agent-1', paidAt: minutesAgo(3) },
       { status: 'PAID', assignedInvoicerId: 'other', paidAt: minutesAgo(90) },
+      { status: 'INVOICED', assignedInvoicerId: 'other', billingWorkStatus: 'ESCALATED' },
     ],
   });
   const res = response();
@@ -79,6 +81,8 @@ test("agent de vente : seulement ses dossiers, détail caisse et urgence", async
   assert.equal(res.body.billing, 1);
   assert.equal(res.body.cashier, 3);
   assert.equal(res.body.sponsorships, 2);
+  // Urgences partagées : comptées même si attribuées à un autre agent.
+  assert.equal(res.body.escalations, 1);
   assert.equal(res.body.levels.cashier, 'alert');
   assert.equal(res.body.cashierDetail.toCollect, 1);
   assert.equal(res.body.cashierDetail.toLaunch, 2);
@@ -98,6 +102,7 @@ test('sans droit caisse ni parrainage : compteurs à 0', async () => {
   await getNavBadges(req('INVOICER', [Permission.INVOICE_CREATE]), res);
   assert.equal(res.body.cashier, 0);
   assert.equal(res.body.sponsorships, 0);
+  assert.equal(res.body.escalations, 0);
   assert.equal(res.body.levels.cashier, 'none');
 });
 

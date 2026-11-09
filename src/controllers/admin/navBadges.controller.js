@@ -29,6 +29,25 @@ function countBillingPending(req) {
   });
 }
 
+// Urgences / contentieux de facturation : partagées entre facturiers (même
+// règle que l'onglet « Urgences / contentieux » de la file de facturation),
+// commande encore à traiter, ou payée mais bloquée par un contentieux AS400.
+function countEscalations(req) {
+  return prisma.preorder.count({
+    where: scopeWhere(req, {
+      billingWorkStatus: "ESCALATED",
+      OR: [
+        { status: { in: ["SUBMITTED", "INVOICED", "PAYMENT_PENDING"] } },
+        {
+          status: "PAID",
+          billingEscalationType: "AS400_CERTIFICATION_MISSING",
+          as400CertificationStatus: { in: ["OPEN", "REPORTED"] },
+        },
+      ],
+    }),
+  });
+}
+
 // Niveau d'urgence de la pastille Caisse, d'après le plus ancien colis payé
 // pas encore lancé et les seuils du pays (mêmes que le bandeau de rappel) :
 // « none » = chiffre neutre, « warn » = orange, « alert » = rouge.
@@ -92,8 +111,10 @@ async function getNavBadges(req, res) {
     const permissions = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
     const now = new Date();
 
-    const [billing, cashier, sponsorships] = await Promise.all([
-      permissions.includes(Permission.INVOICE_CREATE) ? countBillingPending(req) : 0,
+    const canBill = permissions.includes(Permission.INVOICE_CREATE);
+    const [billing, escalations, cashier, sponsorships] = await Promise.all([
+      canBill ? countBillingPending(req) : 0,
+      canBill ? countEscalations(req) : 0,
       permissions.includes(Permission.PAYMENT_VALIDATE) ? countCashierPending(req, now) : EMPTY_CASHIER,
       permissions.includes(Permission.SPONSORSHIP_REVIEW) ? countSponsorshipsPending(req) : 0,
     ]);
@@ -104,6 +125,7 @@ async function getNavBadges(req, res) {
       billing,
       cashier: cashier.total,
       sponsorships,
+      escalations,
       levels: { cashier: cashier.level },
       cashierDetail: {
         toCollect: cashier.toCollect,
