@@ -128,11 +128,15 @@ router.post("/billing/:id/assign", requireRole(BILLING_SUPERVISOR_ROLES), assign
 router.get("/billing/report", requirePermission(Permission.INVOICE_CREATE), getReport);
 router.get("/billing/supervision", requireRole(BILLING_SUPERVISOR_ROLES), getSupervision);
 // Précommandes réglées par une autre filiale FLP (ex. FLP Burkina) : lot de
-// n° transmis par le client, rapport pour la filiale.
+// n° transmis par le client, rapport pour la filiale. Marquage réservé aux
+// superviseurs de la facturation (responsable facturation, directeur
+// commercial, admins) : les agents facturent ces commandes comme les autres,
+// mais ne gèrent pas les lots.
+const settlementManagers = [requirePermission(Permission.INVOICE_CREATE), requireRole(BILLING_SUPERVISOR_ROLES)];
 router.get("/billing/settlements/entities", requirePermission(Permission.INVOICE_CREATE), settlementController.listEntities);
-router.post("/billing/settlements/mark", requirePermission(Permission.INVOICE_CREATE), settlementController.markBatch);
-router.get("/billing/settlements/pending", requirePermission(Permission.INVOICE_CREATE), settlementController.listPending);
-router.delete("/billing/settlements/:id", requirePermission(Permission.INVOICE_CREATE), settlementController.unmark);
+router.post("/billing/settlements/mark", ...settlementManagers, settlementController.markBatch);
+router.get("/billing/settlements/pending", ...settlementManagers, settlementController.listPending);
+router.delete("/billing/settlements/:id", ...settlementManagers, settlementController.unmark);
 router.get(
   "/billing/settlements/report",
   requireRole(settlementController.SETTLEMENT_REPORT_ROLES),
