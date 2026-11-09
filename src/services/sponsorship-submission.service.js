@@ -14,6 +14,7 @@ const {
 } = require("./fboDirectory.service");
 const { matchingFboNames } = require("../utils/fboIdentity");
 const { findRecruitPromotion, resolveEffectiveGrade } = require("./sponsorship-promotion.service");
+const { publishRealtimeEvent } = require("./realtime-events.service");
 
 // Profil du parrain dans l'annuaire FBO (nom, grade, grade autorisé) à partir de
 // son seul numéro. Annuaire momentanément indisponible : repli sur la fiche
@@ -211,6 +212,12 @@ async function createSubmittedSponsorship({ sponsorFbo, sponsorVerified = true, 
     meta: { documents: documents.map((d) => d.type), consentVersion: channel === "PUBLIC" ? sponsorship.RECRUIT_CONSENT_VERSION : sponsorship.CONSENT_VERSION, channel },
     actorFboId: sponsorFbo.id,
   });
+  publishRealtimeEvent({
+    countryId,
+    eventKey: "sponsorship_submitted",
+    orderId: created.id,
+    meta: { status: "SUBMITTED", channel },
+  });
   return created;
 }
 
@@ -261,6 +268,12 @@ async function applySponsorshipCorrection({ existing, body = {}, files = [], set
       meta: { newDocuments: documents.map((d) => d.type), by },
       actorFboId,
     });
+  });
+  publishRealtimeEvent({
+    countryId,
+    eventKey: "sponsorship_submitted",
+    orderId: existing.id,
+    meta: { status: "SUBMITTED", resubmitted: true },
   });
   return { id: existing.id, status: "SUBMITTED", statusLabel: sponsorship.STATUS_LABELS.SUBMITTED };
 }
