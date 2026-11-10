@@ -1,6 +1,7 @@
 const prisma = require('../prisma');
 const { isShipping, carrierLabel } = require('./shipping.service');
 const { sendPreorderNotification, resolveNotificationEmail, resolveNotificationPhone } = require('./preorder-notifications.service');
+const { reviveExpiredShippingLink } = require('./external-wave-payment.service');
 
 function failureDescription(code) {
   if (['SMTP_FROM_NOT_CONFIGURED', 'EMAIL_PROVIDER_NOT_CONFIGURED', 'SMTP_TRANSPORT_UNAVAILABLE', 'MAILERSEND_API_KEY_MISSING', 'MAILERSEND_FROM_NOT_CONFIGURED'].includes(code)) return 'Le service email n’est pas configuré. Contactez l’administrateur.';
@@ -58,13 +59,46 @@ function withShippingNotification(order) {
   delete result.shippingReceiptFileUrl;
   delete result.shippingReceiptMimeType;
   delete result.shippingQuoteUnchanged;
+  // Lien à copier par le préparateur (envoi direct au client, WhatsApp...).
+  // Seulement tant que les frais restent à payer.
+  const pending = order.shippingPaymentLink && !(order.shippingPaymentLink.status === 'PAID' && order.shippingPaymentLink.providerStatus === 'SUCCEEDED') && order.shippingPaymentLink.token;
+  result.shippingPaymentUrl = pending && order.shippingPaymentLink.status === 'ACTIVE' ? paymentUrl(order) : null;
+  result.shippingPaymentLinkExpired = Boolean(pending && order.shippingPaymentLink.status === 'EXPIRED');
   if (order.shippingPaymentLink) result.shippingPaymentLink = Object.fromEntries(['providerSessionId', 'status', 'providerStatus', 'baseAmountFcfa', 'amountFcfa', 'serviceFeeFcfa'].filter(key => order.shippingPaymentLink[key] !== undefined).map(key => [key, order.shippingPaymentLink[key]]));
   return result;
 }
 
-async function notifyShippingPayment({ orderId, countryId, actorName = 'SYSTEM' }) {
-  const order = await prisma.preorder.findFirst({ where: { id: orderId, countryId }, include: { shippingPaymentLink: true, country: { select: { code: true } }, fbo: { select: { email: true } } } });
+// Lien de paiement d'expédition valable, prêt à être envoyé ou copié : un lien
+// expiré seulement par sa session Wave est d'abord remis en service.
+async function loadShippingPaymentOrder({ orderId, countryId }) {
+  const include = { shippingPaymentLink: true, country: { select: { code: true } }, fbo: { select: { email: true } } };
+  let order = await prisma.preorder.findFirst({ where: { id: orderId, countryId }, include });
   if (!order) { const error = new Error('Commande introuvable.'); error.statusCode = 404; throw error; }
+  if (order.shippingPaymentLink?.status === 'EXPIRED') {
+    await reviveExpiredShippingLink(order.shippingPaymentLink);
+    order = await prisma.preorder.findFirst({ where: { id: orderId, countryId }, include });
+  }
+  return order;
+}
+
+function assertShippingLinkUsable(order) {
+  const link = order.shippingPaymentLink;
+  if (!isShipping(order.deliveryMode) || order.shippingFeeFcfa == null || !['PAID', 'READY'].includes(order.status) || order.paymentStatus !== 'PAID') { const error = new Error('La demande de paiement d’expédition n’est pas disponible pour cette commande.'); error.statusCode = 409; throw error; }
+  if (order.shippingFeeFcfa === 0) { const error = new Error('Expédition offerte : aucun paiement à demander.'); error.statusCode = 409; throw error; }
+  if (!link || link.source !== 'SHIPPING' || link.countryId !== order.countryId || link.baseAmountFcfa !== order.shippingFeeFcfa) { const error = new Error('Le paiement ne correspond pas aux frais d’expédition de cette commande.'); error.statusCode = 409; throw error; }
+  if (link.status === 'PAID' && link.providerStatus === 'SUCCEEDED') { const error = new Error('Les frais d’expédition sont déjà réglés.'); error.statusCode = 409; throw error; }
+  if (link.status !== 'ACTIVE' || (link.expiresAt && new Date(link.expiresAt) <= new Date())) { const error = new Error('Cette demande de paiement n’est plus active. Réenregistrez les frais pour créer un nouveau lien.'); error.statusCode = 409; throw error; }
+}
+
+// Lien à copier depuis l'espace préparateur (remis en service si besoin).
+async function getShippingPaymentLink({ orderId, countryId }) {
+  const order = await loadShippingPaymentOrder({ orderId, countryId });
+  assertShippingLinkUsable(order);
+  return { url: paymentUrl(order), amountFcfa: order.shippingPaymentLink.amountFcfa };
+}
+
+async function notifyShippingPayment({ orderId, countryId, actorName = 'SYSTEM' }) {
+  const order = await loadShippingPaymentOrder({ orderId, countryId });
   const link = order.shippingPaymentLink;
   if (!isShipping(order.deliveryMode) || order.shippingFeeFcfa == null || !['PAID', 'READY'].includes(order.status) || order.paymentStatus !== 'PAID') { const error = new Error('La demande de paiement d’expédition n’est pas disponible pour cette commande.'); error.statusCode = 409; throw error; }
   if (order.shippingFeeFcfa === 0) return notificationSummary(order);
@@ -100,4 +134,4 @@ async function notifyShippingPayment({ orderId, countryId, actorName = 'SYSTEM' 
   }
 }
 
-module.exports = { paymentUrl, notificationSummary, withShippingNotification, notifyShippingPayment };
+module.exports = { paymentUrl, notificationSummary, withShippingNotification, notifyShippingPayment, getShippingPaymentLink };
