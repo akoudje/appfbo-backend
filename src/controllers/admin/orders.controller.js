@@ -835,6 +835,13 @@ async function updateShippingQuote(req, res) {
   try {
     const order = await prisma.preorder.findFirst({ where: scopeWhere(req, { id: req.params.id }), include: { country: { include: { settings: true } } } });
     if (!order) return res.status(404).json({ message: "Commande introuvable" });
+    // Lien d'expédition échu (3 h) : session Wave fermée et lien expiré avant
+    // l'enregistrement, qui crée alors un nouveau lien.
+    if (order.shippingPaymentLinkId) {
+      const externalWave = require('../../services/external-wave-payment.service');
+      const current = await prisma.externalPaymentLink.findUnique({ where: { id: order.shippingPaymentLinkId } });
+      if (current) await externalWave.expireExternalLinkIfDue(current);
+    }
     const saved = await prisma.$transaction(tx => setShippingQuote(tx, order, req.body || {}, req.user.id));
     const body = withShippingNotification(saved);
     if (!saved.shippingQuoteUnchanged || ['NONE', 'FAILED', 'PARTIAL'].includes(body.shippingNotification?.status)) {

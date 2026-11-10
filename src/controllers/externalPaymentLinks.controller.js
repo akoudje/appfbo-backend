@@ -125,6 +125,7 @@ async function createQrLink(req, res) {
         paymentMethod: "WAVE",
         provider: "WAVE",
         status: "ACTIVE",
+        expiresAt: externalWavePaymentService.capExternalLinkExpiry(),
         title: "Paiement commande Forever",
       },
     });

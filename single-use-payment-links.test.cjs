@@ -165,3 +165,49 @@ test('paiement client avec un lien remplacé : refusé (410)', async () => {
     (e) => e.statusCode === 410 && e.code === 'LINK_REPLACED',
   );
 });
+
+// ── Liens hors précommande (EXT, QR) et frais d'expédition ──────────────────
+const ext = require('./src/services/external-wave-payment.service');
+const { closeWaveCheckoutSession } = require('./src/payments/wave-session-close');
+
+test('lien externe : échéance plafonnée à 3 h', () => {
+  const now = new Date('2026-11-10T10:00:00Z');
+  assert.equal(ext.capExternalLinkExpiry(null, now).toISOString(), '2026-11-10T13:00:00.000Z');
+  assert.equal(ext.capExternalLinkExpiry('2026-11-12T10:00:00Z', now).toISOString(), '2026-11-10T13:00:00.000Z');
+  assert.equal(ext.capExternalLinkExpiry('2026-11-10T11:00:00Z', now).toISOString(), '2026-11-10T11:00:00.000Z');
+});
+
+test('lien externe : session reprise seulement si ouverte et récente', () => {
+  const now = new Date('2026-11-10T10:20:00Z');
+  const link = { providerSessionId: 'cos-1', providerCheckoutUrl: 'https://pay.wave.com/c/cos-1', providerStatus: 'PENDING_CUSTOMER_ACTION', updatedAt: new Date('2026-11-10T10:10:00Z') };
+  assert.equal(ext.isReusableExternalSession(link, now), true);
+  assert.equal(ext.isReusableExternalSession({ ...link, updatedAt: new Date('2026-11-10T09:50:00Z') }, now), false);
+  assert.equal(ext.isReusableExternalSession({ ...link, providerStatus: 'EXPIRED' }, now), false);
+});
+
+test('fermeture de session : payée ou en cours jamais fermée', async () => {
+  orchestrator.expireCheckoutSession = async () => { throw new Error('refusé'); };
+  orchestrator.getCheckoutSession = async () => ({ paymentStatus: 'processing', checkoutStatus: 'open' });
+  assert.equal((await closeWaveCheckoutSession('cos-1')).processing, true);
+  orchestrator.getCheckoutSession = async () => ({ paymentStatus: 'cancelled', checkoutStatus: 'expired' });
+  assert.equal((await closeWaveCheckoutSession('cos-1')).closed, true);
+  orchestrator.expireCheckoutSession = async () => ({});
+  assert.equal((await closeWaveCheckoutSession('cos-2')).closed, true);
+});
+
+test('lien échu (ou ancien lien sans échéance de plus de 3 h) : session fermée, lien expiré', async () => {
+  resetDb();
+  const writes = [];
+  db.externalPaymentLink = { updateMany: async ({ data }) => { writes.push(data); return { count: 1 }; } };
+  orchestrator.expireCheckoutSession = async () => ({});
+  const now = new Date('2026-11-10T14:00:00Z');
+  const fresh = { id: 'l1', status: 'ACTIVE', expiresAt: new Date('2026-11-10T15:00:00Z'), createdAt: now };
+  assert.equal((await ext.expireExternalLinkIfDue(fresh, now)).expired, false);
+  const due = { id: 'l2', status: 'ACTIVE', providerSessionId: 'cos-9', expiresAt: new Date('2026-11-10T13:00:00Z'), createdAt: now };
+  assert.equal((await ext.expireExternalLinkIfDue(due, now)).expired, true);
+  const legacy = { id: 'l3', status: 'ACTIVE', expiresAt: null, createdAt: new Date('2026-11-10T09:00:00Z') };
+  const r = await ext.expireExternalLinkIfDue(legacy, now);
+  assert.equal(r.expired, true);
+  assert.equal(writes[1].expiresAt.toISOString(), '2026-11-10T12:00:00.000Z'); // échéance fixée : le lien d'expédition n'est plus « remis en service »
+  assert.equal(writes[0].status, 'EXPIRED');
+});

@@ -7,6 +7,7 @@ const paymentOrchestrator = require("./payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("./payment-status.mapper");
 const { scopeWhere, pickCountryId } = require("../helpers/countryScope");
 const { computePaymentPricing } = require("./payment-pricing");
+const { closeWaveCheckoutSession } = require("./wave-session-close");
 const {
   PAYMENT_LINK_TTL_MS,
   evaluatePaymentLinkWindow,
@@ -703,40 +704,21 @@ async function expireOpenWaveSessions({ preorderId, reason = "SUPERSEDED", excep
   });
 
   for (const attempt of attempts) {
-    let closed = false;
-    if (isWaveSimulationEnabled() || String(attempt.providerSessionId).startsWith("wave_sim_")) {
-      closed = true;
-    } else {
-      try {
-        await paymentOrchestrator.expireCheckoutSession("WAVE", {
-          providerSessionId: attempt.providerSessionId,
-        });
-        closed = true;
-      } catch (error) {
-        try {
-          const session = await paymentOrchestrator.getCheckoutSession("WAVE", {
-            providerSessionId: attempt.providerSessionId,
-          });
-          const paymentStatus = String(session?.paymentStatus || "").toLowerCase();
-          const checkoutStatus = String(session?.checkoutStatus || "").toLowerCase();
-          if (paymentStatus === "succeeded") result.paidSessionFound = true;
-          else if (paymentStatus === "processing" && checkoutStatus === "open") result.processingSessionFound = true;
-          else if (["expired", "complete"].includes(checkoutStatus)) closed = true;
-          else result.failed += 1;
-        } catch (_lookupError) {
-          result.failed += 1;
-        }
-        if (!closed) {
-          console.warn("[payments][wave] session non fermée", {
-            preorderId,
-            paymentAttemptId: attempt.id,
-            reason,
-            message: error?.message,
-          });
-        }
-      }
+    const outcome = await closeWaveCheckoutSession(attempt.providerSessionId, {
+      simulated: isWaveSimulationEnabled(),
+    });
+    if (outcome.paid) result.paidSessionFound = true;
+    if (outcome.processing) result.processingSessionFound = true;
+    if (outcome.failed) result.failed += 1;
+    if (!outcome.closed) {
+      console.warn("[payments][wave] session non fermée", {
+        preorderId,
+        paymentAttemptId: attempt.id,
+        reason,
+        message: outcome.error?.message || (outcome.paid ? "déjà payée" : outcome.processing ? "paiement en cours" : null),
+      });
     }
-    if (closed) {
+    if (outcome.closed) {
       await prisma.paymentAttempt.update({
         where: { id: attempt.id },
         data: {

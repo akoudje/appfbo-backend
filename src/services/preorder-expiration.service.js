@@ -936,6 +936,12 @@ function startExpiredInvoiceAutoCancelScheduler() {
       if (closed.expired || closed.failed) {
         console.log("[preorder-expiration] wave sessions closed", closed);
       }
+      // Liens hors précommande et frais d'expédition : 3 h maximum.
+      const { expireDueExternalLinks } = require("./external-wave-payment.service");
+      const dueLinks = await expireDueExternalLinks({ now });
+      if (dueLinks.expired) {
+        console.log("[preorder-expiration] external links expired", dueLinks);
+      }
     } catch (error) {
       console.error("[preorder-expiration] scheduler error", error);
     } finally {

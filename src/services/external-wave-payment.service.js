@@ -87,6 +87,75 @@ async function reviveExpiredShippingLink(link, db = prisma) {
   return db.externalPaymentLink.findUnique({ where: { id: link.id }, include: link.country ? { country: true } : undefined });
 }
 
+// Un lien de paiement hors précommande (EXT, QR, frais d'expédition) est
+// valable 3 h au maximum après sa création (règle du 2026-11-10).
+const { PAYMENT_LINK_TTL_MS } = require("../payments/payment-link-window");
+const { closeWaveCheckoutSession } = require("../payments/wave-session-close");
+
+function capExternalLinkExpiry(requested = null, now = new Date()) {
+  const max = new Date(now.getTime() + PAYMENT_LINK_TTL_MS);
+  if (!requested) return max;
+  const date = new Date(requested);
+  if (Number.isNaN(date.getTime())) return max;
+  return date.getTime() < max.getTime() ? date : max;
+}
+
+// Session Wave du lien encore ouverte et récente : reprise telle quelle.
+const EXTERNAL_SESSION_REUSE_MS = 20 * 60 * 1000;
+function isReusableExternalSession(link, now = new Date()) {
+  if (!link?.providerSessionId || !(link.providerCheckoutUrl || link.providerLaunchUrl)) return false;
+  if (!["PENDING_CUSTOMER_ACTION", "PROCESSING"].includes(String(link.providerStatus || ""))) return false;
+  const age = now.getTime() - new Date(link.updatedAt || 0).getTime();
+  return age >= 0 && age < EXTERNAL_SESSION_REUSE_MS;
+}
+
+// Lien arrivé à échéance (ou ancien lien sans échéance créé il y a plus de
+// 3 h) : sa session Wave est fermée et le lien passe « Expiré ». Une session
+// payée est synchronisée à la place ; une session en cours de paiement est
+// laissée en l'état.
+async function expireExternalLinkIfDue(link, now = new Date()) {
+  if (!link || link.status !== "ACTIVE") return { link, expired: false };
+  const dueAt = link.expiresAt
+    ? new Date(link.expiresAt)
+    : new Date(new Date(link.createdAt).getTime() + PAYMENT_LINK_TTL_MS);
+  if (dueAt.getTime() > now.getTime()) return { link, expired: false };
+  const outcome = await closeWaveCheckoutSession(link.providerSessionId);
+  if (outcome.paid) {
+    await syncExternalWavePaymentLink(link);
+    return { link, expired: false, paid: true };
+  }
+  if (!outcome.closed) return { link, expired: false };
+  await prisma.externalPaymentLink.updateMany({
+    where: { id: link.id, status: "ACTIVE" },
+    data: { status: "EXPIRED", providerStatus: "EXPIRED", expiresAt: link.expiresAt || dueAt },
+  });
+  return { link: { ...link, status: "EXPIRED", providerStatus: "EXPIRED", expiresAt: link.expiresAt || dueAt }, expired: true };
+}
+
+async function expireDueExternalLinks({ now = new Date() } = {}) {
+  const links = await prisma.externalPaymentLink.findMany({
+    where: {
+      status: "ACTIVE",
+      OR: [
+        { expiresAt: { lte: now } },
+        { expiresAt: null, createdAt: { lte: new Date(now.getTime() - PAYMENT_LINK_TTL_MS) } },
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+    take: 100,
+  });
+  const summary = { checked: links.length, expired: 0 };
+  for (const link of links) {
+    try {
+      const result = await expireExternalLinkIfDue(link, now);
+      if (result.expired) summary.expired += 1;
+    } catch (error) {
+      console.error("[external-wave] expiration du lien impossible", { linkId: link.id, message: error?.message });
+    }
+  }
+  return summary;
+}
+
 async function initiateExternalWavePayment({ req, token }) {
   let link = await prisma.externalPaymentLink.findFirst({
     where: { token: String(token || "").trim(), countryId: req.countryId },
@@ -122,6 +191,25 @@ async function initiateExternalWavePayment({ req, token }) {
     const err = new Error("Ce lien de paiement a expiré");
     err.statusCode = 400;
     throw err;
+  }
+
+  // Un seul paiement par lien, une seule session Wave ouverte : la session en
+  // cours est reprise, sinon l'ancienne est fermée avant d'en ouvrir une autre.
+  if (link.source !== 'SHIPPING' && link.providerSessionId) {
+    if (isReusableExternalSession(link)) {
+      return { ok: true, reused: true, link, checkoutUrl: link.providerCheckoutUrl || link.providerLaunchUrl };
+    }
+    const outcome = await closeWaveCheckoutSession(link.providerSessionId);
+    if (outcome.paid || outcome.processing) {
+      if (outcome.paid) await syncExternalWavePaymentLink(link).catch(() => {});
+      const err = new Error(
+        outcome.paid
+          ? "Ce lien a déjà été payé. Le paiement est en cours de confirmation."
+          : "Un paiement Wave est en cours sur ce lien. Patientez quelques minutes avant de réessayer.",
+      );
+      err.statusCode = 409;
+      throw err;
+    }
   }
 
   if (link.source === 'SHIPPING') {
@@ -285,6 +373,10 @@ async function syncExternalWavePaymentLink(link) {
 
 module.exports = {
   reviveExpiredShippingLink,
+  capExternalLinkExpiry,
+  expireExternalLinkIfDue,
+  expireDueExternalLinks,
+  isReusableExternalSession,
   initiateExternalWavePayment,
   syncExternalWavePaymentStatus,
   syncExternalWavePaymentLink,
