@@ -176,6 +176,31 @@ function normalizeRecruitPayload(raw = {}, { countryCode = "CIV", now = new Date
   };
 }
 
+// Payeur tiers de l'achat de parrainage (facultatif) : quelqu'un d'autre que
+// le parrain ou le filleul, chargé de suivre et de régler l'achat. Champs
+// payerName, payerPhone, payerEmail ; au moins un téléphone ou un email dès
+// qu'un champ est rempli. Renvoie les colonnes purchasePayer*.
+function normalizePayerContact(raw = {}, { countryCode = "CIV" } = {}) {
+  const name = text(raw.payerName);
+  const phoneRaw = text(raw.payerPhone);
+  const emailRaw = text(raw.payerEmail)?.toLowerCase() || null;
+  if (!name && !phoneRaw && !emailRaw) {
+    return { purchasePayerName: null, purchasePayerPhone: null, purchasePayerEmail: null };
+  }
+  const errors = [];
+  const phone = phoneRaw ? normalizeInternationalPhone(phoneRaw, countryCode) : null;
+  if (phoneRaw && !phone) errors.push("Le numéro de téléphone du payeur est invalide.");
+  if (emailRaw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) errors.push("L'adresse email du payeur est invalide.");
+  if (!phoneRaw && !emailRaw) errors.push("Indiquez le téléphone ou l'email de la personne qui paie l'achat.");
+  if (name && name.length > 120) errors.push("Le nom du payeur est trop long.");
+  if (errors.length) throw httpError(400, errors.join(" "), "SPONSORSHIP_PAYER_INVALID");
+  return {
+    purchasePayerName: name ? name.toUpperCase() : null,
+    purchasePayerPhone: phone || null,
+    purchasePayerEmail: emailRaw,
+  };
+}
+
 async function getSponsorshipSettings(countryId) {
   const settings = await prisma.countrySettings.findUnique({
     where: { countryId },
@@ -505,6 +530,7 @@ module.exports = {
   canonicalFboNumber,
   buildConsentText,
   normalizeRecruitPayload,
+  normalizePayerContact,
   getSponsorshipSettings,
   isSponsorGradeAllowed,
   uploadSponsorshipDocumentsMiddleware,

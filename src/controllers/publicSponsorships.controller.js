@@ -138,6 +138,7 @@ async function getCorrection(req, res) {
         idDocumentType: row.idDocumentType, idDocumentNumber: row.idDocumentNumber, passportNumber: row.passportNumber || "",
         mobile: row.mobile, whatsapp: row.whatsapp || "", whatsappSameAsPhone: !row.whatsapp || row.whatsapp === row.mobile, email: row.email, addressArea: row.addressArea || "", city: row.city, homeCountry: row.homeCountry,
         sponsorPhone: row.sponsorPhone || "", sponsorEmail: row.sponsorEmail || "", purchasePaymentMode: row.purchasePaymentMode || "",
+        payerName: row.purchasePayerName || "", payerPhone: row.purchasePayerPhone || "", payerEmail: row.purchasePayerEmail || "",
       },
       cart: Array.isArray(row.purchaseItems) ? row.purchaseItems.map((line) => ({ productId: line.productId, qty: line.qty })) : [],
       documents,

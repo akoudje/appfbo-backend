@@ -9,7 +9,7 @@
 
 const prisma = require("../prisma");
 const { sendEmail } = require("./email.service");
-const { BRAND, renderLayout, renderButton } = require("./email-templates/layout");
+const { BRAND, renderLayout, renderButton, renderShareLink } = require("./email-templates/layout");
 const { addSponsorshipLog, findSponsorPhone } = require("./sponsorship.service");
 const { buildSponsorshipAgreementPdfBuffer } = require("./sponsorship-agreement-pdf.service");
 
@@ -46,9 +46,10 @@ function emailHtml({ greeting, paragraphs, rows = [], cta = null }) {
         .map(([label, value]) => `<tr><td style="padding:6px 12px 6px 0;font-size:14px;color:${BRAND.mutedText};vertical-align:top;">${escapeHtml(label)}</td><td style="padding:6px 0;font-size:14px;font-weight:700;color:${BRAND.ink};">${escapeHtml(value)}</td></tr>`)
         .join("")}</table>`
     : "";
+  const shareHtml = cta?.share ? renderShareLink({ text: cta.share }) : "";
   const ctaHtml = cta
     ? `${renderButton({ href: cta.href, label: cta.label })}
-<p style="margin:10px 0 18px;font-size:12px;line-height:1.5;color:${BRAND.mutedText};">Si le bouton ne fonctionne pas, ouvrez ce lien :<br /><a href="${escapeHtml(cta.href)}" target="_blank" rel="noopener" style="color:${BRAND.ink};word-break:break-all;">${escapeHtml(cta.href)}</a></p>`
+<p style="margin:10px 0 18px;font-size:12px;line-height:1.5;color:${BRAND.mutedText};">Si le bouton ne fonctionne pas, ouvrez ce lien :<br /><a href="${escapeHtml(cta.href)}" target="_blank" rel="noopener" style="color:${BRAND.ink};word-break:break-all;">${escapeHtml(cta.href)}</a></p>${shareHtml}`
     : "";
   return renderLayout({
     previewText: paragraphs[0] || "",
@@ -137,6 +138,30 @@ function logNote(label, results, resentBy) {
   return `${resentBy ? `Renvoi de la notification ${label} par ${resentBy}` : `Notification ${label}`} : ${summarizeResults(results)}.`;
 }
 
+// Messages au payeur tiers de l'achat (s'il y en a un) : SMS et/ou email
+// selon les coordonnées saisies. Un payeur qui a les mêmes coordonnées que le
+// parrain ne reçoit rien de plus (il a déjà le message du parrain).
+function payerMessages(s, { countryCode, sms, subject, content, type }) {
+  const sameAsSponsorPhone = s.purchasePayerPhone && s.purchasePayerPhone === s.sponsorPhone;
+  const sameAsSponsorEmail = s.purchasePayerEmail && s.purchasePayerEmail === String(s.sponsorEmail || "").toLowerCase();
+  const messages = [];
+  if (s.purchasePayerPhone && !sameAsSponsorPhone) {
+    messages.push({ who: "payeur", channel: "SMS", send: () => safeSms({ to: s.purchasePayerPhone, countryCode, message: sms }) });
+  }
+  if (s.purchasePayerEmail && !sameAsSponsorEmail) {
+    messages.push({
+      who: "payeur",
+      channel: "EMAIL",
+      send: () =>
+        safeEmail(
+          { to: s.purchasePayerEmail, subject, html: emailHtml(content), body: emailText(content), metadata: { type, sponsorshipId: s.id, recipient: "PAYER" } },
+          `payer-${type}`,
+        ),
+    });
+  }
+  return messages;
+}
+
 // Approbation + achat préfacturé : un seul message, aux deux.
 // order : { preorderNumber, amountToPayFcfa, paymentMode }, paymentLink : lien
 // Wave / dépôt de preuve, ou null (paiement en caisse).
@@ -170,9 +195,16 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink, ch
     ["Montant à payer", amount],
     ["Paiement", paymentLabel],
   ];
-  const cta = paymentLink ? { label: "Payer la commande", href: paymentLink } : null;
+  const cta = paymentLink
+    ? {
+        label: "Payer la commande",
+        href: paymentLink,
+        share: `Forever - achat de parrainage de ${recruitName} : commande ${order.preorderNumber}, ${amount} à payer ici : ${paymentLink}`,
+      }
+    : null;
   const finalNote = "Le parrainage sera validé dès le paiement de cette commande.";
   const sponsorPhone = s.sponsorPhone || (await findSponsorPhone(s));
+  const payerName = s.purchasePayerName || "";
 
   const results = await dispatch(
     [
@@ -256,6 +288,27 @@ async function notifySponsorshipApproved({ sponsorshipId, order, paymentLink, ch
           );
         },
       },
+      // Payeur tiers (facultatif) : le lien de paiement, sans la fiche
+      // d'agrément (données personnelles du filleul).
+      ...payerMessages(s, {
+        countryCode,
+        sms: fitSms([
+          `FOREVER: achat de parrainage de ${recruitName}. Cde ${order.preorderNumber} ${amount} ${pay}`,
+          `FOREVER: achat parrainage Cde ${order.preorderNumber} ${amount} ${pay}`,
+          `FOREVER: ${amount} ${pay}`,
+        ]),
+        subject: `Paiement de l'achat de parrainage : commande ${order.preorderNumber}`,
+        content: {
+          greeting: payerName ? `Bonjour ${payerName},` : "Bonjour,",
+          paragraphs: [
+            `${s.sponsorNom} vous a désigné(e) pour régler l'achat de parrainage de ${recruitName}.`,
+            `La commande est préfacturée. ${finalNote}`,
+          ],
+          rows: [["Commande", order.preorderNumber], ["Montant à payer", amount], ["Paiement", paymentLabel]],
+          cta,
+        },
+        type: "SPONSORSHIP_APPROVED",
+      }),
     ],
     channels,
   );
@@ -314,6 +367,20 @@ async function notifySponsorshipValidated({ sponsorshipId, preorderNumber, chann
             "sponsor-validated",
           ),
       },
+      ...payerMessages(s, {
+        countryCode,
+        sms: fitSms([
+          `FOREVER: paiement recu pour l'achat de parrainage de ${recruitName} (Cde ${preorderNumber || "-"}). Merci !`,
+          `FOREVER: paiement recu, Cde ${preorderNumber || "-"}. Merci !`,
+        ]),
+        subject: `Paiement reçu : achat de parrainage de ${recruitName}`,
+        content: {
+          greeting: s.purchasePayerName ? `Bonjour ${s.purchasePayerName},` : "Bonjour,",
+          paragraphs: [`Le paiement de l'achat de parrainage de ${recruitName} est bien reçu : le parrainage est validé. Merci !`],
+          rows: [["Commande payée", preorderNumber || ""]],
+        },
+        type: "SPONSORSHIP_VALIDATED",
+      }),
     ],
     channels,
   );

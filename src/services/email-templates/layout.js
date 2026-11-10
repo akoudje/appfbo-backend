@@ -71,6 +71,18 @@ function renderButton({ href, label }) {
   </table>`;
 }
 
+// Lien secondaire sous un bouton de paiement : ouvre WhatsApp avec le message
+// prérempli (lien de paiement compris) pour le transmettre à la personne qui
+// règle. Le destinataire est choisi dans WhatsApp.
+function whatsappShareUrl(text) {
+  return `https://wa.me/?text=${encodeURIComponent(String(text || ""))}`;
+}
+
+function renderShareLink({ text, label = "Partager le lien par WhatsApp", intro = "Quelqu'un d'autre règle ce paiement ?" }) {
+  if (!String(text || "").trim()) return "";
+  return `<p style="margin:4px 0 18px;font-size:14px;line-height:1.5;color:${BRAND.bodyText};">${escapeHtml(intro)} <a href="${escapeHtml(whatsappShareUrl(text))}" target="_blank" rel="noopener" style="color:${BRAND.ink};font-weight:700;">${escapeHtml(label)}</a></p>`;
+}
+
 // Encart utilisé pour tout ce que le destinataire doit noter/présenter : code
 // de retrait, code d'encaissement, code OTP... Un seul composant, réutilisé
 // partout au lieu de styles ad hoc par email.
@@ -235,6 +247,8 @@ module.exports = {
   brandLogoUrl,
   renderLayout,
   renderButton,
+  renderShareLink,
+  whatsappShareUrl,
   renderHighlightBox,
   textToHtml,
   renderFooter,

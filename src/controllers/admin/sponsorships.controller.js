@@ -193,6 +193,39 @@ async function downloadSponsorshipDocument(req, res) {
   }
 }
 
+// PATCH /api/admin/sponsorships/:id/payer { payerName, payerPhone, payerEmail }
+// Payeur tiers de l'achat (ajout, correction ou retrait : champs vides). Tant
+// que le parrainage n'est pas clos ; les notifications de paiement suivantes
+// lui sont aussi envoyées.
+async function updatePayerContact(req, res) {
+  try {
+    const row = await loadForReview(req, ["SUBMITTED", "CHANGES_REQUESTED", "APPROVED_PENDING_PURCHASE"]);
+    const { countryCode } = await sponsorship.getSponsorshipSettings(row.countryId);
+    const payer = sponsorship.normalizePayerContact(req.body || {}, { countryCode });
+    const describe = (p) =>
+      [p.purchasePayerName, p.purchasePayerPhone, p.purchasePayerEmail].filter(Boolean).join(" · ") || "aucun";
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.sponsorship.update({ where: { id: row.id }, data: payer });
+      await sponsorship.addSponsorshipLog(tx, {
+        sponsorshipId: row.id,
+        action: "PAYER_UPDATED",
+        note: `Payeur de l'achat : ${describe(row)} → ${describe(payer)}.`,
+        meta: { before: { name: row.purchasePayerName, phone: row.purchasePayerPhone, email: row.purchasePayerEmail }, after: payer },
+        actorAdminId: req.user?.id || null,
+      });
+      return saved;
+    });
+    return res.json({
+      ok: true,
+      purchasePayerName: updated.purchasePayerName,
+      purchasePayerPhone: updated.purchasePayerPhone,
+      purchasePayerEmail: updated.purchasePayerEmail,
+    });
+  } catch (error) {
+    return sendError(res, error, "updatePayerContact error:");
+  }
+}
+
 // POST /api/admin/sponsorships/:id/request-changes { note }
 async function requestChanges(req, res) {
   try {
@@ -598,6 +631,7 @@ async function counterSubmitSponsorship(req, res) {
       throw sponsorship.httpError(400, "Le parrain doit attester disposer de l'accord et de la procuration du filleul.", "SPONSORSHIP_CONSENT_REQUIRED");
     }
     const data = sponsorship.normalizeRecruitPayload(body, { countryCode: settings.countryCode });
+    const payer = sponsorship.normalizePayerContact(body, { countryCode: settings.countryCode });
 
     await sponsorship.assertRecruitEmailAvailable(data.email);
 
@@ -639,6 +673,7 @@ async function counterSubmitSponsorship(req, res) {
     const created = await prisma.sponsorship.create({
       data: {
         ...data,
+        ...payer,
         countryId,
         status: "SUBMITTED",
         sponsorFboId: sponsorFbo.id,
@@ -682,6 +717,7 @@ async function counterSubmitSponsorship(req, res) {
 }
 
 module.exports = {
+  updatePayerContact,
   downloadSponsorshipDossier,
   downloadSponsorshipAgreement,
   getCounterCatalog,
