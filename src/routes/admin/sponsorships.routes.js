@@ -25,6 +25,7 @@ router.get("/:id/catalog", sponsorshipsController.getCounterCatalog);
 // L'approbation et la relance de l'achat préfacturent : il faut aussi le droit de facturer.
 router.post("/:id/counter-purchase", requirePermission(Permission.INVOICE_CREATE), sponsorshipsController.counterPurchase);
 router.post("/:id/cancel", sponsorshipsController.cancelSponsorship);
+router.patch("/:id/payer", sponsorshipsController.updatePayerContact);
 router.post("/:id/request-changes", sponsorshipsController.requestChanges);
 router.post("/:id/reject", sponsorshipsController.rejectSponsorship);
 router.post("/:id/approve", requirePermission(Permission.INVOICE_CREATE), sponsorshipsController.approveSponsorship);

@@ -2738,6 +2738,12 @@ model Sponsorship {
   purchaseItems              Json?
   purchaseIndicativeTotalFcfa Int?
   purchasePreorderId         String?
+  // Personne qui règle l'achat de parrainage quand ce n'est ni le parrain ni
+  // le filleul : reçoit aussi les notifications de paiement (lien, relances,
+  // confirmation). Facultatif ; téléphone et/ou email.
+  purchasePayerName          String?
+  purchasePayerPhone         String?
+  purchasePayerEmail         String?
   validatedAt          DateTime?
   expiredAt            DateTime?
 

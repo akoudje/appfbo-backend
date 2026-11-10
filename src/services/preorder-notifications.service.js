@@ -6,7 +6,7 @@ const { normalizeEmail, sendEmail } = require("./email.service");
 const { MAX_SMS_LENGTH } = require("./sms.orange.service");
 const { getPaymentExpiryHours } = require("./notification-template-defaults");
 const { sendPreorderMobilePush } = require("./mobile-push.service");
-const { renderLayout, renderButton, textToHtml } = require("./email-templates/layout");
+const { renderLayout, renderButton, renderShareLink, textToHtml } = require("./email-templates/layout");
 
 function compactText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -408,6 +408,7 @@ function buildDefaultEmailHtml({
   ctaHref = "",
   ctaLabel = "",
   supportPhone = "",
+  shareText = "",
 }) {
   const preorderNumber = preorder?.preorderNumber || preorder?.id || "-";
   const safeSubject = subject || `Notification commande ${preorderNumber}`;
@@ -421,7 +422,12 @@ function buildDefaultEmailHtml({
         .filter((line) => !line.includes(ctaHref))
         .join("\n")
     : body;
-  const bodyHtml = textToHtml(htmlSourceText) + renderButton({ href: ctaHref, label: ctaLabel });
+  // Sous le bouton de paiement : « Partager le lien par WhatsApp », pour le
+  // transmettre à la personne qui règle (parent, payeur tiers…).
+  const bodyHtml =
+    textToHtml(htmlSourceText) +
+    renderButton({ href: ctaHref, label: ctaLabel }) +
+    (ctaHref && shareText ? renderShareLink({ text: shareText }) : "");
 
   return renderLayout({
     previewText: safeSubject,
@@ -430,6 +436,17 @@ function buildDefaultEmailHtml({
     headerTag: `Précommande ${preorderNumber}`,
     supportPhone,
   });
+}
+
+// Message prérempli du partage WhatsApp d'un lien de paiement de précommande.
+function paymentShareText(context, what = "") {
+  const link = String(context?.paymentLink || "").trim();
+  if (!link) return "";
+  const preorder = context?.preorder || {};
+  const number = preorder.preorderNumber || preorder.id || "";
+  const subject = what ? `les ${what} de la précommande ${number}` : `la précommande ${number}`;
+  const name = preorder.fboNomComplet ? ` (${preorder.fboNomComplet})` : "";
+  return `Forever : lien de paiement pour ${subject}${name}. Payer ici : ${link}`;
 }
 
 function normalizePurposeKey(purpose = "") {
@@ -814,7 +831,7 @@ function resolveConfiguredTemplates({
 }) {
   if (normalizePurposeKey(purpose) === "SHIPPING_PAYMENT_LINK") {
     return { smsMessage: prependNotificationPrefix(context.preorder, fallbackSms), emailSubject: fallbackEmailSubject, emailBody: fallbackEmailBody,
-      emailHtml: buildDefaultEmailHtml({ subject: fallbackEmailSubject, body: fallbackEmailBody, preorder: context.preorder, ctaHref: context.paymentLink, ctaLabel: "Payer les frais d’expédition", supportPhone: context.supportPhone }) };
+      emailHtml: buildDefaultEmailHtml({ subject: fallbackEmailSubject, body: fallbackEmailBody, preorder: context.preorder, ctaHref: context.paymentLink, ctaLabel: "Payer les frais d’expédition", supportPhone: context.supportPhone, shareText: paymentShareText(context, "frais d’expédition") }) };
   }
   if (require('./shipping.service').isShipping(context?.preorder?.deliveryMode) && ['ORDER_READY', 'ORDER_FULFILLED'].includes(normalizePurposeKey(purpose))) {
     return { smsMessage: fallbackSms, emailSubject: fallbackEmailSubject, emailBody: fallbackEmailBody, emailHtml: buildDefaultEmailHtml({ subject: fallbackEmailSubject, body: fallbackEmailBody, preorder: context.preorder }) };
@@ -862,6 +879,7 @@ function resolveConfiguredTemplates({
     ctaHref: context?.paymentLink || "",
     ctaLabel: isBankFlow ? "Déposer ma preuve de paiement" : "Payer maintenant",
     supportPhone: context?.supportPhone || "",
+    shareText: paymentShareText(context),
   });
 
   return {
@@ -1159,6 +1177,31 @@ async function sendByChannel({
   };
 }
 
+// Payeur tiers d'un achat de parrainage (Sponsorship.purchasePayer*) : il
+// reçoit aussi les notifications de PAIEMENT de la commande du filleul
+// (préfacture, lien, relances, annulation faute de paiement, confirmation).
+// Jamais les autres messages (préparation, retrait…).
+const PAYER_PAYMENT_PURPOSES = new Set(["INVOICE", "PAYMENT_LINK", "REMINDER", "AUTO_CANCEL"]);
+
+async function resolveSponsorshipPayerContact(preorder, purpose) {
+  const key = String(purpose || "").trim().toUpperCase();
+  const unpaid = String(preorder?.paymentStatus || "").toUpperCase() !== "PAID";
+  const relevant = key === "PAYMENT_CONFIRMED" || (PAYER_PAYMENT_PURPOSES.has(key) && unpaid);
+  // Seules les commandes passées par un parrain peuvent être un achat de parrainage.
+  if (!relevant || !preorder?.id || !preorder?.placedByFboNumero) return null;
+  try {
+    const row = await prisma.sponsorship.findFirst({
+      where: { purchasePreorderId: preorder.id },
+      select: { purchasePayerPhone: true, purchasePayerEmail: true },
+    });
+    if (!row?.purchasePayerPhone && !row?.purchasePayerEmail) return null;
+    return { phone: row.purchasePayerPhone || null, email: normalizeEmail(row.purchasePayerEmail || "") || null };
+  } catch (error) {
+    console.warn("[notifications] payeur du parrainage non résolu", { preorderId: preorder.id, message: error?.message });
+    return null;
+  }
+}
+
 async function sendPreorderNotification({
   preorder,
   purpose,
@@ -1262,6 +1305,18 @@ async function sendPreorderNotification({
     channels.push({ channel: "EMAIL", to: resolvedEmail });
   }
 
+  // Payeur tiers d'un achat de parrainage : en plus des destinataires habituels.
+  const payer = await resolveSponsorshipPayerContact(preorder, purpose);
+  if (payer) {
+    const alreadyTo = new Set(channels.map((item) => String(item.to || "")));
+    if (payer.phone && smsAllowed && !alreadyTo.has(payer.phone) && normalizeForCountry(payer.phone, smsCountryCode)) {
+      channels.push({ channel: "SMS", to: payer.phone, extraRecipient: "PAYER" });
+    }
+    if (payer.email && !alreadyTo.has(payer.email)) {
+      channels.push({ channel: "EMAIL", to: payer.email, extraRecipient: "PAYER" });
+    }
+  }
+
   if (!resolvedPhone && !resolvedWhatsapp && !resolvedEmail) {
     const pushResult = await sendPreorderMobilePush({
       preorder,
@@ -1312,7 +1367,7 @@ async function sendPreorderNotification({
 
     const messageToSend =
       item.channel === "EMAIL" ? resolvedEmailMessage : resolvedSmsMessage;
-    const duplicateMessage = await findRecentDuplicateOrderMessage({
+    const duplicateMessage = item.extraRecipient && item.channel === "EMAIL" ? null : await findRecentDuplicateOrderMessage({
       preorderId: preorder.id,
       purpose: persistedPurpose,
       channel: item.channel,
@@ -1537,6 +1592,7 @@ async function sendPreorderNotification({
 }
 
 module.exports = {
+  resolveSponsorshipPayerContact,
   resolveNotificationPhone,
   resolveNotificationEmail,
   buildNotificationPrefix,

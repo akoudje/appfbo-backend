@@ -83,7 +83,7 @@ async function listMySponsorships(req, res) {
         rejectionReason: true, reviewNote: true, recruitFboNumero: true, approvedAt: true, purchaseDeadlineAt: true,
         minPurchaseFcfa: true, validatedAt: true, expiredAt: true,
         purchaseItems: true, purchaseIndicativeTotalFcfa: true, purchasePreorderId: true,
-        purchasePaymentMode: true, purchaseDeliveryMode: true, cancelledAt: true, cancellationReason: true,
+        purchasePaymentMode: true, purchaseDeliveryMode: true, purchasePayerName: true, purchasePayerPhone: true, purchasePayerEmail: true, cancelledAt: true, cancellationReason: true,
       },
     });
     // Filleul promu Animateur adjoint par son achat de parrainage : peut

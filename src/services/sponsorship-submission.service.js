@@ -133,6 +133,7 @@ async function createSubmittedSponsorship({ sponsorFbo, sponsorVerified = true, 
     throw sponsorship.httpError(400, "Vous devez attester disposer de l'accord et de la procuration du filleul.", "SPONSORSHIP_CONSENT_REQUIRED");
   }
   const data = sponsorship.normalizeRecruitPayload(body, { countryCode: settings.countryCode });
+  const payer = sponsorship.normalizePayerContact(body, { countryCode: settings.countryCode });
   const cart = await purchase.normalizePurchaseCart(body.purchaseItems, {
     countryId,
     countryCode: settings.countryCode,
@@ -174,6 +175,7 @@ async function createSubmittedSponsorship({ sponsorFbo, sponsorVerified = true, 
   const created = await prisma.sponsorship.create({
     data: {
       ...data,
+      ...payer,
       countryId,
       status: "SUBMITTED",
       sponsorFboId: sponsorFbo.id,
@@ -229,6 +231,7 @@ async function applySponsorshipCorrection({ existing, body = {}, files = [], set
   }
   const countryId = existing.countryId;
   const data = sponsorship.normalizeRecruitPayload(body, { countryCode: settings.countryCode });
+  const payer = sponsorship.normalizePayerContact(body, { countryCode: settings.countryCode });
   await sponsorship.assertRecruitEmailAvailable(data.email, { excludeSponsorshipId: existing.id });
   const cart = await purchase.normalizePurchaseCart(body.purchaseItems, {
     countryId,
@@ -252,6 +255,7 @@ async function applySponsorshipCorrection({ existing, body = {}, files = [], set
       where: { id: existing.id },
       data: {
         ...data,
+        ...payer,
         status: "SUBMITTED",
         submittedAt: new Date(),
         purchaseItems: cart.items,
