@@ -171,13 +171,19 @@ async function getPublicLink(req, res) {
     const token = String(req.params.token || "").trim();
     if (!token) return res.status(400).json({ message: "Token requis." });
 
-    const link = await prisma.externalPaymentLink.findFirst({
+    let link = await prisma.externalPaymentLink.findFirst({
       where: { token, countryId: req.countryId },
       include: {
         country: { select: { id: true, code: true, name: true, currencyCode: true } },
       },
     });
     if (!link) return res.status(404).json({ message: "Lien de paiement introuvable." });
+    // Frais d'expédition dont seule la session Wave a expiré : lien remis en
+    // service, le client peut payer avec le lien déjà reçu.
+    if (link.source === "SHIPPING" && link.status === "EXPIRED") {
+      const revived = await externalWavePaymentService.reviveExpiredShippingLink(link);
+      if (revived) link = { ...revived, country: link.country };
+    }
 
     const effectiveStatus = isExpired(link) && link.status === "ACTIVE" ? "EXPIRED" : link.status;
 

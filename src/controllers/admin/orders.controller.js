@@ -794,7 +794,19 @@ async function claimSubmittedOrdersForPrint(req, res) {
 }
 
 const { setShippingQuote, assertShippingPaid, assertShippingQuoted, isShipping, carrierLabel } = require("../../services/shipping.service");
-const { notifyShippingPayment, withShippingNotification } = require("../../services/shipping-notifications.service");
+const { notifyShippingPayment, withShippingNotification, getShippingPaymentLink } = require("../../services/shipping-notifications.service");
+
+// Lien de paiement des frais d'expédition, à copier par le préparateur.
+async function shippingPaymentLink(req, res) {
+  try {
+    const result = await getShippingPaymentLink({ orderId: req.params.id, countryId: pickCountryId(req) });
+    return res.json(result);
+  } catch (error) {
+    const status = Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
+    if (status === 500) console.error("shippingPaymentLink error:", error);
+    return res.status(status).json({ message: status === 500 ? "Impossible de récupérer le lien de paiement. Réessayez dans un instant." : error.message });
+  }
+}
 
 async function resendShippingPaymentNotification(req, res) {
   try {
@@ -4904,6 +4916,7 @@ async function regularizeLateCashPayment(req, res) {
 module.exports = {
   regularizeLateCashPayment,
   resendShippingPaymentNotification,
+  shippingPaymentLink,
   updateShippingQuote,
   syncShippingPayment,
   listOrders,

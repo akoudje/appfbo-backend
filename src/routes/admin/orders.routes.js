@@ -128,6 +128,7 @@ router.post(
   ordersController.resendConfirmationSms,
 );
 
+router.post("/:id/shipping-payment/link", requirePermission(Permission.PREPARATION_UPDATE), ordersController.shippingPaymentLink);
 router.post("/:id/shipping-payment/sync", requirePermission(Permission.PREPARATION_UPDATE), ordersController.syncShippingPayment);
 router.post("/:id/shipping-payment/notify", requirePermission(Permission.PREPARATION_UPDATE), createRateLimiter({ windowMs: 60000, max: 2, keyPrefix: "shipping-payment-notification", keyFn: req => `${req.countryId}:${req.params.id}` }), ordersController.resendShippingPaymentNotification);
 router.post("/:id/shipping-quote", requirePermission(Permission.PREPARATION_UPDATE), ordersController.updateShippingQuote);
