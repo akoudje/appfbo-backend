@@ -588,6 +588,8 @@ async function cancelPreorderAsExpiredUnpaid({ preorderId, now = new Date() }) {
     return { ok: false, reason: "PREORDER_ALREADY_PROCESSED" };
   }
 
+  require("../payments/payments.service").closeWaveSessionsInBackground(preorderId, "ORDER_CANCELLED");
+
   try {
     const latestPaymentMessage = await prisma.orderMessage.findFirst({
       where: {
@@ -926,6 +928,13 @@ function startExpiredInvoiceAutoCancelScheduler() {
       const result = await cancelExpiredInvoicedPreorders({ now });
       if (!result?.skipped) {
         console.log("[preorder-expiration] auto-cancel summary", result);
+      }
+      // Un seul lien actif : aucune session Wave ne reste payable sur une
+      // commande payée, annulée ou dont le lien a expiré.
+      const { closeStaleWaveSessions } = require("../payments/payments.service");
+      const closed = await closeStaleWaveSessions({ now });
+      if (closed.expired || closed.failed) {
+        console.log("[preorder-expiration] wave sessions closed", closed);
       }
     } catch (error) {
       console.error("[preorder-expiration] scheduler error", error);

@@ -1143,6 +1143,9 @@ model Preorder {
   parcelNumber      String? @unique
   invoicedAt        DateTime?
   paymentExpiresAt  DateTime?
+  // Date d’émission du dernier lien de paiement Wave envoyé : seul ce lien est
+  // valable, pendant 3 h (voir src/payments/payment-link-window.js).
+  paymentLinkIssuedAt DateTime?
   invoicedById      String?
   invoicedByAdmin   AdminUser? @relation("PreorderInvoicedBy", fields: [invoicedById], references: [id], onDelete: SetNull)
 

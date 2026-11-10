@@ -1633,6 +1633,8 @@ async function correctAs400Invoice(req, res) {
       orderTotalFcfa: nextTotalFcfa,
     });
 
+    // Le paiement en cours est annulé : sa session Wave ne doit plus être payable.
+    paymentsService.closeWaveSessionsInBackground?.(order.id, "PAYMENT_CANCELLED");
     await prisma.$transaction(async (tx) => {
       await tx.payment.updateMany({
         where: {
@@ -1883,6 +1885,8 @@ async function relaunchPayment(req, res) {
       ? invoicedTotalFcfa - Number(order.fraisLivraisonFcfa || 0) - Number(order.emballageFcfa || 0)
       : "";
 
+    // Le paiement en cours est annulé : sa session Wave ne doit plus être payable.
+    paymentsService.closeWaveSessionsInBackground?.(order.id, "PAYMENT_CANCELLED");
     await prisma.$transaction(async (tx) => {
       await tx.payment.updateMany({
         where: {
@@ -2818,6 +2822,7 @@ async function switchWaveToManualPayment(req, res) {
               cancelledAt: active.cancelledAt || now,
             },
           });
+          paymentsService.closeWaveSessionsInBackground?.(order.id, "SWITCHED_TO_MANUAL");
         }
       }
 
@@ -2988,11 +2993,8 @@ async function switchManualToWavePayment(req, res) {
         phoneOverride !== undefined ? String(phoneOverride || "").trim() : undefined,
     });
 
-    const paymentLink = paymentsService.buildShortWavePaymentUrl(
-      order.id,
-      order.country?.code || "CIV",
-      order.paymentCollectionCode || "",
-    );
+    // Lien neuf, seul valable pendant 3 h (payment-link-window.js).
+    const paymentLink = (await paymentsService.issueWavePaymentLink(order.id)).url;
     const amountToPayFcfa = Number(
       waveResult?.payment?.amountExpectedFcfa ||
         resolveOrderAmountToPayFcfa({
@@ -4493,6 +4495,7 @@ async function cancelOrder(req, res) {
         }
       }
 
+      paymentsService.closeWaveSessionsInBackground?.(order.id, "ORDER_CANCELLED");
       const saved = await tx.preorder.update({
         where: { id: order.id },
         data: {
