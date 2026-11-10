@@ -98,3 +98,21 @@ test('espace préparateur : lien copiable tant que les frais restent à payer', 
   assert.equal(expired.shippingPaymentUrl, null);
   assert.equal(expired.shippingPaymentLinkExpired, true);
 });
+
+test("frais réglés : détails du paiement transmis au préparateur, sans le jeton", () => {
+  const src = fs.readFileSync("./src/services/shipping-notifications.service.js", "utf8");
+  const module = { exports: {} };
+  vm.runInNewContext(src, {
+    module, URL, Date, process: { env: {} }, console,
+    require: (name) => (name === "./shipping.service" ? { isShipping: () => true, carrierLabel: () => "La Poste" } : name === "./preorder-notifications.service" ? { resolveNotificationEmail: () => null, resolveNotificationPhone: () => null } : {}),
+  });
+  const paidAt = new Date("2026-11-10T08:24:31Z");
+  const out = module.exports.withShippingNotification({ deliveryMode: "EXPEDITION_POSTE", shippingFeeFcfa: 3000, messages: [], shippingPaymentLink: {
+    token: "secret", status: "PAID", providerStatus: "SUCCEEDED", provider: "WAVE", reference: "EXP-PO-1", paidAt,
+    providerTransactionId: "TYOULVO36YTQ52ZYY", amountFcfa: 3030, baseAmountFcfa: 3000, serviceFeeFcfa: 30 } });
+  assert.equal(out.shippingPaymentLink.paidAt, paidAt);
+  assert.equal(out.shippingPaymentLink.providerTransactionId, "TYOULVO36YTQ52ZYY");
+  assert.equal(out.shippingPaymentLink.reference, "EXP-PO-1");
+  assert.equal(out.shippingPaymentLink.provider, "WAVE");
+  assert.equal(out.shippingPaymentLink.token, undefined);
+});
