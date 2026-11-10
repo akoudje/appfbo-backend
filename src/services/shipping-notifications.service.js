@@ -64,7 +64,9 @@ function withShippingNotification(order) {
   const pending = order.shippingPaymentLink && !(order.shippingPaymentLink.status === 'PAID' && order.shippingPaymentLink.providerStatus === 'SUCCEEDED') && order.shippingPaymentLink.token;
   result.shippingPaymentUrl = pending && order.shippingPaymentLink.status === 'ACTIVE' ? paymentUrl(order) : null;
   result.shippingPaymentLinkExpired = Boolean(pending && order.shippingPaymentLink.status === 'EXPIRED');
-  if (order.shippingPaymentLink) result.shippingPaymentLink = Object.fromEntries(['providerSessionId', 'status', 'providerStatus', 'baseAmountFcfa', 'amountFcfa', 'serviceFeeFcfa'].filter(key => order.shippingPaymentLink[key] !== undefined).map(key => [key, order.shippingPaymentLink[key]]));
+  // Détails du paiement (date, n° de transaction Wave, référence) affichés au
+  // préparateur une fois les frais réglés. Le jeton du lien n'est jamais exposé.
+  if (order.shippingPaymentLink) result.shippingPaymentLink = Object.fromEntries(['providerSessionId', 'status', 'providerStatus', 'baseAmountFcfa', 'amountFcfa', 'serviceFeeFcfa', 'provider', 'reference', 'paidAt', 'providerTransactionId', 'providerPayerPhone'].filter(key => order.shippingPaymentLink[key] !== undefined).map(key => [key, order.shippingPaymentLink[key]]));
   return result;
 }
 
