@@ -282,6 +282,21 @@ class WaveProvider extends BasePaymentProvider {
     };
   }
 
+  // Ferme une session de paiement encore ouverte : le client ne peut plus la
+  // payer. Wave refuse si la session est déjà payée ou terminée.
+  async expireCheckoutSession({ providerSessionId }) {
+    if (!providerSessionId) {
+      const err = new Error("providerSessionId requis");
+      err.statusCode = 400;
+      throw err;
+    }
+    await this.http(
+      `/v1/checkout/sessions/${encodeURIComponent(providerSessionId)}/expire`,
+      { method: "POST" },
+    );
+    return { provider: this.code, providerSessionId, expired: true };
+  }
+
   async getCheckoutSession({ providerSessionId }) {
     if (!providerSessionId) {
       const err = new Error("providerSessionId requis");

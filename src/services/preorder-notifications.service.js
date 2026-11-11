@@ -1221,6 +1221,20 @@ async function sendPreorderNotification({
     return { sent: false, skipped: true, reason: "INVALID_NOTIFICATION" };
   }
 
+  try {
+    const { refreshWavePaymentLinksForSend } = require("../payments/payments.service");
+    ({ message, emailMessage, paymentLinkTarget, paymentLinkTracked } =
+      await refreshWavePaymentLinksForSend({
+        preorderId: preorder.id,
+        fields: { message, emailMessage, paymentLinkTarget, paymentLinkTracked },
+      }));
+  } catch (error) {
+    console.error("[notifications] renouvellement du lien Wave impossible", {
+      preorderId: preorder.id,
+      message: error?.message,
+    });
+  }
+
   const persistedPurpose = resolvePersistedOrderMessagePurpose(purpose);
   const pushPurpose = String(purpose).toUpperCase() === "SHIPPING_PAYMENT_LINK" ? "SHIPPING_PAYMENT_LINK" : persistedPurpose;
 

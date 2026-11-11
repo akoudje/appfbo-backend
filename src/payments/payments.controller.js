@@ -94,6 +94,18 @@ async function waveWebhook(req, res) {
   }
 }
 
+// Erreur de lien (expiré, remplacé, commande payée ou annulée) : le code
+// permet à la page client d'afficher le bon message et le bouton « Demander
+// un nouveau lien ».
+function sendPaymentError(res, e, fallbackMessage) {
+  return res.status(e.statusCode || 500).json({
+    message: e.message || fallbackMessage,
+    ...(e.code ? { code: e.code } : {}),
+    ...(e.canRequestNewLink !== undefined ? { canRequestNewLink: e.canRequestNewLink } : {}),
+    ...(e.payload || {}),
+  });
+}
+
 async function getPublicWavePaymentContext(req, res) {
   try {
     const { orderId } = req.params;
@@ -105,6 +117,7 @@ async function getPublicWavePaymentContext(req, res) {
     const result = await paymentsService.getPublicWavePaymentContext({
       req,
       preorderId: orderId,
+      linkToken: String(req.query?.t || "").trim() || null,
     });
 
     return res.json(result);
@@ -127,16 +140,14 @@ async function resolveShortWavePaymentLink(req, res) {
     const result = await paymentsService.resolveShortWavePaymentLink(token);
     return res.json(result);
   } catch (e) {
-    console.error("resolveShortWavePaymentLink error:", e);
-    return res
-      .status(e.statusCode || 500)
-      .json({ message: e.message || "Erreur serveur (resolveShortWavePaymentLink)" });
+    if (!e.code) console.error("resolveShortWavePaymentLink error:", e);
+    return sendPaymentError(res, e, "Erreur serveur (resolveShortWavePaymentLink)");
   }
 }
 
 async function initiatePublicWavePayment(req, res) {
   try {
-    const { orderId, payerPhone } = req.body || {};
+    const { orderId, payerPhone, linkToken } = req.body || {};
 
     if (!orderId) {
       return res.status(400).json({ message: "orderId requis" });
@@ -154,14 +165,28 @@ async function initiatePublicWavePayment(req, res) {
       req,
       preorderId: orderId,
       payerPhoneHint: payerPhone,
+      linkToken: String(linkToken || "").trim() || null,
     });
 
     return res.json(result);
   } catch (e) {
-    console.error("initiatePublicWavePayment error:", e);
-    return res
-      .status(e.statusCode || 500)
-      .json({ message: e.message || "Erreur serveur (initiatePublicWavePayment)" });
+    if (!e.code) console.error("initiatePublicWavePayment error:", e);
+    return sendPaymentError(res, e, "Erreur serveur (initiatePublicWavePayment)");
+  }
+}
+
+// Lien expiré ou remplacé : le client demande un nouveau lien. La demande
+// arrive chez l'agent de vente (demandes de renvoi de lien) ; aucun lien n'est
+// envoyé automatiquement.
+async function requestNewWavePaymentLink(req, res) {
+  try {
+    const { orderId } = req.params;
+    if (!orderId) return res.status(400).json({ message: "orderId requis" });
+    const result = await paymentsService.requestNewWavePaymentLink({ req, preorderId: orderId });
+    return res.status(result.created ? 201 : 200).json(result);
+  } catch (e) {
+    if (!e.code) console.error("requestNewWavePaymentLink error:", e);
+    return sendPaymentError(res, e, "Erreur serveur (requestNewWavePaymentLink)");
   }
 }
 
@@ -212,6 +237,7 @@ async function listPaymentTransactionLogs(req, res) {
 }
 
 module.exports = {
+  requestNewWavePaymentLink,
   initiateWavePayment,
   getPublicWavePaymentContext,
   resolveShortWavePaymentLink,

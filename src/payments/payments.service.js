@@ -7,6 +7,14 @@ const paymentOrchestrator = require("./payment-orchestrator.service");
 const { mapWaveSessionToInternal } = require("./payment-status.mapper");
 const { scopeWhere, pickCountryId } = require("../helpers/countryScope");
 const { computePaymentPricing } = require("./payment-pricing");
+const { closeWaveCheckoutSession } = require("./wave-session-close");
+const {
+  PAYMENT_LINK_TTL_MS,
+  evaluatePaymentLinkWindow,
+  isPreorderPayableOnline,
+  shouldReissuePaymentLink,
+  toLinkSecond,
+} = require("./payment-link-window");
 const { normalizeCI } = require("../utils/phone");
 const {
   buildPaymentConfirmedSmsMessage,
@@ -261,7 +269,16 @@ function parseShortBankProofToken(token) {
   return null;
 }
 
-function buildShortWavePaymentToken(preorderId, countryCode = "CIV", paymentCollectionCode = "") {
+// Jeton du lien court Wave. Avec issuedAt (format actuel), le jeton porte sa
+// date d'émission : il n'est valable que s'il est le dernier lien émis pour la
+// commande, et pendant 3 h (voir payment-link-window.js). Sans issuedAt :
+// ancien format non daté, encore lu pour les liens envoyés avant ce changement.
+function buildShortWavePaymentToken(
+  preorderId,
+  countryCode = "CIV",
+  paymentCollectionCode = "",
+  issuedAt = null,
+) {
   const normalizedOrderId = String(preorderId || "").trim();
   const normalizedCountryCode = String(countryCode || "CIV").trim().toUpperCase();
   const normalizedCollectionCode = String(paymentCollectionCode || "")
@@ -276,17 +293,28 @@ function buildShortWavePaymentToken(preorderId, countryCode = "CIV", paymentColl
     return null;
   }
 
-  const payload = `${normalizedCollectionCode}.${normalizedCountryCode}.${orderSuffix}`;
-  const signature = signShortPaymentLinkPayload(payload);
-  return `${payload}.${signature}`;
+  const base = `${normalizedCollectionCode}.${normalizedCountryCode}.${orderSuffix}`;
+  const issuedSec = toLinkSecond(issuedAt);
+  if (issuedSec === null) {
+    return `${base}.${signShortPaymentLinkPayload(base)}`;
+  }
+  const issued = issuedSec.toString(36);
+  const signature = signShortPaymentLinkPayload(`W2.${base}.${issued}`);
+  return `${base}.${issued}.${signature}`;
 }
 
-function buildShortWavePaymentUrl(preorderId, countryCode = "CIV", paymentCollectionCode = "") {
+function buildShortWavePaymentUrl(
+  preorderId,
+  countryCode = "CIV",
+  paymentCollectionCode = "",
+  issuedAt = null,
+) {
   const publicBaseUrl = buildPublicAppBaseUrl();
   const token = buildShortWavePaymentToken(
     preorderId,
     countryCode,
     paymentCollectionCode,
+    issuedAt,
   );
 
   if (!token) {
@@ -362,7 +390,12 @@ function buildPreorderActionLink(preorder, countryCode = "CIV") {
     .toUpperCase();
   const code = preorder.country?.code || countryCode || "CIV";
   if (mode.includes("WAVE") || mode.includes("MOBILE") || mode.includes("MOMO")) {
-    return buildShortWavePaymentUrl(preorder.id, code, preorder.paymentCollectionCode);
+    return buildShortWavePaymentUrl(
+      preorder.id,
+      code,
+      preorder.paymentCollectionCode,
+      preorder.paymentLinkIssuedAt || null,
+    );
   }
   if (["BANK", "ECOBANK", "SPI", "VIREMENT"].some((key) => mode.includes(key))) {
     return buildShortBankProofUploadUrl(preorder.id, code, preorder.paymentCollectionCode);
@@ -370,27 +403,89 @@ function buildPreorderActionLink(preorder, countryCode = "CIV") {
   return null;
 }
 
+const WAVE_SHORT_TOKEN_RE =
+  /^([A-Z0-9-]+)\.([A-Z0-9_-]+)\.([A-Za-z0-9_-]{6})\.([0-9a-z]{1,10})\.([A-Za-z0-9_-]{10})$/;
+const WAVE_SHORT_TOKEN_LEGACY_RE =
+  /^([A-Z0-9-]+)\.([A-Z0-9_-]+)\.([A-Za-z0-9_-]{6})\.([A-Za-z0-9_-]{10})$/;
+
+// Jeton signé → { paymentCollectionCode, countryCode, orderSuffix, issuedSec,
+// legacy } ; null si le jeton est mal formé ou la signature invalide.
+function parseShortWavePaymentToken(token) {
+  const normalizedToken = sanitizeShortLinkToken(token);
+  const current = normalizedToken.match(WAVE_SHORT_TOKEN_RE);
+  if (current) {
+    const [, paymentCollectionCode, countryCode, orderSuffix, issued, signature] = current;
+    const base = `${paymentCollectionCode}.${countryCode}.${orderSuffix}`;
+    if (!verifyShortPaymentLinkSignature(`W2.${base}.${issued}`, signature)) return null;
+    const issuedSec = parseInt(issued, 36);
+    if (!Number.isFinite(issuedSec)) return null;
+    return { token: normalizedToken, paymentCollectionCode, countryCode, orderSuffix, issuedSec, legacy: false };
+  }
+  const legacy = normalizedToken.match(WAVE_SHORT_TOKEN_LEGACY_RE);
+  if (legacy) {
+    const [, paymentCollectionCode, countryCode, orderSuffix, signature] = legacy;
+    const base = `${paymentCollectionCode}.${countryCode}.${orderSuffix}`;
+    if (!verifyShortPaymentLinkSignature(base, signature)) return null;
+    return { token: normalizedToken, paymentCollectionCode, countryCode, orderSuffix, issuedSec: null, legacy: true };
+  }
+  return null;
+}
+
+const PAYMENT_LINK_STATE_SELECT = {
+  id: true,
+  status: true,
+  paymentStatus: true,
+  paymentLinkIssuedAt: true,
+  activePayment: { select: { status: true } },
+};
+
+// Liens envoyés avant la date d'émission en base : la date du dernier message
+// portant un lien Wave court tient lieu de date d'émission.
+async function findLegacyPaymentLinkIssuedAt(preorderId) {
+  const message = await prisma.orderMessage.findFirst({
+    where: {
+      preorderId,
+      OR: [
+        { paymentLinkTarget: { contains: "/payment/w/" } },
+        { paymentLinkTracked: { contains: "/payment/w/" } },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  return message?.createdAt || null;
+}
+
+async function getPreorderPaymentLinkState(preorder, { parsed = null, now = new Date() } = {}) {
+  const legacyIssuedAt = preorder?.paymentLinkIssuedAt
+    ? null
+    : await findLegacyPaymentLinkIssuedAt(preorder.id);
+  return evaluatePaymentLinkWindow(preorder, {
+    tokenIssuedSec: parsed?.issuedSec ?? null,
+    legacyToken: Boolean(parsed?.legacy),
+    legacyIssuedAt,
+    now,
+  });
+}
+
+function paymentLinkStateError(state) {
+  const err = new Error(state.message || "Lien de paiement indisponible");
+  err.statusCode = state.canRequestNewLink ? 410 : 409;
+  err.code = state.code;
+  err.canRequestNewLink = Boolean(state.canRequestNewLink);
+  return err;
+}
+
 async function resolveShortWavePaymentLink(token) {
-  const normalizedToken = String(token || "").trim();
-  const match = normalizedToken.match(
-    /^([A-Z0-9-]+)\.([A-Z0-9_-]+)\.([A-Za-z0-9_-]{6})\.([A-Za-z0-9_-]{10})$/,
-  );
+  const parsed = parseShortWavePaymentToken(token);
 
-  if (!match) {
+  if (!parsed) {
     const err = new Error("Lien de paiement invalide");
     err.statusCode = 400;
     throw err;
   }
 
-  const [, paymentCollectionCode, countryCode, orderSuffix, signature] = match;
-  const payload = `${paymentCollectionCode}.${countryCode}.${orderSuffix}`;
-
-  if (!verifyShortPaymentLinkSignature(payload, signature)) {
-    const err = new Error("Lien de paiement invalide");
-    err.statusCode = 400;
-    throw err;
-  }
-
+  const { paymentCollectionCode, countryCode, orderSuffix } = parsed;
   const matches = await prisma.preorder.findMany({
     where: {
       paymentCollectionCode,
@@ -400,7 +495,8 @@ async function resolveShortWavePaymentLink(token) {
       },
     },
     select: {
-      id: true,
+      ...PAYMENT_LINK_STATE_SELECT,
+      preorderNumber: true,
       paymentCollectionCode: true,
       country: {
         select: {
@@ -418,15 +514,289 @@ async function resolveShortWavePaymentLink(token) {
   }
 
   const preorder = matches[0];
+  const resolvedCountryCode = preorder.country?.code || String(countryCode).trim().toUpperCase();
+  const state = await getPreorderPaymentLinkState(preorder, { parsed });
+  const base = {
+    orderId: preorder.id,
+    countryCode: resolvedCountryCode,
+    preorderNumber: preorder.preorderNumber || null,
+    linkToken: parsed.token,
+    linkStatus: state.code,
+    expiresAt: state.expiresAt || null,
+  };
+
+  if (!state.ok) {
+    const err = paymentLinkStateError(state);
+    err.payload = base;
+    throw err;
+  }
+
   return {
     ok: true,
-    orderId: preorder.id,
-    countryCode: preorder.country?.code || String(countryCode).trim().toUpperCase(),
-    redirectUrl: buildPublicWavePaymentUrl(
-      preorder.id,
-      preorder.country?.code || countryCode,
-    ),
+    ...base,
+    redirectUrl: `${buildPublicWavePaymentUrl(preorder.id, resolvedCountryCode)}&t=${encodeURIComponent(parsed.token)}`,
   };
+}
+
+const OPEN_RESEND_REQUEST_STATUSES = ["PENDING", "IN_REVIEW"];
+
+// « Demander un nouveau lien » depuis la page de paiement : crée (ou relance)
+// une demande de renvoi pour l'agent de vente. Rien n'est envoyé au client
+// sans l'agent.
+async function requestNewWavePaymentLink({ req, preorderId }) {
+  const preorder = await prisma.preorder.findFirst({
+    where: scopeWhere(req, { id: preorderId }),
+    select: {
+      ...PAYMENT_LINK_STATE_SELECT,
+      countryId: true,
+      preorderNumber: true,
+      fboNumero: true,
+      factureWhatsappTo: true,
+    },
+  });
+  if (!preorder) {
+    const err = new Error("Commande introuvable");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const state = await getPreorderPaymentLinkState(preorder);
+  if (state.ok) {
+    return {
+      ok: true,
+      created: false,
+      status: "LINK_STILL_VALID",
+      message: "Votre lien de paiement est encore valable. Utilisez le dernier lien reçu.",
+    };
+  }
+  if (!state.canRequestNewLink) throw paymentLinkStateError(state);
+
+  const note = "Lien de paiement expiré ou remplacé : nouveau lien demandé depuis la page de paiement.";
+  const existing = await prisma.paymentLinkResendRequest.findFirst({
+    where: {
+      countryId: preorder.countryId,
+      preorderId: preorder.id,
+      status: { in: OPEN_RESEND_REQUEST_STATUSES },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  if (existing) {
+    await prisma.paymentLinkResendRequest.update({
+      where: { id: existing.id },
+      data: { status: "PENDING", note },
+    });
+  } else {
+    await prisma.paymentLinkResendRequest.create({
+      data: {
+        countryId: preorder.countryId,
+        preorderId: preorder.id,
+        preorderNumber: preorder.preorderNumber,
+        fboNumero: preorder.fboNumero || "",
+        originalPhone: preorder.factureWhatsappTo || "",
+        note,
+      },
+    });
+  }
+  return {
+    ok: true,
+    created: !existing,
+    status: "PENDING",
+    message:
+      "Votre demande a été transmise à votre agent de vente. Vous recevrez un nouveau lien par SMS ou e-mail.",
+  };
+}
+
+// Émet un nouveau lien de paiement Wave pour la commande : il devient le seul
+// valable (les précédents sont refusés) pendant 3 h, et les sessions Wave encore
+// ouvertes sont fermées.
+async function issueWavePaymentLink(preorderId, { now = new Date() } = {}) {
+  const issuedAt = new Date(toLinkSecond(now) * 1000);
+  const preorder = await prisma.preorder.update({
+    where: { id: preorderId },
+    data: { paymentLinkIssuedAt: issuedAt },
+    select: { id: true, paymentCollectionCode: true, country: { select: { code: true } } },
+  });
+  try {
+    await expireOpenWaveSessions({ preorderId: preorder.id, reason: "NEW_LINK" });
+  } catch (error) {
+    console.error("[payments][wave] fermeture des anciennes sessions impossible", {
+      preorderId: preorder.id,
+      message: error?.message,
+    });
+  }
+  return {
+    url: buildShortWavePaymentUrl(
+      preorder.id,
+      preorder.country?.code || "CIV",
+      preorder.paymentCollectionCode || "",
+      issuedAt,
+    ),
+    issuedAt,
+    expiresAt: new Date(issuedAt.getTime() + PAYMENT_LINK_TTL_MS),
+  };
+}
+
+const WAVE_SHORT_URL_RE = /https?:\/\/[^\s"'<>]+?\/payment\/w\/([A-Za-z0-9._%-]+)/g;
+
+// Avant chaque envoi (facture, rappel, renvoi…) : un lien Wave court ancien,
+// expiré ou remplacé est remplacé par un nouveau lien dans tous les textes. Un
+// lien émis il y a moins de 15 min est gardé (même envoi). Rien ne change si la
+// commande n'est plus payable (payée, annulée) : le lien affichera pourquoi.
+async function refreshWavePaymentLinksForSend({ preorderId, fields, now = new Date() }) {
+  if (!preorderId || !fields) return fields;
+  const found = new Map();
+  for (const value of Object.values(fields)) {
+    if (typeof value !== "string" || !value.includes("/payment/w/")) continue;
+    for (const match of value.matchAll(WAVE_SHORT_URL_RE)) {
+      const rawToken = match[1];
+      const token = sanitizeShortLinkToken(rawToken);
+      const url = match[0].slice(0, match[0].length - rawToken.length) + token;
+      const parsed = parseShortWavePaymentToken(token);
+      if (parsed) found.set(url, parsed);
+    }
+  }
+  if (!found.size) return fields;
+
+  const preorder = await prisma.preorder.findUnique({
+    where: { id: preorderId },
+    select: PAYMENT_LINK_STATE_SELECT,
+  });
+  if (!preorder) return fields;
+  const ours = [...found.entries()].filter(([, parsed]) => preorder.id.endsWith(parsed.orderSuffix));
+  if (!ours.length) return fields;
+
+  if (!isPreorderPayableOnline(preorder)) return fields;
+  const secs = ours.map(([, parsed]) => (parsed.issuedSec === null ? -1 : parsed.issuedSec));
+  if (!shouldReissuePaymentLink(preorder, secs, now)) return fields;
+
+  const { url: freshUrl } = await issueWavePaymentLink(preorder.id, { now });
+  const next = { ...fields };
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value !== "string") continue;
+    let updated = value;
+    for (const [oldUrl] of ours) updated = updated.split(oldUrl).join(freshUrl);
+    next[key] = updated;
+  }
+  return next;
+}
+
+const OPEN_WAVE_ATTEMPT_STATUSES = ["CREATED", "PROVIDER_SESSION_CREATED", "REDIRECT_READY", "PENDING"];
+
+// Une seule session Wave ouverte par commande : ferme chez Wave les sessions
+// encore ouvertes (nouveau lien, nouvelle session, commande annulée). Une
+// session déjà payée ou en cours de paiement n'est jamais fermée : elle est
+// signalée pour que l'appelant ne crée pas de seconde session.
+async function expireOpenWaveSessions({ preorderId, reason = "SUPERSEDED", exceptAttemptId = null }) {
+  const result = { expired: 0, failed: 0, paidSessionFound: false, processingSessionFound: false };
+  if (!preorderId) return result;
+  const attempts = await prisma.paymentAttempt.findMany({
+    where: {
+      provider: "WAVE",
+      status: { in: OPEN_WAVE_ATTEMPT_STATUSES },
+      providerSessionId: { not: null },
+      payment: { preorderId },
+      ...(exceptAttemptId ? { id: { not: exceptAttemptId } } : {}),
+    },
+    select: { id: true, providerSessionId: true },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  });
+
+  for (const attempt of attempts) {
+    const outcome = await closeWaveCheckoutSession(attempt.providerSessionId, {
+      simulated: isWaveSimulationEnabled(),
+    });
+    if (outcome.paid) result.paidSessionFound = true;
+    if (outcome.processing) result.processingSessionFound = true;
+    if (outcome.failed) result.failed += 1;
+    if (!outcome.closed) {
+      console.warn("[payments][wave] session non fermée", {
+        preorderId,
+        paymentAttemptId: attempt.id,
+        reason,
+        message: outcome.error?.message || (outcome.paid ? "déjà payée" : outcome.processing ? "paiement en cours" : null),
+      });
+    }
+    if (outcome.closed) {
+      await prisma.paymentAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "EXPIRED",
+          failureCode: `WAVE_SESSION_CLOSED_${reason}`,
+          failureMessage: "Session Wave fermée : un seul lien de paiement actif par commande.",
+        },
+      });
+      result.expired += 1;
+    }
+  }
+  return result;
+}
+
+// Balayage périodique : ferme les sessions Wave restées ouvertes sur une
+// commande qui n'est plus payable (payée, annulée, paiement annulé après une
+// correction ou une relance) ou dont le dernier lien a expiré (3 h).
+async function closeStaleWaveSessions({ now = new Date() } = {}) {
+  const linkExpiredBefore = new Date(now.getTime() - PAYMENT_LINK_TTL_MS);
+  const attempts = await prisma.paymentAttempt.findMany({
+    where: {
+      provider: "WAVE",
+      status: { in: OPEN_WAVE_ATTEMPT_STATUSES },
+      providerSessionId: { not: null },
+      createdAt: { gte: new Date(now.getTime() - 48 * 60 * 60 * 1000) },
+      payment: {
+        OR: [
+          { status: { in: ["CANCELLED", "EXPIRED", "FAILED", "SUCCEEDED"] } },
+          {
+            preorder: {
+              OR: [
+                { status: { notIn: ["INVOICED", "PAYMENT_PENDING"] } },
+                { paymentStatus: "PAID" },
+                { paymentLinkIssuedAt: { lt: linkExpiredBefore } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    select: { payment: { select: { preorderId: true } } },
+    take: 200,
+  });
+  const preorderIds = [...new Set(attempts.map((a) => a.payment?.preorderId).filter(Boolean))];
+  const summary = { preorders: preorderIds.length, expired: 0, failed: 0 };
+  for (const preorderId of preorderIds) {
+    try {
+      const result = await expireOpenWaveSessions({ preorderId, reason: "NOT_PAYABLE" });
+      summary.expired += result.expired;
+      summary.failed += result.failed;
+    } catch (error) {
+      summary.failed += 1;
+      console.error("[payments][wave] balayage des sessions impossible", { preorderId, message: error?.message });
+    }
+  }
+  return summary;
+}
+
+// Fermeture immédiate, sans bloquer l'appelant (annulation, correction…).
+function closeWaveSessionsInBackground(preorderId, reason) {
+  if (!preorderId) return;
+  expireOpenWaveSessions({ preorderId, reason }).catch((error) => {
+    console.error("[payments][wave] fermeture des sessions impossible", { preorderId, reason, message: error?.message });
+  });
+}
+
+// Session Wave encore ouverte et récente au même montant : le client la
+// reprend au lieu d'en ouvrir une seconde.
+const WAVE_SESSION_REUSE_MS = 20 * 60 * 1000;
+function findReusableWaveAttempt(payment, amountFcfa, now = new Date()) {
+  if (!payment || String(payment.provider || "").toUpperCase() !== "WAVE") return null;
+  if (Number(payment.amountExpectedFcfa) !== Number(amountFcfa)) return null;
+  const attempt = payment.attempts?.[0] || null;
+  if (!attempt?.checkoutUrl || !attempt.providerSessionId) return null;
+  if (!["PROVIDER_SESSION_CREATED", "REDIRECT_READY", "PENDING"].includes(String(attempt.status))) return null;
+  const age = now.getTime() - new Date(attempt.createdAt).getTime();
+  if (!(age >= 0 && age < WAVE_SESSION_REUSE_MS)) return null;
+  return attempt;
 }
 
 async function resolveShortBankProofUploadLink(token, options = {}) {
@@ -1614,13 +1984,16 @@ async function initiateWavePayment({
   payerPhoneHint,
   amountFcfaOverride = null,
   pricingMeta = null,
+  linkToken = null,
 }) {
   const countryId = pickCountryId(req);
 
   const preorder = await prisma.preorder.findFirst({
     where: scopeWhere(req, { id: preorderId }),
     include: {
-      activePayment: true,
+      activePayment: {
+        include: { attempts: { orderBy: { createdAt: "desc" }, take: 1 } },
+      },
       country: {
         select: {
           code: true,
@@ -1654,6 +2027,19 @@ async function initiateWavePayment({
     );
     err.statusCode = 400;
     throw err;
+  }
+
+  // Paiement client (sans session admin) : seul le dernier lien envoyé, depuis
+  // moins de 3 h, permet de payer. Voir payment-link-window.js.
+  if (!req.user) {
+    const parsed = linkToken ? parseShortWavePaymentToken(linkToken) : null;
+    if (linkToken && (!parsed || !preorder.id.endsWith(parsed.orderSuffix))) {
+      const err = new Error("Lien de paiement invalide");
+      err.statusCode = 400;
+      throw err;
+    }
+    const linkState = await getPreorderPaymentLinkState(preorder, { parsed });
+    if (!linkState.ok) throw paymentLinkStateError(linkState);
   }
 
   // Interrupteur temporaire "caisse fermée" : ne s'applique qu'à
@@ -1722,6 +2108,43 @@ async function initiateWavePayment({
   );
 
   const simulation = isWaveSimulationEnabled();
+
+  // Une seule session Wave par commande : la session ouverte est reprise, sinon
+  // les anciennes sont fermées avant d'en créer une nouvelle.
+  const reusableAttempt = normalizedPayerMobile
+    ? null
+    : findReusableWaveAttempt(preorder.activePayment, amountToChargeFcfa);
+  if (reusableAttempt) {
+    return {
+      ok: true,
+      simulated: simulation,
+      reused: true,
+      payment: preorder.activePayment,
+      paymentAttempt: reusableAttempt,
+      preorder,
+      checkoutUrl: reusableAttempt.checkoutUrl,
+      publicPaymentUrl: buildPublicWavePaymentUrl(preorder.id, preorder.country?.code || "CIV"),
+    };
+  }
+
+  const closedSessions = await expireOpenWaveSessions({ preorderId: preorder.id, reason: "NEW_SESSION" });
+  if (closedSessions.paidSessionFound || closedSessions.processingSessionFound) {
+    if (closedSessions.paidSessionFound) {
+      try {
+        await syncWavePaymentStatus({ req, preorderId: preorder.id });
+      } catch (_syncError) {
+        // La synchronisation périodique confirmera le paiement.
+      }
+    }
+    const err = new Error(
+      closedSessions.paidSessionFound
+        ? "Un paiement Wave a déjà été reçu pour cette commande. Il est en cours de confirmation."
+        : "Un paiement Wave est en cours pour cette commande. Patientez quelques minutes avant de réessayer.",
+    );
+    err.statusCode = 409;
+    err.code = closedSessions.paidSessionFound ? "WAVE_ALREADY_PAID" : "WAVE_PAYMENT_IN_PROGRESS";
+    throw err;
+  }
 
   let providerResponse;
 
@@ -2038,8 +2461,12 @@ async function initiateWavePayment({
   };
 }
 
-async function getPublicWavePaymentContext({ req, preorderId }) {
+async function getPublicWavePaymentContext({ req, preorderId, linkToken = null }) {
   const preorder = await resolvePublicWavePreorder(req, preorderId);
+  const parsedLink = linkToken ? parseShortWavePaymentToken(linkToken) : null;
+  const linkState = await getPreorderPaymentLinkState(preorder, {
+    parsed: parsedLink && preorder.id.endsWith(parsedLink.orderSuffix) ? parsedLink : null,
+  });
   const paymentPricing = computePaymentPricing({
     preorderPaymentMode: preorder.preorderPaymentMode,
     paymentMode: preorder.paymentMode,
@@ -2075,6 +2502,13 @@ async function getPublicWavePaymentContext({ req, preorderId }) {
           }
         : null,
       payerPhoneHint: lastAttempt?.providerPayerPhone || null,
+      paymentLink: {
+        ok: linkState.ok,
+        code: linkState.code,
+        message: linkState.message,
+        canRequestNewLink: linkState.canRequestNewLink,
+        expiresAt: linkState.expiresAt || null,
+      },
       publicPaymentUrl: buildPublicWavePaymentUrl(
         preorder.id,
         preorder.country?.code || "CIV",
@@ -2945,6 +3379,16 @@ module.exports = {
   buildShortBankProofUploadUrl,
   buildPublicWavePaymentUrl,
   buildShortWavePaymentUrl,
+  buildShortWavePaymentToken,
+  parseShortWavePaymentToken,
+  issueWavePaymentLink,
+  refreshWavePaymentLinksForSend,
+  requestNewWavePaymentLink,
+  expireOpenWaveSessions,
+  closeStaleWaveSessions,
+  closeWaveSessionsInBackground,
+  findReusableWaveAttempt,
+  getPreorderPaymentLinkState,
   getPublicWavePaymentContext,
   initiateWavePayment,
   resolveShortBankProofUploadLink,

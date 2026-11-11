@@ -31,6 +31,16 @@ class PaymentOrchestratorService {
     return this.getProvider(providerCode).createCheckoutSession(payload);
   }
 
+  async expireCheckoutSession(providerCode, payload) {
+    const provider = this.getProvider(providerCode);
+    if (typeof provider.expireCheckoutSession !== "function") {
+      const err = new Error(`Fermeture de session non supportée par ${providerCode}`);
+      err.statusCode = 501;
+      throw err;
+    }
+    return provider.expireCheckoutSession(payload);
+  }
+
   async getCheckoutSession(providerCode, payload) {
     return this.getProvider(providerCode).getCheckoutSession(payload);
   }

@@ -104,6 +104,13 @@ router.post(
 );
 
 router.post(
+  "/wave/public/:orderId/new-link-request",
+  publicInitiateLimiter,
+  resolveCountry,
+  paymentsController.requestNewWavePaymentLink,
+);
+
+router.post(
   "/wave/public/:orderId/sync",
   publicSyncLimiter,
   resolveCountry,

@@ -745,11 +745,8 @@ async function invoiceAndSendPreorder({
 
   if (req) {
     if (isWavePreorder(invoicedPreorder)) {
-      paymentLink = paymentsService.buildShortWavePaymentUrl(
-        invoicedPreorder.id,
-        invoicedPreorder.country?.code || "CIV",
-        paymentCollectionCode,
-      );
+      // Lien neuf, seul valable pendant 3 h (payment-link-window.js).
+      paymentLink = (await paymentsService.issueWavePaymentLink(invoicedPreorder.id)).url;
     } else if (isBankTransferPreorder) {
       paymentLink = paymentsService.buildShortBankProofUploadUrl(
         invoicedPreorder.id,

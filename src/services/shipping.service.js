@@ -109,6 +109,8 @@ async function setShippingQuote(tx, order, body, actorId) {
       title: `Expédition ${carrierLabel(order.deliveryMode)}`, description: `Frais d’expédition de la précommande ${order.preorderNumber || order.id}. La facture des produits est déjà réglée.`,
       instructions: 'Ce paiement couvre uniquement l’expédition. Revenez dans votre espace client après le règlement.',
       paymentMethod: 'WAVE', createdById: actorId, updatedById: actorId,
+      // Lien valable 3 h (règle du 2026-11-10) ; au-delà, réenregistrer les frais en crée un nouveau.
+      expiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000),
     } });
     shippingPaymentLinkId = link.id;
   }

@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const prisma = require("../../prisma");
 const { sendSms } = require("../../services/sms.service");
 const externalWavePaymentService = require("../../services/external-wave-payment.service");
+const { closeWaveCheckoutSession } = require("../../payments/wave-session-close");
 const { Prisma } = require("@prisma/client");
 const { resolveOrderSearchIds } = require("../../helpers/preorder-search");
 const { parsePreorderNumbers } = require("../../services/settlement.service");
@@ -364,7 +365,8 @@ async function createLink(req, res) {
         title: normalizeOptionalText(body.title),
         description: normalizeOptionalText(body.description),
         instructions: normalizeOptionalText(body.instructions),
-        expiresAt: normalizeExpiresAt(body),
+        // 3 h maximum, même si une échéance plus lointaine est demandée.
+        expiresAt: externalWavePaymentService.capExternalLinkExpiry(normalizeExpiresAt(body)),
         createdById: req.user?.id || null,
         updatedById: req.user?.id || null,
       },
@@ -476,6 +478,13 @@ async function updateStatus(req, res) {
       updatedById: req.user?.id || null,
     };
     if (status === "CANCELLED") data.cancelledAt = existing.cancelledAt || new Date();
+    // Lien annulé : sa session Wave ne doit plus être payable.
+    if (status === "CANCELLED" && existing.providerSessionId) {
+      const outcome = await closeWaveCheckoutSession(existing.providerSessionId);
+      if (outcome.paid || outcome.processing) {
+        return res.status(409).json({ message: "Un paiement Wave est en cours ou reçu sur ce lien : il ne peut pas être annulé. Synchronisez le lien." });
+      }
+    }
 
     const changed = await prisma.externalPaymentLink.updateMany({
       where: { id: existing.id, countryId: req.countryId, status: { in: ["DRAFT", "ACTIVE"] } }, data,
