@@ -2354,23 +2354,27 @@ async function updateNotificationContacts(req, res) {
   }
 }
 
-async function resendInvoiceSms(req, res) {
-  try {
-    const { id } = req.params;
-    const requestedChannel = String(req.body?.channel || "").trim().toUpperCase();
-    const phoneOverride = normalizeOptionalNotificationPhone(req.body?.phone, req.country?.code);
-    const emailOverride = normalizeOptionalNotificationEmail(req.body?.email);
+function resendError(statusCode, message) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
+}
+
+// Renvoi de la notification de facture / lien de paiement d'une commande.
+// Utilisé par le bouton « Renvoyer » (fiche commande, facturation) et par le
+// renvoi groupé de l'onglet « En attente paiement ». Lève une erreur portant
+// statusCode si le renvoi est impossible.
+async function performInvoiceResend(req, id, { channel = null, phone, email, logLabel = null } = {}) {
+    const requestedChannel = String(channel || "").trim().toUpperCase();
+    const phoneOverride = normalizeOptionalNotificationPhone(phone, req.country?.code);
+    const emailOverride = normalizeOptionalNotificationEmail(email);
 
     if (phoneOverride === "__INVALID_PHONE__") {
-      return res.status(400).json({
-        message: "Numéro de notification invalide.",
-      });
+      throw resendError(400, "Numéro de notification invalide.");
     }
 
     if (emailOverride === "__INVALID_EMAIL__") {
-      return res.status(400).json({
-        message: "Adresse email de notification invalide.",
-      });
+      throw resendError(400, "Adresse email de notification invalide.");
     }
 
     const order = await prisma.preorder.findFirst({
@@ -2400,7 +2404,7 @@ async function resendInvoiceSms(req, res) {
     });
 
     if (!order) {
-      return res.status(404).json({ message: "Commande introuvable" });
+      throw resendError(404, "Commande introuvable");
     }
 
     const latestMessage = await prisma.orderMessage.findFirst({
@@ -2444,23 +2448,15 @@ async function resendInvoiceSms(req, res) {
       null;
 
     if (!smsBody) {
-      return res.status(400).json({
-        message:
-          "Aucun message de facture disponible. Générez une facture avant renvoi.",
-      });
+      throw resendError(400, "Aucun message de facture disponible. Générez une facture avant renvoi.");
     }
 
     if (!destination && requestedChannel !== "EMAIL") {
-      return res.status(400).json({
-        message:
-          "Aucun numéro destinataire disponible pour renvoyer le SMS.",
-      });
+      throw resendError(400, "Aucun numéro destinataire disponible pour renvoyer le SMS.");
     }
 
     if (requestedChannel === "EMAIL" && !emailDestination) {
-      return res.status(400).json({
-        message: "Aucune adresse email client disponible pour renvoyer le lien.",
-      });
+      throw resendError(400, "Aucune adresse email client disponible pour renvoyer le lien.");
     }
 
     const actorName = actorLabel(req);
@@ -2512,11 +2508,12 @@ async function resendInvoiceSms(req, res) {
         tx,
         order.id,
         "WAIT_CUSTOMER_DATA",
-        requestedChannel === "EMAIL"
+        logLabel ||
+        (requestedChannel === "EMAIL"
           ? "Notification de facture renvoyée par email"
           : requestedChannel === "SMS"
             ? "Notification de facture renvoyée par SMS"
-            : "Notification de facture renvoyée au client",
+            : "Notification de facture renvoyée au client"),
         {
           toPhone: destination,
           toEmail: sendResult?.toEmail || emailDestination || null,
@@ -2532,7 +2529,7 @@ async function resendInvoiceSms(req, res) {
       );
     });
 
-    return res.json({
+    return {
       ok: true,
       sent: Boolean(sendResult?.sent),
       queued: Boolean(sendResult?.smsQueued),
@@ -2544,7 +2541,17 @@ async function resendInvoiceSms(req, res) {
       providerMessageId: sendResult?.providerMessageId || null,
       errorCode: sendResult?.errorCode || null,
       errorMessage: sendResult?.errorMessage || null,
+    };
+}
+
+async function resendInvoiceSms(req, res) {
+  try {
+    const payload = await performInvoiceResend(req, req.params.id, {
+      channel: req.body?.channel,
+      phone: req.body?.phone,
+      email: req.body?.email,
     });
+    return res.json(payload);
   } catch (e) {
     console.error("resendInvoiceSms error:", e);
     return res
@@ -4946,6 +4953,7 @@ module.exports = {
   replaceBillingOrderItem,
   updateNotificationContacts,
   resendInvoiceSms,
+  performInvoiceResend,
   resendConfirmationSms,
   switchWaveToManualPayment,
   switchManualToWavePayment,
