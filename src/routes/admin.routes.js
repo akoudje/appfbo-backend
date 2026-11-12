@@ -42,6 +42,7 @@ const {
 const { BILLING_SUPERVISOR_ROLES } = require("../services/billingQueue.service");
 
 const ordersController = require("../controllers/admin/orders.controller");
+const billingPaymentNotifications = require("../controllers/admin/billingPaymentNotifications.controller");
 const settlementController = require("../controllers/settlement.controller");
 const ordersRoutes = require("./admin/orders.routes");
 const paymentsRoutes = require("./admin/payments.routes");
@@ -127,6 +128,13 @@ router.post("/billing/:id/assign", requireRole(BILLING_SUPERVISOR_ROLES), assign
 // Bilan d'activité (« Mon bilan ») ; un superviseur peut viser un facturier.
 router.get("/billing/report", requirePermission(Permission.INVOICE_CREATE), getReport);
 router.get("/billing/supervision", requireRole(BILLING_SUPERVISOR_ROLES), getSupervision);
+// Onglet « En attente paiement » : état des notifications de paiement (tous
+// ceux qui voient l'onglet) et renvoi groupé (superviseurs uniquement ; le
+// renvoi d'une seule commande reste POST /orders/:id/resend-invoice-sms).
+router.get("/billing/payment-notifications", requirePermission(Permission.PREORDER_READ), billingPaymentNotifications.getStatuses);
+router.post("/billing/payment-notifications/bulk-preview", requireRole(BILLING_SUPERVISOR_ROLES), billingPaymentNotifications.previewBulkResend);
+router.post("/billing/payment-notifications/bulk-resend", requireRole(BILLING_SUPERVISOR_ROLES), billingPaymentNotifications.startBulkResend);
+router.get("/billing/payment-notifications/bulk-resend/:jobId", requireRole(BILLING_SUPERVISOR_ROLES), billingPaymentNotifications.getBulkResendJob);
 // Précommandes réglées par une autre filiale FLP (ex. FLP Burkina) : lot de
 // n° transmis par le client, rapport pour la filiale. Marquage réservé aux
 // superviseurs de la facturation (responsable facturation, directeur
