@@ -16,6 +16,7 @@ const adminAuthRoutes = require("./routes/adminAuth.routes");
 
 const productsRoutes = require("./routes/products.routes.js");
 const preordersRoutes = require("./routes/preorders.routes.js");
+const orderSimulationRoutes = require("./routes/orderSimulation.routes.js");
 const publicConfigRoutes = require("./routes/public-config.routes.js");
 const countriesRoutes = require("./routes/countries.routes.js");
 const publicSponsorshipsRoutes = require("./routes/publicSponsorships.routes.js");
@@ -229,6 +230,7 @@ app.get("/health", (req, res) => res.set("Cache-Control", "no-store").json({
    ========================================================= */
 app.use("/api/products", productsRoutes);
 app.use("/api/preorders", preordersRoutes);
+app.use("/api/simulation", orderSimulationRoutes);
 app.use("/api/public-config", publicConfigRoutes);
 app.use("/api/countries", countriesRoutes);
 app.use("/api/sponsorships", publicSponsorshipsRoutes);

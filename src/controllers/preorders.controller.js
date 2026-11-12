@@ -752,6 +752,16 @@ async function checkFboDirectory(req, res) {
   }
 }
 
+// Grade d'un numéro FBO pour la simulation de commande : même résolution
+// que la création de commande (annuaire au grade normalisé, sinon filleul
+// approuvé, puis grade effectif après promotion). null si inconnu.
+async function lookupFboGradeForCountry(numero, countryId) {
+  let profile = normalizeFboDirectoryProfile(await fetchFboDirectoryProfile(numero));
+  if (!profile.exists) profile = (await findApprovedRecruitProfile(numero, countryId)) || profile;
+  if (!profile.exists || !profile.grade) return null;
+  return (await resolveEffectiveGrade(numero, profile.grade)).grade;
+}
+
 async function getCatalog(req, res) {
   const preorderId = req.params.id;
   const countryId = req.country.id;
@@ -1757,6 +1767,8 @@ module.exports = {
   createCustomerDraft,
   createDraft,
   checkFboDirectory,
+  lookupFboGradeForCountry,
+  enforceFboCheckRateLimit,
   getCatalog,
   setItems,
   getSummary,
