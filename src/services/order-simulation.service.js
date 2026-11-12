@@ -15,6 +15,11 @@ const {
   computePackagingFeeFcfa,
   computeStateStampFcfa,
 } = require("./pricing.service");
+const { analyzePurchaseItems, PROMOTION_MIN_CC } = require("./sponsorship-promotion.service");
+const { getSponsorshipSettings } = require("./sponsorship.service");
+
+// Futur filleul (pas encore de numéro) : prix de l'achat de parrainage.
+const RECRUIT_GRADE = "CLIENT_PRIVILEGIE";
 
 // Garde-fous techniques uniquement (pas des règles commerciales).
 const MAX_LINES = 300;
@@ -41,9 +46,9 @@ function sign(payload) {
 // Jeton de simulation : le grade est vérifié une fois (numéro FBO), le total
 // est ensuite recalculé sans réinterroger l'annuaire. Le grade ne peut pas
 // être choisi librement par le visiteur.
-function createSimulationToken({ countryId, grade, now = Date.now() }) {
+function createSimulationToken({ countryId, grade, futureRecruit = false, now = Date.now() }) {
   const payload = Buffer.from(
-    JSON.stringify({ c: countryId, g: grade, e: now + TOKEN_TTL_MS }),
+    JSON.stringify({ c: countryId, g: grade, e: now + TOKEN_TTL_MS, ...(futureRecruit ? { r: 1 } : {}) }),
   ).toString("base64url");
   return `${payload}.${sign(payload)}`;
 }
@@ -69,7 +74,7 @@ function readSimulationToken(token, { countryId, now = Date.now() } = {}) {
   if (countryId && data.c !== countryId) {
     throw httpError(401, "Cette simulation concerne un autre pays.", "SIMULATION_COUNTRY_MISMATCH");
   }
-  return { countryId: data.c, grade: data.g };
+  return { countryId: data.c, grade: data.g, futureRecruit: data.r === 1 };
 }
 
 // Catalogue de simulation : tous les produits actifs du pays aux prix du
@@ -181,13 +186,35 @@ async function loadGradeCatalog({ countryId, countryCode, grade }) {
   };
 }
 
+// Repères de l'achat de parrainage pour un futur filleul : minimum d'achat
+// (total des produits au prix Client privilégié, comme à la soumission de la
+// fiche) et promotion Animateur adjoint (2 CC ou pack 634/635).
+function recruitPurchaseCheck(quote, minPurchaseFcfa) {
+  const min = Math.max(0, Number(minPurchaseFcfa || 0));
+  const total = Number(quote?.totals?.totalProduitsFcfa || 0);
+  const promotion = analyzePurchaseItems(
+    (quote?.lines || []).map((line) => ({ lineTotalCc: line.lineTotalCc, productSkuSnapshot: line.sku })),
+  );
+  return {
+    minPurchaseFcfa: min,
+    minReached: total >= min,
+    missingFcfa: Math.max(0, min - total),
+    promotion: { minCc: PROMOTION_MIN_CC, totalCc: promotion.totalCc, packSku: promotion.packSku, qualifies: promotion.qualifies },
+  };
+}
+
 async function quoteSimulation({ token, items, country }) {
-  const { grade } = readSimulationToken(token, { countryId: country.id });
+  const { grade, futureRecruit } = readSimulationToken(token, { countryId: country.id });
   const context = await loadGradeCatalog({ countryId: country.id, countryCode: country.code, grade });
-  return { grade, ...computeSimulationQuote({ ...context, items, countryCode: country.code }) };
+  const quote = computeSimulationQuote({ ...context, items, countryCode: country.code });
+  if (!futureRecruit) return { grade, ...quote };
+  const settings = await getSponsorshipSettings(country.id);
+  return { grade, futureRecruit: true, ...quote, sponsorship: recruitPurchaseCheck(quote, settings.minPurchaseFcfa) };
 }
 
 module.exports = {
+  RECRUIT_GRADE,
+  recruitPurchaseCheck,
   MAX_LINES,
   MAX_QTY_PER_LINE,
   createSimulationToken,

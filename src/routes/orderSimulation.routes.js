@@ -6,7 +6,12 @@ const { startSimulation, quoteSimulation } = require("../controllers/orderSimula
 
 router.use(resolveCountry);
 
-router.post("/session", startSimulation);
+// Le numéro FBO a en plus le quota de la vérification FBO (contrôleur).
+router.post(
+  "/session",
+  createRateLimiter({ keyPrefix: "order_simulation_session", windowMs: 60_000, max: 30 }),
+  startSimulation,
+);
 // Recalcul à chaque modification du panier : quota large.
 router.post(
   "/quote",

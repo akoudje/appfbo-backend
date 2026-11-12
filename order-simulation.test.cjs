@@ -22,6 +22,13 @@ const fakePrisma = {
 };
 const prismaFile = require.resolve(path.join(__dirname, 'src/prisma.js'));
 require.cache[prismaFile] = { id: prismaFile, filename: prismaFile, loaded: true, exports: fakePrisma };
+// Réglages du parrainage (module lourd : multer, Cloudinary…) remplacés.
+const sponsorshipSettings = { enabled: true, minPurchaseFcfa: 53000 };
+const sponsorshipFile = require.resolve(path.join(__dirname, 'src/services/sponsorship.service.js'));
+require.cache[sponsorshipFile] = {
+  id: sponsorshipFile, filename: sponsorshipFile, loaded: true,
+  exports: { getSponsorshipSettings: async () => ({ ...sponsorshipSettings }) },
+};
 
 const pricing = require('./src/services/pricing.service');
 const simulation = require('./src/services/order-simulation.service');
@@ -113,7 +120,7 @@ test('rupture signalée, produit retiré du catalogue listé à part, panier vid
 
 test('jeton : grade non modifiable, pays vérifié, expiration', () => {
   const token = simulation.createSimulationToken({ countryId: 'c1', grade: 'MANAGER', now: 1000 });
-  assert.deepEqual(simulation.readSimulationToken(token, { countryId: 'c1', now: 2000 }), { countryId: 'c1', grade: 'MANAGER' });
+  assert.deepEqual(simulation.readSimulationToken(token, { countryId: 'c1', now: 2000 }), { countryId: 'c1', grade: 'MANAGER', futureRecruit: false });
 
   const [payload, signature] = token.split('.');
   const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload, 'base64url')), g: 'DIRECTEUR' })).toString('base64url');
@@ -168,4 +175,46 @@ test('route session : numéro invalide, inconnu, quota et réponse sans nom ni s
   allowed = false;
   assert.equal((await call({ numeroFbo: '225-000-111-222' })).statusCode, 429);
   assert.equal(lookups.length, 2);
+});
+
+test('futur filleul : prix Client privilégié, minimum de parrainage et promotion', async () => {
+  db.products = [
+    product('a', { prix: 25000, cc: 0.4, gradePrices: [['CLIENT_PRIVILEGIE', 21000], ['MANAGER', 17000]] }),
+    product('634', { prix: 90000, cc: 1.5, gradePrices: [['CLIENT_PRIVILEGIE', 80000]] }),
+  ];
+  db.products[1].sku = '634';
+  const country = setup('CIV', 'CLIENT_PRIVILEGIE');
+  const { startSimulation } = require('./src/controllers/orderSimulation.controller');
+  const call = async (body) => {
+    const res = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k] = v; }, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+    await startSimulation({ body, country }, res);
+    return res;
+  };
+
+  const session = await call({ futureRecruit: true });
+  assert.equal(session.statusCode, 200);
+  assert.equal(session.body.grade, 'CLIENT_PRIVILEGIE');
+  assert.equal(session.body.futureRecruit, true);
+  assert.equal(session.body.sponsorship.minPurchaseFcfa, 53000);
+  assert.equal(session.body.items.find((p) => p.id === 'a').prixFinalFcfa, 21000);
+
+  // 2 × 21 000 = 42 000 < 53 000 ; 0,8 CC : pas de promotion.
+  const small = await simulation.quoteSimulation({ token: session.body.token, country, items: [{ productId: 'a', qty: 2 }] });
+  assert.deepEqual(small.sponsorship, {
+    minPurchaseFcfa: 53000, minReached: false, missingFcfa: 11000,
+    promotion: { minCc: 2, totalCc: 0.8, packSku: null, qualifies: false },
+  });
+  // Pack 634 : minimum atteint et promotion.
+  const pack = await simulation.quoteSimulation({ token: session.body.token, country, items: [{ productId: '634', qty: 1 }] });
+  assert.equal(pack.sponsorship.minReached, true);
+  assert.equal(pack.sponsorship.promotion.qualifies, true);
+  assert.equal(pack.sponsorship.promotion.packSku, '634');
+
+  // Un jeton « numéro FBO » ne renvoie pas ces repères.
+  const fboToken = simulation.createSimulationToken({ countryId: 'c1', grade: 'MANAGER' });
+  assert.equal((await simulation.quoteSimulation({ token: fboToken, country, items: [{ productId: 'a', qty: 1 }] })).sponsorship, undefined);
+
+  sponsorshipSettings.enabled = false;
+  assert.equal((await call({ futureRecruit: true })).statusCode, 403);
+  sponsorshipSettings.enabled = true;
 });
