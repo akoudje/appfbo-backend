@@ -5,6 +5,7 @@
 const { digitsOnly, isFboDirectoryTemporarilyUnavailable } = require("../services/fboDirectory.service");
 const { lookupFboGradeForCountry, enforceFboCheckRateLimit } = require("./preorders.controller");
 const simulation = require("../services/order-simulation.service");
+const { getSponsorshipSettings } = require("../services/sponsorship.service");
 
 function sendError(res, error, fallback) {
   const status = Number(error?.statusCode || 0) || 500;
@@ -15,10 +16,31 @@ function sendError(res, error, fallback) {
   });
 }
 
-// POST /api/simulation/session { numeroFbo }
+// Futur filleul sans numéro : prix Client privilégié (déjà publics sur la
+// page Parrainage), seulement si le parrainage est ouvert dans le pays.
+async function startFutureRecruitSimulation(req, res) {
+  const settings = await getSponsorshipSettings(req.country.id);
+  if (!settings.enabled) {
+    return res.status(403).json({ error: "Le parrainage n'est pas ouvert dans ce pays.", code: "SPONSORSHIP_DISABLED" });
+  }
+  const grade = simulation.RECRUIT_GRADE;
+  const context = await simulation.loadGradeCatalog({ countryId: req.country.id, countryCode: req.country.code, grade });
+  res.setHeader("Cache-Control", "no-store");
+  return res.json({
+    grade,
+    futureRecruit: true,
+    sponsorship: { minPurchaseFcfa: settings.minPurchaseFcfa },
+    token: simulation.createSimulationToken({ countryId: req.country.id, grade, futureRecruit: true }),
+    countryCode: req.country.code,
+    items: simulation.toSimulationCatalog(context.catalog),
+  });
+}
+
+// POST /api/simulation/session { numeroFbo } | { futureRecruit: true }
 // → grade, jeton de simulation et catalogue aux prix du grade.
 async function startSimulation(req, res) {
   try {
+    if (req.body?.futureRecruit === true) return await startFutureRecruitSimulation(req, res);
     const numero = String(req.body?.numeroFbo || "").trim();
     if (digitsOnly(numero).length !== 12) {
       return res.status(400).json({ error: "Numéro FBO invalide (12 chiffres).", code: "FBO_INVALID" });
